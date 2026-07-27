@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -14,6 +15,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -27,13 +29,20 @@ import (
 	"flickr/internal/pipeline"
 	"flickr/internal/scanner"
 	"flickr/internal/store"
+	"flickr/internal/tmdb"
 )
+
+// sessionIdleTimeout is how long a transcode session may go without any
+// stream fetch before the reaper stops it (clients that vanish never send
+// an explicit stop).
+const sessionIdleTimeout = 5 * time.Minute
 
 type server struct {
 	library  *store.Library
 	state    *store.State
 	scanner  *scanner.Scanner
 	sessions *pipeline.SessionManager
+	enricher *tmdb.Enricher // nil = TMDB enrichment disabled
 	s3       *minio.Client
 	bucket   string
 	policy   model.ServerPolicy
@@ -101,22 +110,42 @@ func main() {
 	}
 	log.Printf("advertising as %s (cast devices fetch streams here)", srv.baseURL)
 
+	if key := os.Getenv("TMDB_API_KEY"); key != "" {
+		srv.enricher = &tmdb.Enricher{
+			Client: tmdb.NewHTTPClient(key), Library: library, PostersDir: "data/posters",
+		}
+	} else {
+		log.Printf("TMDB enrichment disabled (TMDB_API_KEY not set)")
+	}
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/items", srv.handleListItems)
 	mux.HandleFunc("POST /api/items/{id}/decision", srv.handleDecision)
 	mux.HandleFunc("POST /api/items/{id}/play", srv.handlePlay)
 	mux.HandleFunc("POST /api/items/{id}/identity", srv.handleOverrideIdentity)
 	mux.HandleFunc("POST /api/items/{id}/reprobe", srv.handleReprobe)
+	mux.HandleFunc("POST /api/items/{id}/enrich", srv.handleEnrich)
+	mux.HandleFunc("GET /api/items/{id}/subtitles/{file}", srv.handleSubtitle)
+	mux.HandleFunc("GET /api/items/{id}/poster", srv.handlePoster)
 	mux.HandleFunc("POST /api/scan", srv.handleScan)
 	mux.HandleFunc("GET /api/scan", srv.handleScanStatus)
 	mux.HandleFunc("GET /api/system", srv.handleSystem)
 	mux.HandleFunc("DELETE /api/sessions/{id}", srv.handleStopSession)
 	mux.HandleFunc("POST /api/progress", srv.handleSetProgress)
 	mux.HandleFunc("GET /api/progress", srv.handleGetProgress)
+	mux.HandleFunc("GET /api/users", srv.handleListUsers)
+	mux.HandleFunc("POST /api/users", srv.handleCreateUser)
+	mux.HandleFunc("POST /api/telemetry", srv.handleTelemetry)
 	// Log stream fetches: which client asked for which segment with what
 	// Range — a poor man's receiver-side network tab.
 	streamFiles := http.StripPrefix("/streams/", http.FileServer(http.Dir("data/streams")))
 	mux.Handle("GET /streams/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// The first path segment is the session id: any fetch inside a
+		// session counts as liveness for the idle-session reaper.
+		if rest := strings.TrimPrefix(r.URL.Path, "/streams/"); rest != "" {
+			id, _, _ := strings.Cut(rest, "/")
+			srv.sessions.Touch(id)
+		}
 		log.Printf("stream %s %s range=%q ua=%.40q", r.RemoteAddr, r.URL.Path, r.Header.Get("Range"), r.UserAgent())
 		streamFiles.ServeHTTP(w, r)
 	}))
@@ -134,6 +163,38 @@ func main() {
 		}
 		mux.ServeHTTP(w, r)
 	})
+
+	// Session reaper: a vanished client (closed tab, unplugged cast device)
+	// never sends a stop; without this, ffmpeg transcodes to file-end.
+	go func() {
+		for range time.Tick(60 * time.Second) {
+			for _, id := range srv.sessions.ReapIdle(sessionIdleTimeout) {
+				log.Printf("reaped session %s: no stream fetch for %s (client gone)", id, sessionIdleTimeout)
+			}
+		}
+	}()
+
+	// Scan scheduling: an initial scan when the library is empty, then a
+	// periodic rescan. Scan itself refuses concurrent runs, so overlap with
+	// a manually-triggered scan is harmless.
+	scanInterval, err := time.ParseDuration(envOr("SCAN_INTERVAL", "12h"))
+	if err != nil {
+		log.Fatalf("bad SCAN_INTERVAL: %v", err)
+	}
+	if n, err := library.Count(); err == nil && n == 0 {
+		log.Printf("library is empty — starting initial scan")
+		go srv.runScan(context.Background())
+	}
+	if scanInterval > 0 {
+		log.Printf("scheduled scans every %s (SCAN_INTERVAL)", scanInterval)
+		go func() {
+			for range time.Tick(scanInterval) {
+				srv.runScan(context.Background())
+			}
+		}()
+	} else {
+		log.Printf("scheduled scans disabled (SCAN_INTERVAL=0)")
+	}
 
 	httpSrv := &http.Server{Addr: addr, Handler: handler}
 	go func() {
@@ -309,12 +370,30 @@ func (s *server) handleReprobe(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) handleScan(w http.ResponseWriter, r *http.Request) {
-	go func() {
-		if err := s.scanner.Scan(context.Background()); err != nil {
-			log.Printf("scan error: %v", err)
-		}
-	}()
+	go s.runScan(context.Background())
 	writeJSON(w, map[string]string{"status": "started"})
+}
+
+// runScan performs one scan and then the TMDB enrichment pass (if enabled).
+// Used by the manual endpoint, the startup scan, and the interval scheduler.
+func (s *server) runScan(ctx context.Context) {
+	if err := s.scanner.Scan(ctx); err != nil {
+		log.Printf("scan error: %v", err)
+		return
+	}
+	if st := s.scanner.Status(); st.IdentityRefreshed > 0 {
+		log.Printf("scan: refreshed identity for %d items without re-probing (identity v%d)",
+			st.IdentityRefreshed, scanner.IdentityVersion)
+	}
+	if s.enricher == nil {
+		return
+	}
+	n, err := s.enricher.EnrichAll(ctx)
+	if err != nil {
+		log.Printf("enrichment error: %v", err)
+	} else if n > 0 {
+		log.Printf("enriched %d items from TMDB", n)
+	}
 }
 
 func (s *server) handleScanStatus(w http.ResponseWriter, r *http.Request) {
@@ -356,6 +435,186 @@ func (s *server) handleGetProgress(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, map[string]float64{"position_seconds": pos})
+}
+
+// handleSubtitle serves one subtitle track as WebVTT, extracting it with
+// ffmpeg on first request and from data/subs/ cache thereafter.
+func (s *server) handleSubtitle(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		httpErr(w, 400, fmt.Errorf("bad id"))
+		return
+	}
+	name, isVTT := strings.CutSuffix(r.PathValue("file"), ".vtt")
+	ordinal, ordErr := strconv.Atoi(name)
+	if !isVTT || ordErr != nil || ordinal < 0 {
+		httpErr(w, 404, fmt.Errorf("no such subtitle"))
+		return
+	}
+	item, err := s.library.GetItem(id)
+	if err != nil || item == nil {
+		httpErr(w, 404, fmt.Errorf("no such item"))
+		return
+	}
+	track := findSubtitle(item.MediaInfo, ordinal)
+	if track == nil {
+		httpErr(w, 404, fmt.Errorf("item has no subtitle track %d", ordinal))
+		return
+	}
+	if !track.Supported {
+		httpErr(w, 415, fmt.Errorf("subtitle track %d is %s (bitmap), not convertible to WebVTT", ordinal, track.Codec))
+		return
+	}
+	cachePath := filepath.Join("data/subs", fmt.Sprintf("%d-%d.vtt", id, ordinal))
+	if _, err := os.Stat(cachePath); err != nil {
+		u, err := s.s3.PresignedGetObject(r.Context(), s.bucket, item.ObjectKey, time.Hour, url.Values{})
+		if err != nil {
+			httpErr(w, 500, err)
+			return
+		}
+		if err := pipeline.ExtractSubtitle(r.Context(), u.String(), ordinal, cachePath); err != nil {
+			httpErr(w, 500, err)
+			return
+		}
+	}
+	w.Header().Set("Content-Type", "text/vtt")
+	http.ServeFile(w, r, cachePath)
+}
+
+// findSubtitle returns the probed subtitle track with the given ordinal, or nil.
+func findSubtitle(info *model.MediaInfo, ordinal int) *model.SubtitleTrack {
+	if info == nil {
+		return nil
+	}
+	for i := range info.Subtitles {
+		if info.Subtitles[i].Ordinal == ordinal {
+			return &info.Subtitles[i]
+		}
+	}
+	return nil
+}
+
+func (s *server) handlePoster(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if _, err := strconv.ParseInt(id, 10, 64); err != nil {
+		httpErr(w, 400, fmt.Errorf("bad id"))
+		return
+	}
+	f, err := os.Open(filepath.Join("data/posters", id+".jpg"))
+	if err != nil {
+		httpErr(w, 404, fmt.Errorf("no poster"))
+		return
+	}
+	defer f.Close()
+	w.Header().Set("Content-Type", "image/jpeg")
+	io.Copy(w, f)
+}
+
+func (s *server) handleEnrich(w http.ResponseWriter, r *http.Request) {
+	if s.enricher == nil {
+		httpErr(w, 503, fmt.Errorf("enrichment disabled (TMDB_API_KEY not set)"))
+		return
+	}
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		httpErr(w, 400, fmt.Errorf("bad id"))
+		return
+	}
+	item, err := s.library.GetItem(id)
+	if err != nil || item == nil {
+		httpErr(w, 404, fmt.Errorf("no such item"))
+		return
+	}
+	enr, err := s.enricher.EnrichItem(r.Context(), *item)
+	if err != nil {
+		httpErr(w, 502, err)
+		return
+	}
+	if enr == nil {
+		httpErr(w, 404, fmt.Errorf("no TMDB match for item %d", id))
+		return
+	}
+	writeJSON(w, enr)
+}
+
+func (s *server) handleListUsers(w http.ResponseWriter, r *http.Request) {
+	names, err := s.state.ListUsers()
+	if err != nil {
+		httpErr(w, 500, err)
+		return
+	}
+	out := []map[string]string{} // contract: empty array, never null
+	for _, n := range names {
+		out = append(out, map[string]string{"name": n})
+	}
+	writeJSON(w, out)
+}
+
+func (s *server) handleCreateUser(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		httpErr(w, 400, err)
+		return
+	}
+	in.Name = strings.TrimSpace(in.Name)
+	if in.Name == "" {
+		httpErr(w, 400, fmt.Errorf("name required"))
+		return
+	}
+	if err := s.state.CreateUser(in.Name); err != nil {
+		httpErr(w, 500, err)
+		return
+	}
+	writeJSON(w, map[string]string{"name": in.Name})
+}
+
+// handleTelemetry appends any JSON object to data/telemetry.jsonl. Always
+// 200 — telemetry must never break a client.
+func (s *server) handleTelemetry(w http.ResponseWriter, r *http.Request) {
+	defer writeJSON(w, map[string]string{"status": "ok"})
+	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	if err != nil {
+		return
+	}
+	var payload map[string]any
+	if json.Unmarshal(body, &payload) != nil {
+		log.Printf("telemetry: unparseable body (%d bytes)", len(body))
+		return
+	}
+	line, _ := json.Marshal(payload)
+	if err := appendLine("data/telemetry.jsonl", line); err != nil {
+		log.Printf("telemetry: write: %v", err)
+		return
+	}
+	log.Printf("telemetry: %s", telemetrySummary(payload))
+}
+
+func appendLine(path string, line []byte) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	_, err = f.Write(append(line, '\n'))
+	return err
+}
+
+// telemetrySummary is the one-line log form of a telemetry payload.
+func telemetrySummary(p map[string]any) string {
+	if ev, ok := p["event"].(string); ok {
+		return fmt.Sprintf("event=%s keys=%d", ev, len(p))
+	}
+	keys := make([]string, 0, len(p))
+	for k := range p {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return "keys=" + strings.Join(keys, ",")
 }
 
 func writeJSON(w http.ResponseWriter, v any) {

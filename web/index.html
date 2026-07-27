@@ -9,19 +9,70 @@
 <style>
   :root { color-scheme: dark; }
   * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
   body { margin: 0; font-family: system-ui, sans-serif; background: #14151a; color: #e8e8ea; }
-  header { padding: 14px 20px; display: flex; gap: 12px; align-items: center; border-bottom: 1px solid #2a2c33; }
+  header { padding: 12px 20px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; border-bottom: 1px solid #2a2c33; }
   header h1 { font-size: 16px; margin: 0 auto 0 0; font-weight: 600; }
-  button, select { background: #23252d; color: inherit; border: 1px solid #3a3d47; border-radius: 6px; padding: 6px 12px; font-size: 13px; cursor: pointer; }
+  button, select, input[type=text] { background: #23252d; color: inherit; border: 1px solid #3a3d47; border-radius: 6px; padding: 6px 12px; font-size: 13px; }
+  button, select { cursor: pointer; }
   button:hover { background: #2c2f38; }
-  main { display: grid; grid-template-columns: 320px 1fr; min-height: calc(100vh - 53px); }
-  #list { border-right: 1px solid #2a2c33; overflow-y: auto; max-height: calc(100vh - 53px); }
+  main { padding: 0; }
+  .back { font-size: 13px; margin: 14px 0 0 20px; }
+
+  /* profile gate */
+  #gate { position: fixed; inset: 0; background: rgba(10,11,14,0.92); z-index: 100; display: flex; align-items: center; justify-content: center; }
+  #gate-box { background: #1b1d24; border: 1px solid #2a2c33; border-radius: 12px; padding: 28px 32px; max-width: 420px; width: 92%; text-align: center; }
+  #gate-box h2 { margin: 0 0 18px; font-size: 18px; font-weight: 600; }
+  #gate-profiles { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; margin-bottom: 18px; }
+  #gate-profiles button { font-size: 15px; padding: 10px 18px; border-radius: 8px; }
+  #gate-new { display: flex; gap: 8px; justify-content: center; }
+  #gate-new input { flex: 1; }
+  #gate-note { font-size: 11px; color: #9a9daa; margin-top: 12px; }
+  #profile-chip { background: #1e2c42; color: #8db4f0; border-color: #2a3d5c; border-radius: 12px; }
+
+  /* library grid */
+  #lib-bar { display: flex; gap: 10px; align-items: center; padding: 16px 20px 0; }
+  #search { width: 260px; max-width: 60vw; }
+  #lib-count { font-size: 12px; color: #9a9daa; }
+  #grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 16px; padding: 16px 20px 30px; }
+  .card { cursor: pointer; }
+  .card:hover .poster-wrap { outline: 2px solid #5b8def; }
+  .poster-wrap { aspect-ratio: 2/3; width: 100%; border-radius: 8px; background: #1e2026; overflow: hidden; position: relative; }
+  .poster-wrap img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .poster-wrap.text-tile { display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 8px; padding: 12px; text-align: center; background: linear-gradient(160deg, #232633, #191b22); }
+  .text-tile .tile-title { font-size: 14px; font-weight: 600; color: #c5c8d4; word-break: break-word; }
+  .text-tile .tile-sub { font-size: 11px; color: #9a9daa; }
+  .card .c-title { font-size: 13px; margin-top: 8px; font-weight: 600; line-height: 1.3; }
+  .card .c-sub { font-size: 11px; color: #9a9daa; margin-top: 2px; }
+  .card .c-tech { font-size: 10px; color: #6f7280; margin-top: 2px; font-family: ui-monospace, monospace; }
+  #empty { padding: 40px; color: #9a9daa; font-size: 14px; }
+
+  /* show (episode list) view */
+  #view-show h2 { margin: 14px 20px 6px; font-size: 18px; }
+  #episode-list { margin: 8px 20px 30px; border: 1px solid #2a2c33; border-radius: 8px; overflow: hidden; }
   .item { padding: 10px 16px; border-bottom: 1px solid #1e2026; cursor: pointer; }
-  .item:hover, .item.active { background: #1e222c; }
+  .item:last-child { border-bottom: 0; }
+  .item:hover { background: #1e222c; }
   .item .title { font-size: 14px; }
   .item .meta { font-size: 11px; color: #9a9daa; margin-top: 2px; }
-  #player-pane { padding: 20px; }
-  video { width: 100%; max-height: 52vh; background: #000; border-radius: 8px; }
+
+  /* detail + player */
+  #view-detail { padding: 0 20px 30px; }
+  #detail-info { display: flex; gap: 22px; margin-top: 16px; flex-wrap: wrap; }
+  #detail-poster { width: 180px; aspect-ratio: 2/3; border-radius: 8px; object-fit: cover; background: #1e2026; }
+  #detail-body { flex: 1; min-width: 260px; }
+  #detail-body h2 { margin: 0 0 4px; font-size: 22px; }
+  #detail-year { color: #9a9daa; font-weight: 400; }
+  #detail-overview { font-size: 14px; color: #c5c8d4; line-height: 1.5; max-width: 700px; margin: 10px 0; }
+  #detail-tech { font-size: 12px; color: #9a9daa; font-family: ui-monospace, monospace; margin: 8px 0 14px; }
+  #detail-play { font-size: 15px; padding: 9px 26px; background: #2a4a8a; border-color: #3a5da8; }
+  #detail-play:hover { background: #33579e; }
+  #detail-chapters { margin-top: 16px; display: flex; flex-wrap: wrap; gap: 6px; }
+  #detail-chapters button { font-size: 12px; padding: 4px 10px; }
+  #now-playing { font-size: 15px; font-weight: 600; margin: 14px 0 10px; }
+
+  #player-pane { margin-top: 6px; }
+  video { width: 100%; max-height: 58vh; background: #000; border-radius: 8px; }
   body.casting video { opacity: 0.25; }
   #cast-overlay { display: none; font-size: 14px; color: #8db4f0; margin: 6px 0; }
   body.casting #cast-overlay { display: block; }
@@ -31,7 +82,7 @@
   #scrub .fill { position: absolute; left: 0; top: 8px; height: 6px; background: #5b8def; border-radius: 3px; width: 0; }
   #scrub .tick { position: absolute; top: 6px; width: 2px; height: 10px; background: #8a92a8; border-radius: 1px; }
   #timebar { display: flex; justify-content: space-between; font-size: 12px; color: #9a9daa; font-variant-numeric: tabular-nums; }
-  #controls { display: flex; gap: 8px; align-items: center; margin-top: 8px; }
+  #controls { display: flex; gap: 8px; align-items: center; margin-top: 8px; flex-wrap: wrap; }
   #controls button { min-width: 42px; }
   #controls input[type=range] { width: 110px; accent-color: #5b8def; }
   google-cast-launcher { width: 28px; height: 28px; cursor: pointer; --connected-color: #5b8def; --disconnected-color: #9a9daa; }
@@ -50,12 +101,12 @@
   .step.fail .mark { color: #f08080; }
   .step .check { width: 130px; color: #c5c8d4; }
   .step .detail { color: #9a9daa; }
-  #empty { padding: 40px; color: #9a9daa; font-size: 14px; }
 </style>
 </head>
 <body>
 <header>
   <h1>flickr <span style="color:#9a9daa;font-weight:400">— media server PoC</span></h1>
+  <button id="profile-chip" title="Switch profile">…</button>
   <label style="font-size:12px;color:#9a9daa">Play as:</label>
   <select id="profile">
     <option value="browser">This browser (detected)</option>
@@ -68,33 +119,91 @@
   <span id="scan-status" style="font-size:12px;color:#9a9daa"></span>
   <span id="hw" title="" style="font-size:11px;padding:2px 8px;border-radius:10px;background:#1e2c42;color:#8db4f0;cursor:help"></span>
 </header>
-<main>
-  <div id="list"><div id="empty">No items yet — run a scan.</div></div>
-  <div id="player-pane">
-    <video id="video" controls></video>
-    <div id="cast-overlay">▶ Casting to <span id="cast-device"></span></div>
-    <div id="scrub"><div class="rail"></div><div class="avail"></div><div class="fill"></div></div>
-    <div id="timebar"><span id="t-now">0:00</span><span id="t-total">0:00</span></div>
-    <div id="controls">
-      <button id="btn-play" title="Play/Pause">⏵</button>
-      <button id="btn-back" title="Back 10s">⏪</button>
-      <button id="btn-fwd" title="Forward 30s">⏩</button>
-      <button id="btn-stop" title="Stop">⏹</button>
-      <span style="font-size:12px;color:#9a9daa">vol</span>
-      <input type="range" id="vol" min="0" max="1" step="0.05" value="1">
-      <google-cast-launcher id="cast-btn"></google-cast-launcher>
+
+<!-- profile gate -->
+<div id="gate" hidden>
+  <div id="gate-box">
+    <h2>Who's watching?</h2>
+    <div id="gate-profiles"></div>
+    <div id="gate-new">
+      <input type="text" id="gate-name" placeholder="New profile name" maxlength="40">
+      <button id="gate-create">Create</button>
     </div>
-    <div id="status">Select an item to play.</div>
-    <div id="chapters"></div>
-    <div id="trace"></div>
+    <div id="gate-note"></div>
+  </div>
+</div>
+
+<main>
+  <!-- library: poster grid -->
+  <div id="view-library">
+    <div id="lib-bar">
+      <input type="text" id="search" placeholder="Search titles…">
+      <span id="lib-count"></span>
+    </div>
+    <div id="grid"><div id="empty">No items yet — run a scan.</div></div>
+  </div>
+
+  <!-- show: episode list -->
+  <div id="view-show" hidden>
+    <button class="back" id="show-back">← Library</button>
+    <h2 id="show-title"></h2>
+    <div id="episode-list"></div>
+  </div>
+
+  <!-- detail + player -->
+  <div id="view-detail" hidden>
+    <button class="back" id="detail-back">← Back</button>
+    <div id="detail-info">
+      <img id="detail-poster" alt="">
+      <div id="detail-body">
+        <h2><span id="detail-title"></span> <span id="detail-year"></span></h2>
+        <p id="detail-overview"></p>
+        <div id="detail-tech"></div>
+        <button id="detail-play">▶ Play</button>
+        <div id="detail-chapters"></div>
+      </div>
+    </div>
+    <div id="player-pane" hidden>
+      <div id="now-playing"></div>
+      <video id="video" controls></video>
+      <div id="cast-overlay">▶ Casting to <span id="cast-device"></span></div>
+      <div id="scrub"><div class="rail"></div><div class="avail"></div><div class="fill"></div></div>
+      <div id="timebar"><span id="t-now">0:00</span><span id="t-total">0:00</span></div>
+      <div id="controls">
+        <button id="btn-play" title="Play/Pause">⏵</button>
+        <button id="btn-back" title="Back 10s">⏪</button>
+        <button id="btn-fwd" title="Forward 30s">⏩</button>
+        <button id="btn-stop" title="Stop">⏹</button>
+        <span style="font-size:12px;color:#9a9daa">vol</span>
+        <input type="range" id="vol" min="0" max="1" step="0.05" value="1">
+        <select id="subs" title="Subtitles" style="display:none"></select>
+        <google-cast-launcher id="cast-btn"></google-cast-launcher>
+      </div>
+      <div id="status">Select an item to play.</div>
+      <div id="chapters"></div>
+      <div id="trace"></div>
+    </div>
   </div>
 </main>
+
 <script>
-const clientId = localStorage.clientId ||= 'web-' + Math.random().toString(36).slice(2, 8);
+// ---------------------------------------------------------------------------
+// identity: clientId IS the profile name (progress API is keyed by it)
+// ---------------------------------------------------------------------------
+let clientId = localStorage.profileName || null;
+let usersApiLive = true;   // false => /api/users 404'd, localStorage-only profiles
 let hls = null, sessionId = null, currentItem = null, seekOffset = 0, method = null;
 let baseUrl = location.origin, remotePlayer = null, remoteController = null;
+let allItems = [], currentShow = null, detailItem = null;
+let selectedSubOrdinal = null; // per-session subtitle choice, default Off
 const video = document.getElementById('video');
 const scrub = document.getElementById('scrub');
+const $ = id => document.getElementById(id);
+
+function esc(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
 
 function detectBrowserCaps() {
   const v = document.createElement('video');
@@ -145,7 +254,7 @@ const profiles = {
 async function api(path, opts) {
   const r = await fetch(path, opts);
   const body = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(body.error || r.statusText);
+  if (!r.ok) { const e = new Error(body.error || r.statusText); e.status = r.status; throw e; }
   return body;
 }
 
@@ -156,20 +265,95 @@ function fmtTime(s) {
   const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), sec = s % 60;
   return (h ? h + ':' + String(m).padStart(2, '0') : m) + ':' + String(sec).padStart(2, '0');
 }
+function baseName(key) { return String(key || '').split('/').pop(); }
 function itemTitle(it) {
-  const t = it.identity?.title || it.object_key;
+  const t = it.enrichment?.title || it.identity?.title || baseName(it.object_key);
   return it.identity?.kind === 'episode' ? `${t} S${it.identity.season}E${it.identity.episode}` :
+         it.enrichment?.year ? `${t} (${it.enrichment.year})` :
          it.identity?.year ? `${t} (${it.identity.year})` : t;
 }
+function displayTitle(it) {
+  return it.enrichment?.title || it.identity?.title || baseName(it.object_key);
+}
+function techLine(it) {
+  const mi = it.media_info;
+  return `${fmtRes(mi)} · ${fmtSize(it.size)}${mi?.chapters?.length ? ` · ${mi.chapters.length} ch` : ''}`;
+}
 
-// --- cast plumbing ---
+// ---------------------------------------------------------------------------
+// profile gate (Task A)
+// ---------------------------------------------------------------------------
+async function fetchProfiles() {
+  try {
+    const users = await api('/api/users');
+    usersApiLive = true;
+    return users.map(u => u.name).filter(Boolean);
+  } catch (e) {
+    usersApiLive = false; // old server: keep profiles in localStorage only
+    return JSON.parse(localStorage.localProfiles || '[]');
+  }
+}
+
+async function openGate() {
+  $('gate').hidden = false;
+  $('gate-profiles').innerHTML = '<span style="color:#9a9daa;font-size:13px">loading…</span>';
+  const names = await fetchProfiles();
+  $('gate-note').textContent = usersApiLive
+    ? '' : 'Server has no profile support yet — profiles are stored in this browser only.';
+  const box = $('gate-profiles');
+  box.innerHTML = names.length ? '' : '<span style="color:#9a9daa;font-size:13px">No profiles yet — create one below.</span>';
+  for (const name of names) {
+    const b = document.createElement('button');
+    b.textContent = name;
+    b.onclick = () => selectProfile(name);
+    box.appendChild(b);
+  }
+}
+
+async function createProfile(name) {
+  name = name.trim();
+  if (!name) return;
+  let stored = false;
+  try {
+    await api('/api/users', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    });
+    stored = true;
+  } catch (e) {
+    if (e.status === 409 || /exist/i.test(e.message)) stored = true; // duplicate is fine
+  }
+  if (!stored) { // old server (or offline): keep the profile in this browser
+    const l = JSON.parse(localStorage.localProfiles || '[]');
+    if (!l.includes(name)) l.push(name);
+    localStorage.localProfiles = JSON.stringify(l);
+  }
+  selectProfile(name);
+}
+
+function selectProfile(name) {
+  clientId = name;
+  localStorage.profileName = name;
+  $('profile-chip').textContent = '👤 ' + name;
+  $('gate').hidden = true;
+}
+
+$('gate-create').onclick = () => createProfile($('gate-name').value);
+$('gate-name').onkeydown = e => { if (e.key === 'Enter') createProfile($('gate-name').value); };
+$('profile-chip').onclick = openGate;
+
+// ---------------------------------------------------------------------------
+// cast plumbing
+// ---------------------------------------------------------------------------
 function casting() { return !!(remotePlayer && remotePlayer.isConnected); }
 
 window.__onGCastApiAvailable = (ok) => { if (ok) initCast(); };
 function initCast() {
   const ctx = cast.framework.CastContext.getInstance();
   ctx.setOptions({
-    receiverApplicationId: chrome.cast.media.DEFAULT_MEDIA_RECEIVER_APP_ID,
+    // Task E: a registered custom receiver app id (pointing at /receiver.html)
+    // can be dropped into localStorage.castAppId; default receiver otherwise.
+    receiverApplicationId: localStorage.castAppId || chrome.cast.media.DEFAULT_MEDIA_RECEIVER_APP_ID,
     autoJoinPolicy: chrome.cast.AutoJoinPolicy.ORIGIN_SCOPED,
   });
   remotePlayer = new cast.framework.RemotePlayer();
@@ -184,7 +368,7 @@ function onCastConnectionChanged() {
   document.body.classList.toggle('casting', casting());
   if (casting()) {
     const dev = cast.framework.CastContext.getInstance().getCurrentSession()?.getCastDevice();
-    document.getElementById('cast-device').textContent = dev?.friendlyName || 'Chromecast';
+    $('cast-device').textContent = dev?.friendlyName || 'Chromecast';
     video.pause();
   }
   // Hand playback over in either direction, keeping the position.
@@ -194,7 +378,7 @@ function onCastConnectionChanged() {
   }
 }
 
-async function castLoad(url, isHls, title, resumeForDirect, segFormat) {
+async function castLoad(url, isHls, title, resumeForDirect, segFormat, item) {
   const abs = url.startsWith('/') ? baseUrl + url : url;
   const media = new chrome.cast.media.MediaInfo(abs, isHls ? 'application/x-mpegurl' : 'video/mp4');
   if (isHls) {
@@ -207,7 +391,25 @@ async function castLoad(url, isHls, title, resumeForDirect, segFormat) {
   }
   media.metadata = new chrome.cast.media.GenericMediaMetadata();
   media.metadata.title = title;
+
+  // Task D (cast): expose supported subtitle tracks; trackId = ordinal + 1.
+  const subs = supportedSubs(item);
+  if (subs.length) {
+    media.tracks = subs.map(s => {
+      const t = new chrome.cast.media.Track(s.ordinal + 1, chrome.cast.media.TrackType.TEXT);
+      t.trackContentId = baseUrl + `/api/items/${item.id}/subtitles/${s.ordinal}.vtt`;
+      t.trackContentType = 'text/vtt';
+      t.subtype = chrome.cast.media.TextTrackType.SUBTITLES;
+      t.name = subLabel(s);
+      t.language = s.language || 'en';
+      return t;
+    });
+  }
   const req = new chrome.cast.media.LoadRequest(media);
+  if (subs.length) {
+    req.activeTrackIds = (selectedSubOrdinal != null && subs.some(s => s.ordinal === selectedSubOrdinal))
+      ? [selectedSubOrdinal + 1] : [];
+  }
   // HLS sessions are already positioned server-side; pin to 0 so the
   // receiver doesn't jump to the live edge of the growing playlist.
   req.currentTime = isHls ? 0 : (resumeForDirect > 0 ? resumeForDirect : 0);
@@ -215,7 +417,9 @@ async function castLoad(url, isHls, title, resumeForDirect, segFormat) {
   await cast.framework.CastContext.getInstance().getCurrentSession().loadMedia(req);
 }
 
-// --- unified player state ---
+// ---------------------------------------------------------------------------
+// unified player state
+// ---------------------------------------------------------------------------
 function duration() { return currentItem?.media_info?.duration_seconds || video.duration || 0; }
 function position() {
   const t = casting() ? (remotePlayer.currentTime || 0) : (video.currentTime || 0);
@@ -232,36 +436,281 @@ function isPlaying() {
   return casting() ? remotePlayer.playerState === 'PLAYING' : (!video.paused && !video.ended);
 }
 
-async function loadItems() {
-  const items = await api('/api/items');
-  const list = document.getElementById('list');
-  list.innerHTML = items.length ? '' : '<div id="empty">No items yet — run a scan.</div>';
-  for (const it of items) {
-    const div = document.createElement('div');
-    div.className = 'item';
-    const chapters = it.media_info?.chapters?.length ? ` · ${it.media_info.chapters.length} chapters` : '';
-    div.innerHTML = `<div class="title">${itemTitle(it)}</div>
-      <div class="meta">${fmtRes(it.media_info)} · ${fmtSize(it.size)}${chapters}</div>`;
-    div.onclick = () => selectItem(it, div);
-    list.appendChild(div);
+// ---------------------------------------------------------------------------
+// subtitles (Task D)
+// ---------------------------------------------------------------------------
+function supportedSubs(item) {
+  return (item?.media_info?.subtitles || []).filter(s => s.supported);
+}
+function subLabel(s) {
+  return s.title && s.language ? `${s.title} (${s.language})` : (s.title || s.language || 'Track ' + s.ordinal);
+}
+
+function renderSubSelector(item) {
+  const sel = $('subs');
+  const subs = supportedSubs(item);
+  if (!subs.length) { sel.style.display = 'none'; selectedSubOrdinal = null; return; }
+  sel.style.display = '';
+  sel.innerHTML = '<option value="">Subtitles: Off</option>' +
+    subs.map(s => `<option value="${s.ordinal}">${esc(subLabel(s))}</option>`).join('');
+  if (selectedSubOrdinal != null && !subs.some(s => s.ordinal === selectedSubOrdinal)) {
+    selectedSubOrdinal = null; // previous choice doesn't exist on this item
+  }
+  sel.value = selectedSubOrdinal == null ? '' : String(selectedSubOrdinal);
+}
+
+// (Re-)attach <track> elements for local playback. Called on every
+// startPlayback, which also covers transcode seek-restarts.
+function attachLocalTracks(item) {
+  video.querySelectorAll('track').forEach(t => t.remove());
+  for (const s of supportedSubs(item)) {
+    const tr = document.createElement('track');
+    tr.kind = 'subtitles';
+    tr.src = `/api/items/${item.id}/subtitles/${s.ordinal}.vtt`;
+    tr.srclang = s.language || '';
+    tr.label = subLabel(s);
+    tr.dataset.ordinal = s.ordinal;
+    video.appendChild(tr);
+  }
+  applyLocalSubSelection();
+}
+function applyLocalSubSelection() {
+  for (const tr of video.querySelectorAll('track')) {
+    tr.track.mode = (selectedSubOrdinal != null && Number(tr.dataset.ordinal) === selectedSubOrdinal)
+      ? 'showing' : 'disabled';
   }
 }
 
+$('subs').onchange = () => {
+  const v = $('subs').value;
+  selectedSubOrdinal = v === '' ? null : Number(v);
+  if (casting()) {
+    const ms = cast.framework.CastContext.getInstance().getCurrentSession()?.getMediaSession();
+    if (ms) {
+      const ids = selectedSubOrdinal == null ? [] : [selectedSubOrdinal + 1];
+      ms.editTracksInfo(new chrome.cast.media.EditTracksInfoRequest(ids),
+        () => {}, e => console.warn('editTracksInfo failed', e));
+    }
+  } else {
+    applyLocalSubSelection();
+  }
+};
+
+// ---------------------------------------------------------------------------
+// library (Task B)
+// ---------------------------------------------------------------------------
+function buildLibrary(items) {
+  const movies = [], shows = new Map();
+  for (const it of items) {
+    if (it.identity?.kind === 'episode' && it.identity.title) {
+      if (!shows.has(it.identity.title)) shows.set(it.identity.title, []);
+      shows.get(it.identity.title).push(it);
+    } else {
+      movies.push(it);
+    }
+  }
+  for (const eps of shows.values()) {
+    eps.sort((a, b) => (a.identity.season - b.identity.season) || (a.identity.episode - b.identity.episode));
+  }
+  return { movies, shows };
+}
+
+function makeCard({ posterId, title, sub, tech, onClick }) {
+  const c = document.createElement('div');
+  c.className = 'card';
+  c.onclick = onClick;
+  const wrap = document.createElement('div');
+  wrap.className = 'poster-wrap';
+  const img = document.createElement('img');
+  img.loading = 'lazy';
+  img.alt = '';
+  img.src = `/api/items/${posterId}/poster`;
+  img.onerror = () => { // no poster: styled text tile with title/resolution
+    img.remove();
+    wrap.classList.add('text-tile');
+    wrap.innerHTML = `<div class="tile-title">${esc(title)}</div><div class="tile-sub">${esc(tech)}</div>`;
+  };
+  wrap.appendChild(img);
+  c.appendChild(wrap);
+  c.insertAdjacentHTML('beforeend',
+    `<div class="c-title">${esc(title)}</div>` +
+    (sub ? `<div class="c-sub">${esc(sub)}</div>` : '') +
+    `<div class="c-tech">${esc(tech)}</div>`);
+  return c;
+}
+
+function renderGrid() {
+  const q = $('search').value.trim().toLowerCase();
+  const grid = $('grid');
+  grid.innerHTML = '';
+  if (!allItems.length) {
+    grid.innerHTML = '<div id="empty">No items yet — run a scan.</div>';
+    $('lib-count').textContent = '';
+    return;
+  }
+  const { movies, shows } = buildLibrary(allItems);
+  let count = 0;
+  for (const [name, eps] of [...shows.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
+    if (q && !name.toLowerCase().includes(q)) continue;
+    const seasons = new Set(eps.map(e => e.identity.season)).size;
+    const first = eps[0];
+    grid.appendChild(makeCard({
+      posterId: first.id,
+      title: first.enrichment?.title || name,
+      sub: `${seasons} season${seasons > 1 ? 's' : ''} · ${eps.length} episode${eps.length > 1 ? 's' : ''}`,
+      tech: fmtRes(first.media_info),
+      onClick: () => openShow(name),
+    }));
+    count++;
+  }
+  for (const it of movies.sort((a, b) => displayTitle(a).localeCompare(displayTitle(b)))) {
+    const t = displayTitle(it);
+    if (q && !t.toLowerCase().includes(q) && !baseName(it.object_key).toLowerCase().includes(q)) continue;
+    const year = it.enrichment?.year || it.identity?.year;
+    grid.appendChild(makeCard({
+      posterId: it.id,
+      title: t,
+      sub: year ? String(year) : '',
+      tech: techLine(it),
+      onClick: () => openDetail(it, null),
+    }));
+    count++;
+  }
+  $('lib-count').textContent = `${count} title${count === 1 ? '' : 's'}`;
+  if (!count) grid.innerHTML = '<div id="empty">Nothing matches your search.</div>';
+}
+$('search').oninput = renderGrid;
+
+async function loadItems() {
+  allItems = await api('/api/items');
+  renderGrid();
+}
+
+// ---------------------------------------------------------------------------
+// navigation
+// ---------------------------------------------------------------------------
+function showView(id) {
+  for (const v of ['view-library', 'view-show', 'view-detail']) $(v).hidden = v !== id;
+}
+
+function openShow(name) {
+  currentShow = name;
+  const { shows } = buildLibrary(allItems);
+  const eps = shows.get(name) || [];
+  $('show-title').textContent = (eps[0]?.enrichment?.title) || name;
+  const list = $('episode-list');
+  list.innerHTML = '';
+  for (const ep of eps) {
+    const div = document.createElement('div');
+    div.className = 'item';
+    div.innerHTML = `<div class="title">S${ep.identity.season}E${ep.identity.episode}` +
+      (ep.enrichment?.title && ep.enrichment.title !== name ? ` · ${esc(ep.enrichment.title)}` : '') +
+      `</div><div class="meta">${esc(techLine(ep))}</div>`;
+    div.onclick = () => openDetail(ep, name);
+    list.appendChild(div);
+  }
+  showView('view-show');
+}
+$('show-back').onclick = () => showView('view-library');
+
+// ---------------------------------------------------------------------------
+// detail + playback pane (Task C)
+// ---------------------------------------------------------------------------
+function openDetail(item, fromShow) {
+  detailItem = item;
+  currentShow = fromShow;
+  const poster = $('detail-poster');
+  poster.hidden = false;
+  poster.onerror = () => { poster.hidden = true; };
+  poster.src = `/api/items/${item.id}/poster`;
+  const isEp = item.identity?.kind === 'episode';
+  $('detail-title').textContent = isEp
+    ? `${displayTitle(item)} — S${item.identity.season}E${item.identity.episode}`
+    : displayTitle(item);
+  const year = item.enrichment?.year || item.identity?.year;
+  $('detail-year').textContent = year && !isEp ? `(${year})` : '';
+  $('detail-overview').textContent = item.enrichment?.overview || '';
+  $('detail-overview').hidden = !item.enrichment?.overview;
+  const mi = item.media_info;
+  $('detail-tech').textContent = [
+    mi?.container, fmtRes(mi), fmtSize(item.size),
+    mi?.duration_seconds ? fmtTime(mi.duration_seconds) : null,
+    mi?.bitrate_bps ? (mi.bitrate_bps / 1e6).toFixed(1) + ' Mbps' : null,
+    mi?.audio_channels ? mi.audio_channels + 'ch' : null,
+  ].filter(Boolean).join(' · ');
+  const chBox = $('detail-chapters');
+  chBox.innerHTML = '';
+  for (const ch of mi?.chapters || []) {
+    const b = document.createElement('button');
+    b.textContent = `${ch.title} · ${fmtTime(ch.start_seconds)}`;
+    b.onclick = () => playItem(item, ch.start_seconds);
+    chBox.appendChild(b);
+  }
+  $('detail-info').hidden = false;
+  $('player-pane').hidden = true;
+  showView('view-detail');
+}
+
+$('detail-play').onclick = () => playItem(detailItem, null);
+
+$('detail-back').onclick = () => {
+  if (!$('player-pane').hidden) {
+    // leave the player: stop and reveal detail info again
+    if (casting()) remoteController.stop();
+    else { video.pause(); video.removeAttribute('src'); video.load(); }
+    stopSession();
+    currentItem = null;
+    $('player-pane').hidden = true;
+    $('detail-info').hidden = false;
+  } else if (currentShow) {
+    showView('view-show');
+  } else {
+    showView('view-library');
+  }
+};
+
+// Play with resume: fetch saved progress (keyed by profile name) unless an
+// explicit start time (e.g. a chapter) was requested.
+async function playItem(item, startAt) {
+  currentItem = item;
+  seekOffset = 0;
+  $('detail-info').hidden = true;
+  $('player-pane').hidden = false;
+  $('now-playing').textContent = itemTitle(item);
+  let resume = startAt;
+  if (resume == null) {
+    resume = 0;
+    try {
+      const { position_seconds } = await api(
+        `/api/progress?item_id=${item.id}&client_id=${encodeURIComponent(clientId || 'anonymous')}`);
+      const dur = item.media_info?.duration_seconds ?? Infinity;
+      if (position_seconds > 5 && position_seconds < dur - 10) resume = position_seconds;
+    } catch (e) { /* no saved progress */ }
+  }
+  renderSubSelector(item);
+  await startPlayback(item, resume);
+  renderChapters();
+  $('t-total').textContent = fmtTime(duration());
+}
+
+// ---------------------------------------------------------------------------
+// playback core (behavior preserved from the original single-list app)
+// ---------------------------------------------------------------------------
 function renderTrace(decision, videoEncoder) {
   const badge = `<span class="badge ${decision.method === 'direct_play' ? 'direct' : decision.method === 'transcode' ? 'transcode' : 'deny'}">${decision.method.replace('_', ' ')}</span>`;
   const enc = videoEncoder ? ` <span style="color:#8db4f0">via ${videoEncoder}</span>` : '';
   const dest = casting() ? ' <span style="color:#8db4f0">→ cast</span>' : '';
-  document.getElementById('status').innerHTML = badge + (decision.trace.at(-1)?.detail || '') + enc + dest;
-  document.getElementById('trace').innerHTML = '<h3>Decision trace</h3>' +
+  $('status').innerHTML = badge + esc(decision.trace.at(-1)?.detail || '') + enc + dest;
+  $('trace').innerHTML = '<h3>Decision trace</h3>' +
     decision.trace.map(s => `<div class="step ${s.passed ? 'pass' : 'fail'}">
       <span class="mark">${s.passed ? '✓' : '✗'}</span>
-      <span class="check">${s.check}</span>
-      <span class="detail">${s.detail}</span></div>`).join('');
+      <span class="check">${esc(s.check)}</span>
+      <span class="detail">${esc(s.detail)}</span></div>`).join('');
 }
 
 function renderChapters() {
   const chs = currentItem?.media_info?.chapters || [];
-  const pane = document.getElementById('chapters');
+  const pane = $('chapters');
   pane.innerHTML = '';
   scrub.querySelectorAll('.tick').forEach(t => t.remove());
   const dur = duration();
@@ -291,15 +740,15 @@ async function stopSession() {
 async function startPlayback(item, seekSeconds) {
   await stopSession();
   const caps = casting() ? profiles.chromecastUltra
-                         : profiles[document.getElementById('profile').value];
+                         : profiles[$('profile').value];
   let resp;
   try {
     resp = await api(`/api/items/${item.id}/play`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ capabilities: caps, client_id: clientId, seek_seconds: seekSeconds }),
+      body: JSON.stringify({ capabilities: caps, client_id: clientId || 'anonymous', seek_seconds: seekSeconds }),
     });
   } catch (e) {
-    document.getElementById('status').textContent = 'Error: ' + e.message;
+    $('status').textContent = 'Error: ' + e.message;
     return;
   }
   renderTrace(resp.decision, resp.video_encoder);
@@ -312,9 +761,9 @@ async function startPlayback(item, seekSeconds) {
   if (casting()) {
     try {
       await castLoad(resp.url, isHls, itemTitle(item), seekSeconds,
-                     resp.decision.target?.segment_format);
+                     resp.decision.target?.segment_format, item);
     } catch (e) {
-      document.getElementById('status').textContent = 'Cast error: ' + (e.description || e.message || e);
+      $('status').textContent = 'Cast error: ' + (e.description || e.message || e);
     }
     return;
   }
@@ -331,6 +780,8 @@ async function startPlayback(item, seekSeconds) {
     video.src = resp.url;
     video.play();
   }
+  // subtitles must be re-attached after every (re)load, incl. seek-restarts
+  attachLocalTracks(item);
 }
 
 function seekTo(t) {
@@ -346,41 +797,30 @@ function seekTo(t) {
       video.currentTime = rel;
     }
   } else {
-    document.getElementById('status').textContent =
+    $('status').textContent =
       `Seeking to ${fmtTime(t)} — restarting transcode at that point…`;
     startPlayback(currentItem, t);
   }
 }
 
-async function selectItem(item, el) {
-  document.querySelectorAll('.item').forEach(d => d.classList.remove('active'));
-  el?.classList.add('active');
-  currentItem = item;
-  seekOffset = 0;
-  const { position_seconds } = await api(`/api/progress?item_id=${item.id}&client_id=${clientId}`);
-  const dur = item.media_info?.duration_seconds ?? Infinity;
-  const resume = position_seconds > 5 && position_seconds < dur - 10 ? position_seconds : 0;
-  await startPlayback(item, resume);
-  renderChapters();
-  document.getElementById('t-total').textContent = fmtTime(duration());
-}
-
-// --- controls ---
+// ---------------------------------------------------------------------------
+// controls
+// ---------------------------------------------------------------------------
 function syncPlayButton() {
-  document.getElementById('btn-play').textContent = isPlaying() ? '⏸' : '⏵';
+  $('btn-play').textContent = isPlaying() ? '⏸' : '⏵';
 }
-document.getElementById('btn-play').onclick = () => {
+$('btn-play').onclick = () => {
   if (casting()) remoteController.playOrPause();
   else video.paused ? video.play() : video.pause();
 };
-document.getElementById('btn-back').onclick = () => seekTo(position() - 10);
-document.getElementById('btn-fwd').onclick = () => seekTo(position() + 30);
-document.getElementById('btn-stop').onclick = () => {
+$('btn-back').onclick = () => seekTo(position() - 10);
+$('btn-fwd').onclick = () => seekTo(position() + 30);
+$('btn-stop').onclick = () => {
   if (casting()) remoteController.stop();
   else { video.pause(); video.removeAttribute('src'); video.load(); }
   stopSession();
 };
-document.getElementById('vol').oninput = (e) => {
+$('vol').oninput = (e) => {
   const v = parseFloat(e.target.value);
   if (casting()) { remotePlayer.volumeLevel = v; remoteController.setVolumeLevel(); }
   else video.volume = v;
@@ -396,7 +836,7 @@ setInterval(() => {
   if (dur > 0) {
     scrub.querySelector('.fill').style.width = Math.min(100, position() / dur * 100) + '%';
     scrub.querySelector('.avail').style.width = Math.min(100, availableEnd() / dur * 100) + '%';
-    document.getElementById('t-now').textContent = fmtTime(position());
+    $('t-now').textContent = fmtTime(position());
   }
   syncPlayButton();
 }, 250);
@@ -406,16 +846,16 @@ setInterval(() => {
     fetch('/api/progress', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        item_id: currentItem.id, client_id: clientId,
+        item_id: currentItem.id, client_id: clientId || 'anonymous',
         position_seconds: position(),
       }),
     });
   }
 }, 5000);
 
-document.getElementById('scan').onclick = async () => {
+$('scan').onclick = async () => {
   await api('/api/scan', { method: 'POST' });
-  const el = document.getElementById('scan-status');
+  const el = $('scan-status');
   const poll = setInterval(async () => {
     const s = await api('/api/scan');
     el.textContent = s.running
@@ -426,11 +866,16 @@ document.getElementById('scan').onclick = async () => {
   }, 1000);
 };
 
+// ---------------------------------------------------------------------------
+// boot
+// ---------------------------------------------------------------------------
 window.addEventListener('beforeunload', stopSession);
+if (clientId) { $('profile-chip').textContent = '👤 ' + clientId; }
+else openGate();
 loadItems();
 api('/api/system').then(sys => {
   baseUrl = sys.base_url || location.origin;
-  const el = document.getElementById('hw');
+  const el = $('hw');
   const hw = sys.hardware;
   el.textContent = hw.chosen
     ? `HW: ${hw.chosen.kind} (${Object.values(hw.chosen.encoders).join(', ')})`

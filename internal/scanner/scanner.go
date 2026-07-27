@@ -32,11 +32,27 @@ import (
 // ProbeVersion is bumped whenever Probe extracts new information, so an
 // incremental scan re-probes existing items instead of skipping them on a
 // matching etag. v2: added chapter extraction. v3: fps + telecine detection.
-const ProbeVersion = 3
+// v4: adds subtitle streams.
+const ProbeVersion = 4
+
+// IdentityVersion is bumped whenever Identify learns new tricks. Unlike a
+// ProbeVersion bump, refreshing identity needs no ffprobe and no bandwidth —
+// the scan recomputes it from the object key alone for items whose stored
+// identity_version is older (and that the user hasn't overridden).
+// v2: directory-aware identification (Shows/<name>/Season <n>, Movies/<name (year)>).
+const IdentityVersion = 2
 
 var videoExts = map[string]bool{
 	".mkv": true, ".mp4": true, ".m4v": true, ".avi": true,
 	".mov": true, ".webm": true, ".ts": true, ".wmv": true,
+}
+
+// textSubtitleCodecs are the subtitle codecs ffmpeg can convert to WebVTT.
+// Bitmap formats (hdmv_pgs_subtitle, dvd_subtitle) are probed and listed, but
+// marked unsupported — turning pictures into text would need OCR.
+var textSubtitleCodecs = map[string]bool{
+	"subrip": true, "srt": true, "ass": true, "ssa": true,
+	"mov_text": true, "webvtt": true, "text": true,
 }
 
 type Status struct {
@@ -49,6 +65,9 @@ type Status struct {
 	Removed   int64     `json:"removed"`
 	Errors    int       `json:"errors"`
 	LastError string    `json:"last_error,omitempty"`
+	// IdentityRefreshed counts items whose identity was recomputed from the
+	// key alone (no re-probe) because IdentityVersion moved.
+	IdentityRefreshed int `json:"identity_refreshed,omitempty"`
 }
 
 type Scanner struct {
@@ -96,6 +115,7 @@ func (s *Scanner) Scan(ctx context.Context) error {
 
 	present := map[string]bool{}
 	var todo []minio.ObjectInfo
+	var refresh []store.IdentityUpdate
 	for obj := range s.Client.ListObjects(ctx, s.Bucket, minio.ListObjectsOptions{Recursive: true}) {
 		if obj.Err != nil {
 			return obj.Err
@@ -103,13 +123,32 @@ func (s *Scanner) Scan(ctx context.Context) error {
 		if !videoExts[strings.ToLower(path.Ext(obj.Key))] {
 			continue
 		}
+		// macOS AppleDouble sidecars (._foo.mkv) are resource-fork junk that
+		// share the video extension but always fail probing.
+		if strings.HasPrefix(path.Base(obj.Key), "._") {
+			continue
+		}
 		present[obj.Key] = true
 		k, ok := known[obj.Key]
 		if ok && k.ETag == strings.Trim(obj.ETag, `"`) && k.ProbeVersion == ProbeVersion {
+			// Content unchanged — but if identification logic moved on since
+			// this row was written, recompute identity from the key alone.
+			// No ffprobe, no bandwidth; user overrides are left untouched.
+			if k.IdentityVersion < IdentityVersion && !k.IdentityOverridden {
+				refresh = append(refresh, store.IdentityUpdate{
+					ObjectKey: obj.Key, Identity: Identify(obj.Key),
+				})
+			}
 			s.update(func(st *Status) { st.Skipped++ })
 			continue
 		}
 		todo = append(todo, obj)
+	}
+	if len(refresh) > 0 {
+		if err := s.Library.UpdateIdentities(refresh, IdentityVersion); err != nil {
+			return err
+		}
+		s.update(func(st *Status) { st.IdentityRefreshed = len(refresh) })
 	}
 	s.update(func(st *Status) { st.Total = len(todo) })
 
@@ -201,10 +240,11 @@ func (s *Scanner) ReprobeKey(ctx context.Context, objectKey string) (*store.Item
 
 func (s *Scanner) probeOne(ctx context.Context, obj minio.ObjectInfo) store.Item {
 	item := store.Item{
-		ObjectKey:    obj.Key,
-		ETag:         strings.Trim(obj.ETag, `"`),
-		Size:         obj.Size,
-		ProbeVersion: ProbeVersion,
+		ObjectKey:       obj.Key,
+		ETag:            strings.Trim(obj.ETag, `"`),
+		Size:            obj.Size,
+		ProbeVersion:    ProbeVersion,
+		IdentityVersion: IdentityVersion,
 	}
 	ident := Identify(obj.Key)
 	item.Identity = &ident
@@ -238,6 +278,10 @@ type ffprobeOut struct {
 		Channels      int    `json:"channels"`
 		ColorTransfer string `json:"color_transfer"`
 		AvgFrameRate  string `json:"avg_frame_rate"`
+		Tags          struct {
+			Language string `json:"language"`
+			Title    string `json:"title"`
+		} `json:"tags"`
 	} `json:"streams"`
 	Chapters []struct {
 		StartTime string `json:"start_time"`
@@ -349,6 +393,14 @@ func parseProbe(out []byte, objectKey string) (*model.MediaInfo, error) {
 				info.AudioCodec = st.CodecName
 				info.AudioChannels = st.Channels
 			}
+		case "subtitle":
+			info.Subtitles = append(info.Subtitles, model.SubtitleTrack{
+				Ordinal:   len(info.Subtitles), // index among subtitle streams only (-map 0:s:<n>)
+				Codec:     st.CodecName,
+				Language:  st.Tags.Language,
+				Title:     st.Tags.Title,
+				Supported: textSubtitleCodecs[st.CodecName],
+			})
 		}
 	}
 	if info.VideoCodec == "" {
@@ -372,14 +424,39 @@ var (
 	// Greedy prefix: the LAST year-like token is the release year, so
 	// titles containing a year ("Blade Runner 2049 (2017)") parse correctly.
 	yearRe = regexp.MustCompile(`^(.*)[. _(-]+((19|20)\d{2})`)
+
+	// Directory-aware patterns. Loose episode markers (3x07, a lone E05) are
+	// only trusted when the path already says we're inside a show directory —
+	// applied to arbitrary filenames they misfire ("day2", "1080p").
+	sxxeyyRe    = regexp.MustCompile(`(?i)(?:^|[ ._(-])S(\d{1,2})[ ._-]?E(\d{1,3})`)
+	nxmRe       = regexp.MustCompile(`(?i)(?:^|[ ._(-])(\d{1,2})x(\d{2,3})(?:[ ._)-]|$)`)
+	loneEpRe    = regexp.MustCompile(`(?i)(?:^|[ ._(-])(?:Episode|Ep|E)[ ._]?(\d{1,3})(?:[ ._)-]|$)`)
+	seasonDirRe = regexp.MustCompile(`(?i)^(?:Season|Series)[ ._-]*(\d{1,3})$`)
 )
 
-// Identify deterministically maps a filename to a media identity.
-// It never does I/O — same input, same answer, every scan.
-func Identify(objectKey string) model.Identity {
-	base := path.Base(objectKey)
-	base = strings.TrimSuffix(base, path.Ext(base))
+// showCategoryDirs are directory names that mark "everything below is TV".
+var showCategoryDirs = map[string]bool{"shows": true, "tv shows": true, "tv": true, "series": true}
 
+// Identify deterministically maps an object key to a media identity, using
+// the FULL path: a Shows/<name>/Season <n>/ layout names the show even when
+// the filename alone doesn't, and Movies/<Name (Year)>/ rescues files like
+// "movie.mp4". It never does I/O — same input, same answer, every scan.
+func Identify(objectKey string) model.Identity {
+	segs := strings.Split(objectKey, "/")
+	base := strings.TrimSuffix(segs[len(segs)-1], path.Ext(segs[len(segs)-1]))
+	dirs := segs[:len(segs)-1]
+
+	// Show-directory context: title comes from the directory, numbers from
+	// wherever they are (filename first, season directory as fallback).
+	if show, dirSeason, ok := showContext(dirs); ok {
+		if season, episode, ok := episodeNumbers(base, dirSeason); ok {
+			title, year := splitTrailingYear(show)
+			return model.Identity{
+				Kind: "episode", Title: title, Year: year, Season: season, Episode: episode,
+			}
+		}
+	}
+	// Filename-only episode pattern (title prefix + SxxEyy) works anywhere.
 	if m := episodeRe.FindStringSubmatch(base); m != nil {
 		season, _ := strconv.Atoi(m[2])
 		episode, _ := strconv.Atoi(m[3])
@@ -391,7 +468,80 @@ func Identify(objectKey string) model.Identity {
 		year, _ := strconv.Atoi(m[2])
 		return model.Identity{Kind: "movie", Title: cleanTitle(m[1]), Year: year}
 	}
+	// Movies/<Name (Year)>/<uninformative file>: the parent directory is the
+	// better source when the filename itself yielded nothing.
+	if parent, ok := moviesParent(dirs); ok {
+		if m := yearRe.FindStringSubmatch(parent); m != nil {
+			year, _ := strconv.Atoi(m[2])
+			return model.Identity{Kind: "movie", Title: cleanTitle(m[1]), Year: year}
+		}
+	}
 	return model.Identity{Kind: "unknown", Title: cleanTitle(base)}
+}
+
+// showContext scans the directory path for a Shows-category segment followed
+// by a show-name directory, plus an optional Season/Series <n> directory.
+func showContext(dirs []string) (show string, dirSeason int, ok bool) {
+	for i, d := range dirs {
+		if !showCategoryDirs[strings.ToLower(d)] || i+1 >= len(dirs) {
+			continue
+		}
+		name := dirs[i+1]
+		if showCategoryDirs[strings.ToLower(name)] {
+			continue // nested category dirs ("tv/Shows/...") — keep walking in
+		}
+		if seasonDirRe.MatchString(name) {
+			return "", 0, false // Shows/Season 1/... — no show name to take
+		}
+		for _, rest := range dirs[i+2:] {
+			if m := seasonDirRe.FindStringSubmatch(rest); m != nil {
+				dirSeason, _ = strconv.Atoi(m[1])
+			}
+		}
+		return name, dirSeason, true
+	}
+	return "", 0, false
+}
+
+// episodeNumbers extracts season/episode from a filename, falling back to
+// the season directory for formats that only carry an episode number.
+func episodeNumbers(base string, dirSeason int) (season, episode int, ok bool) {
+	if m := sxxeyyRe.FindStringSubmatch(base); m != nil {
+		season, _ = strconv.Atoi(m[1])
+		episode, _ = strconv.Atoi(m[2])
+		return season, episode, true
+	}
+	if m := nxmRe.FindStringSubmatch(base); m != nil {
+		season, _ = strconv.Atoi(m[1])
+		episode, _ = strconv.Atoi(m[2])
+		return season, episode, true
+	}
+	if m := loneEpRe.FindStringSubmatch(base); m != nil {
+		episode, _ = strconv.Atoi(m[1])
+		return dirSeason, episode, true
+	}
+	return 0, 0, false
+}
+
+// moviesParent returns the file's parent directory when the path contains a
+// Movies-category segment above it.
+func moviesParent(dirs []string) (string, bool) {
+	for i, d := range dirs {
+		if strings.EqualFold(d, "movies") && i < len(dirs)-1 {
+			return dirs[len(dirs)-1], true
+		}
+	}
+	return "", false
+}
+
+// splitTrailingYear separates "Rick and Morty (2013)" into title and year;
+// names without a year pass through with year 0.
+func splitTrailingYear(name string) (string, int) {
+	if m := yearRe.FindStringSubmatch(name); m != nil {
+		year, _ := strconv.Atoi(m[2])
+		return cleanTitle(m[1]), year
+	}
+	return cleanTitle(name), 0
 }
 
 func cleanTitle(s string) string {

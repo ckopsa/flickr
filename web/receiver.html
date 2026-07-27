@@ -1,0 +1,114 @@
+<!doctype html>
+<!--
+  flickr — custom Google Cast CAF receiver.
+
+  Using this page requires a Cast developer console registration:
+    1. Register a "Custom Receiver" application whose URL points at
+       https://stream.kopsa.info/receiver.html
+    2. Put the resulting app id on the sender:
+         localStorage.castAppId = '<YOUR_APP_ID>'
+       (index.html reads it at CastContext init; unset falls back to the
+       default media receiver).
+
+  The receiver POSTs compact telemetry (state changes, errors, media title,
+  currentTime) to /api/telemetry on this same server, throttled to one POST
+  per 5 seconds — errors bypass the throttle. Append ?debug=1 to the
+  registered URL to enable the CastDebugLogger overlay.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>flickr receiver</title>
+<style>
+  body { margin: 0; background: #14151a; }
+  cast-media-player { --theme-hue: 222; }
+  #no-cast { color: #9a9daa; font-family: system-ui, sans-serif; font-size: 14px; padding: 40px; }
+</style>
+</head>
+<body>
+<cast-media-player></cast-media-player>
+<script src="//www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js"></script>
+<script src="//www.gstatic.com/cast/sdk/libs/devtools/debug_layer/caf_receiver_logger.js"></script>
+<script>
+(function () {
+  'use strict';
+  // Outside a Cast device the framework script fails to define `cast` —
+  // guard so opening this file in a normal browser produces no errors.
+  if (typeof cast === 'undefined' || !cast.framework || !cast.framework.CastReceiverContext) {
+    document.body.innerHTML =
+      '<div id="no-cast">Cast receiver framework unavailable — this page only runs on a Cast device.</div>';
+    return;
+  }
+
+  var context = cast.framework.CastReceiverContext.getInstance();
+  var playerManager = context.getPlayerManager();
+
+  // --- telemetry: compact events to the same-origin media server ----------
+  var lastPost = 0;
+  var mediaTitle = '';
+  function telemetry(event, extra, force) {
+    var now = Date.now();
+    if (!force && now - lastPost < 5000) return; // throttle: 1 POST / 5s
+    lastPost = now;
+    var payload = {
+      source: 'cast-receiver',
+      event: event,
+      title: mediaTitle,
+      current_time: Math.round((playerManager.getCurrentTimeSec() || 0) * 10) / 10,
+      ts: new Date().toISOString(),
+    };
+    if (extra) for (var k in extra) payload[k] = extra[k];
+    try {
+      fetch('/api/telemetry', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      }).catch(function () {});
+    } catch (e) { /* never let telemetry break playback */ }
+  }
+
+  playerManager.addEventListener(
+    cast.framework.events.EventType.PLAYER_LOAD_COMPLETE,
+    function () {
+      var info = playerManager.getMediaInformation();
+      mediaTitle = (info && info.metadata && info.metadata.title) || '';
+      telemetry('player_load_complete', {}, true);
+    });
+
+  playerManager.addEventListener(
+    cast.framework.events.EventType.ERROR,
+    function (e) {
+      telemetry('error', {
+        detailed_error_code: e.detailedErrorCode,
+        reason: e.reason || null,
+      }, true); // errors bypass the throttle
+    });
+
+  // playerData binder: state changes (IDLE/LOADING/PLAYING/PAUSED/BUFFERING)
+  var playerData = {};
+  var binder = new cast.framework.ui.PlayerDataBinder(playerData);
+  binder.addEventListener(
+    cast.framework.ui.PlayerDataEventType.STATE_CHANGED,
+    function (e) {
+      telemetry('state_change', { state: e.value });
+    });
+
+  // --- debug overlay, gated behind ?debug=1 -------------------------------
+  if (new URLSearchParams(location.search).get('debug') === '1' &&
+      cast.debug && cast.debug.CastDebugLogger) {
+    var logger = cast.debug.CastDebugLogger.getInstance();
+    context.addEventListener(cast.framework.system.EventType.READY, function () {
+      logger.setEnabled(true);
+      logger.showDebugLogs(true);
+    });
+    logger.loggerLevelByEvents = {
+      'cast.framework.events.category.CORE': cast.framework.LoggerLevel.INFO,
+      'cast.framework.events.EventType.MEDIA_STATUS': cast.framework.LoggerLevel.DEBUG,
+    };
+  }
+
+  context.start();
+})();
+</script>
+</body>
+</html>

@@ -18,14 +18,31 @@ a handful of architectural decisions (see design notes below):
 5. **Incremental, job-based scanning** — list bucket → diff etags → probe only
    changed objects (bounded worker pool) → batch-write in transactions →
    reconcile deletions. Restarting never re-probes the whole library.
-6. **Identification ≠ enrichment** — filename → identity is deterministic and
-   separately stored; user overrides (`POST /api/items/{id}/identity`) are
-   never clobbered by a rescan.
+6. **Identification ≠ enrichment** — object key → identity is deterministic
+   and separately stored; user overrides (`POST /api/items/{id}/identity`) are
+   never clobbered by a rescan. Identification is directory-aware
+   (`Shows/<name>/Season <n>/`, `Movies/<Name (Year)>/`) and versioned:
+   bumping `IdentityVersion` makes the next scan recompute identities from
+   keys alone — no re-probe, no bandwidth. TMDB enrichment (title, overview,
+   poster) is a separate post-scan stage keyed off identity; enrichment is
+   invalidated automatically when an item's identity changes, and disabled
+   entirely without a `TMDB_API_KEY`.
 7. **Verified hardware-accel detection** — at startup the pipeline probes
    nvenc/qsv/vaapi/v4l2m2m with real test encodes (compiled-in ≠ working)
    and keeps the full accept/reject trace (`GET /api/system`). The decision
    engine stays hardware-agnostic; encoder choice happens at the FFmpeg
    boundary, including per-family quirks (preset namespaces, vaapi hwupload).
+8. **Self-maintaining sessions and scans** — transcode sessions track when
+   their HLS output was last fetched; a reaper stops sessions idle >5 minutes
+   (vanished clients never say goodbye). Scans run on a schedule
+   (`SCAN_INTERVAL`, default 12h; an empty library triggers one at startup),
+   and probing now extracts subtitle streams; text tracks are served as
+   WebVTT (`.vtt` endpoint, extracted on demand with ffmpeg, cached in
+   `data/subs/`), bitmap tracks are listed but marked unsupported.
+9. **Profiles and telemetry stay lightweight** — user profiles are names in
+   `state.db` (`/api/users`); clients pass the profile name as `client_id` to
+   the unchanged progress API. `POST /api/telemetry` appends any JSON object
+   to `data/telemetry.jsonl` for client-side error forensics.
 
 ## Run
 
@@ -43,13 +60,19 @@ locally except HLS segments in `data/streams/`.
 
 | Endpoint | Purpose |
 |---|---|
-| `POST /api/scan`, `GET /api/scan` | trigger / observe incremental scan |
-| `GET /api/items` | library listing |
+| `POST /api/scan`, `GET /api/scan` | trigger / observe incremental scan (enrichment runs after) |
+| `GET /api/items` | library listing (incl. `media_info.subtitles` and `enrichment`) |
 | `POST /api/items/{id}/decision` | dry-run: decision + trace, no side effects |
 | `POST /api/items/{id}/play` | decide and act: presigned URL (direct) or HLS session (transcode) |
 | `POST /api/items/{id}/identity` | user identity override (persists across scans) |
-| `DELETE /api/sessions/{id}` | stop a transcode session |
+| `POST /api/items/{id}/reprobe` | re-probe one item on demand |
+| `POST /api/items/{id}/enrich` | TMDB-enrich one item on demand (503 if no API key) |
+| `GET /api/items/{id}/subtitles/{ordinal}.vtt` | subtitle track as WebVTT (415 for bitmap tracks, 404 for bad ordinal) |
+| `GET /api/items/{id}/poster` | cached TMDB poster (image/jpeg, 404 if absent) |
+| `DELETE /api/sessions/{id}` | stop a transcode session (idle sessions are auto-reaped) |
 | `POST/GET /api/progress` | playback position per (item, client) |
+| `GET/POST /api/users` | list / idempotently create profile names (clients use the name as `client_id`) |
+| `POST /api/telemetry` | append any JSON object to `data/telemetry.jsonl`; always 200 |
 
 `decision`/`play` take `{"capabilities": {...}, "client_id": "...", "seek_seconds": 0}`.
 The web UI includes capability presets (Chromecast v1, 4K HDR TV, cellular cap)

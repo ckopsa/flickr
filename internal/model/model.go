@@ -10,21 +10,45 @@ const CapabilitySchemaVersion = 1
 // MediaInfo is the result of probing a media file. It is the immutable
 // media-side input to the decision engine.
 type MediaInfo struct {
-	Container       string    `json:"container"`        // "mkv", "mp4", ...
-	VideoCodec      string    `json:"video_codec"`      // "h264", "hevc", "av1", ...
-	AudioCodec      string    `json:"audio_codec"`      // "aac", "ac3", "dts", ...
-	Width           int       `json:"width"`
-	Height          int       `json:"height"`
-	DurationSeconds float64   `json:"duration_seconds"`
-	BitrateBps      int64     `json:"bitrate_bps"`
-	HDR             string    `json:"hdr,omitempty"` // "", "hdr10", "dolbyvision", "hlg"
-	AudioChannels   int       `json:"audio_channels"`
-	FPS             float64   `json:"fps,omitempty"`
+	Container       string  `json:"container"`   // "mkv", "mp4", ...
+	VideoCodec      string  `json:"video_codec"` // "h264", "hevc", "av1", ...
+	AudioCodec      string  `json:"audio_codec"` // "aac", "ac3", "dts", ...
+	Width           int     `json:"width"`
+	Height          int     `json:"height"`
+	DurationSeconds float64 `json:"duration_seconds"`
+	BitrateBps      int64   `json:"bitrate_bps"`
+	HDR             string  `json:"hdr,omitempty"` // "", "hdr10", "dolbyvision", "hlg"
+	AudioChannels   int     `json:"audio_channels"`
+	FPS             float64 `json:"fps,omitempty"`
 	// Telecine: film content pulldown-flagged to a higher display rate
 	// (typical of DVDs). Copying passes the flags through harmlessly, but
 	// re-encoding must inverse-telecine or the judder gets baked in.
-	Telecine bool      `json:"telecine,omitempty"`
-	Chapters []Chapter `json:"chapters,omitempty"`
+	Telecine  bool            `json:"telecine,omitempty"`
+	Chapters  []Chapter       `json:"chapters,omitempty"`
+	Subtitles []SubtitleTrack `json:"subtitles,omitempty"`
+}
+
+// SubtitleTrack is an embedded subtitle stream. Ordinal is the index among
+// subtitle streams only, so it maps directly to ffmpeg's -map 0:s:<ordinal>.
+// Supported means the codec is text-based and convertible to WebVTT; bitmap
+// formats (PGS, VobSub) would need OCR, which is out of scope.
+type SubtitleTrack struct {
+	Ordinal   int    `json:"ordinal"`
+	Codec     string `json:"codec"`
+	Language  string `json:"language"`
+	Title     string `json:"title"`
+	Supported bool   `json:"supported"`
+}
+
+// Enrichment is external metadata (TMDB) layered on top of identity. It is
+// derived data: identity is the deterministic input, enrichment the cached
+// lookup result — never the other way around.
+type Enrichment struct {
+	TMDBID    int64  `json:"tmdb_id"`
+	Title     string `json:"title"`
+	Year      int    `json:"year,omitempty"`
+	Overview  string `json:"overview"`
+	HasPoster bool   `json:"has_poster"`
 }
 
 // Chapter is an embedded chapter marker (scene selection target).
@@ -116,15 +140,15 @@ type TraceStep struct {
 
 // TranscodeTarget describes the minimal transcode: nil-codec means copy.
 type TranscodeTarget struct {
-	VideoCodec      string `json:"video_codec,omitempty"` // "" = copy
-	AudioCodec      string `json:"audio_codec,omitempty"` // "" = copy
-	Height          int    `json:"height,omitempty"`      // 0 = keep
-	VideoBitrateBps int64  `json:"video_bitrate_bps,omitempty"`
-	AudioBitrateBps int64  `json:"audio_bitrate_bps,omitempty"`
-	Tonemap         bool   `json:"tonemap,omitempty"`
-	SegmentFormat   string `json:"segment_format,omitempty"` // "ts" (default) or "fmp4"
-	Detelecine      bool   `json:"detelecine,omitempty"`     // inverse-telecine before encoding
-	FPS             float64 `json:"fps,omitempty"`           // effective output fps (keyframe cadence)
+	VideoCodec      string  `json:"video_codec,omitempty"` // "" = copy
+	AudioCodec      string  `json:"audio_codec,omitempty"` // "" = copy
+	Height          int     `json:"height,omitempty"`      // 0 = keep
+	VideoBitrateBps int64   `json:"video_bitrate_bps,omitempty"`
+	AudioBitrateBps int64   `json:"audio_bitrate_bps,omitempty"`
+	Tonemap         bool    `json:"tonemap,omitempty"`
+	SegmentFormat   string  `json:"segment_format,omitempty"` // "ts" (default) or "fmp4"
+	Detelecine      bool    `json:"detelecine,omitempty"`     // inverse-telecine before encoding
+	FPS             float64 `json:"fps,omitempty"`            // effective output fps (keyframe cadence)
 }
 
 // PlayDecision is the decision engine's output, trace included.

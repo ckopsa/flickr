@@ -28,22 +28,27 @@ func open(path string) (*sql.DB, error) {
 }
 
 type Item struct {
-	ID                 int64            `json:"id"`
-	ObjectKey          string           `json:"object_key"`
-	ETag               string           `json:"etag"`
-	Size               int64            `json:"size"`
-	MediaInfo          *model.MediaInfo `json:"media_info"`
-	Identity           *model.Identity  `json:"identity"`
-	IdentityOverridden bool             `json:"identity_overridden"`
-	ProbeError         string           `json:"probe_error,omitempty"`
-	ProbeVersion       int              `json:"-"`
+	ID                 int64             `json:"id"`
+	ObjectKey          string            `json:"object_key"`
+	ETag               string            `json:"etag"`
+	Size               int64             `json:"size"`
+	MediaInfo          *model.MediaInfo  `json:"media_info"`
+	Identity           *model.Identity   `json:"identity"`
+	IdentityOverridden bool              `json:"identity_overridden"`
+	Enrichment         *model.Enrichment `json:"enrichment"`
+	ProbeError         string            `json:"probe_error,omitempty"`
+	ProbeVersion       int               `json:"-"`
+	IdentityVersion    int               `json:"-"`
 }
 
 // KnownState is what an incremental scan needs to decide whether to
-// re-probe an object: content identity (etag) and probe recency.
+// re-probe an object (etag + probe recency) or merely re-identify it
+// (identity recency, unless the user has pinned the identity).
 type KnownState struct {
-	ETag         string
-	ProbeVersion int
+	ETag               string
+	ProbeVersion       int
+	IdentityVersion    int
+	IdentityOverridden bool
 }
 
 type Library struct{ db *sql.DB }
@@ -64,20 +69,26 @@ func OpenLibrary(path string) (*Library, error) {
 			identity_overridden INTEGER NOT NULL DEFAULT 0,
 			probe_error TEXT NOT NULL DEFAULT '',
 			probe_version INTEGER NOT NULL DEFAULT 0,
+			identity_version INTEGER NOT NULL DEFAULT 0,
+			enrichment TEXT,
+			enrichment_identity TEXT,
 			updated_at REAL NOT NULL
 		)`)
 	if err != nil {
 		return nil, err
 	}
-	// Migration for databases created before probe_version existed;
+	// Migrations for databases created before these columns existed;
 	// the error on an already-present column is expected.
 	db.Exec(`ALTER TABLE items ADD COLUMN probe_version INTEGER NOT NULL DEFAULT 0`)
+	db.Exec(`ALTER TABLE items ADD COLUMN identity_version INTEGER NOT NULL DEFAULT 0`)
+	db.Exec(`ALTER TABLE items ADD COLUMN enrichment TEXT`)
+	db.Exec(`ALTER TABLE items ADD COLUMN enrichment_identity TEXT`)
 	return &Library{db: db}, nil
 }
 
-// Known returns object_key -> (etag, probe_version) for incremental scanning.
+// Known returns object_key -> scan-relevant state for incremental scanning.
 func (l *Library) Known() (map[string]KnownState, error) {
-	rows, err := l.db.Query(`SELECT object_key, etag, probe_version FROM items`)
+	rows, err := l.db.Query(`SELECT object_key, etag, probe_version, identity_version, identity_overridden FROM items`)
 	if err != nil {
 		return nil, err
 	}
@@ -86,9 +97,11 @@ func (l *Library) Known() (map[string]KnownState, error) {
 	for rows.Next() {
 		var k string
 		var s KnownState
-		if err := rows.Scan(&k, &s.ETag, &s.ProbeVersion); err != nil {
+		var overridden int
+		if err := rows.Scan(&k, &s.ETag, &s.ProbeVersion, &s.IdentityVersion, &overridden); err != nil {
 			return nil, err
 		}
+		s.IdentityOverridden = overridden == 1
 		out[k] = s
 	}
 	return out, rows.Err()
@@ -104,14 +117,15 @@ func (l *Library) UpsertBatch(items []Item) error {
 	}
 	defer tx.Rollback()
 	stmt, err := tx.Prepare(`
-		INSERT INTO items (object_key, etag, size, media_info, identity, probe_error, probe_version, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO items (object_key, etag, size, media_info, identity, probe_error, probe_version, identity_version, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(object_key) DO UPDATE SET
 			etag=excluded.etag,
 			size=excluded.size,
 			media_info=excluded.media_info,
 			probe_error=excluded.probe_error,
 			probe_version=excluded.probe_version,
+			identity_version=excluded.identity_version,
 			identity=CASE WHEN items.identity_overridden=1
 			              THEN items.identity ELSE excluded.identity END,
 			updated_at=excluded.updated_at`)
@@ -123,7 +137,42 @@ func (l *Library) UpsertBatch(items []Item) error {
 	for _, it := range items {
 		mi, _ := marshalNullable(it.MediaInfo)
 		id, _ := marshalNullable(it.Identity)
-		if _, err := stmt.Exec(it.ObjectKey, it.ETag, it.Size, mi, id, it.ProbeError, it.ProbeVersion, now); err != nil {
+		if _, err := stmt.Exec(it.ObjectKey, it.ETag, it.Size, mi, id, it.ProbeError, it.ProbeVersion, it.IdentityVersion, now); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// IdentityUpdate is one identity refresh: recomputed identification for an
+// unchanged object (no re-probe involved).
+type IdentityUpdate struct {
+	ObjectKey string
+	Identity  model.Identity
+}
+
+// UpdateIdentities batch-writes recomputed identities and stamps the new
+// identity version. Overridden rows are skipped at the SQL level too, as a
+// second line of defense.
+func (l *Library) UpdateIdentities(ups []IdentityUpdate, version int) error {
+	tx, err := l.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	stmt, err := tx.Prepare(`
+		UPDATE items SET identity=?, identity_version=?
+		WHERE object_key=? AND identity_overridden=0`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+	for _, u := range ups {
+		b, err := json.Marshal(u.Identity)
+		if err != nil {
+			return err
+		}
+		if _, err := stmt.Exec(string(b), version, u.ObjectKey); err != nil {
 			return err
 		}
 	}
@@ -180,8 +229,10 @@ func (l *Library) DeleteMissing(present map[string]bool) (int64, error) {
 	return int64(len(gone)), tx.Commit()
 }
 
+const itemColumns = `id, object_key, etag, size, media_info, identity, identity_overridden, enrichment, probe_error`
+
 func (l *Library) ListItems() ([]Item, error) {
-	rows, err := l.db.Query(`SELECT id, object_key, etag, size, media_info, identity, identity_overridden, probe_error FROM items ORDER BY object_key`)
+	rows, err := l.db.Query(`SELECT ` + itemColumns + ` FROM items ORDER BY object_key`)
 	if err != nil {
 		return nil, err
 	}
@@ -198,7 +249,7 @@ func (l *Library) ListItems() ([]Item, error) {
 }
 
 func (l *Library) GetItem(id int64) (*Item, error) {
-	rows, err := l.db.Query(`SELECT id, object_key, etag, size, media_info, identity, identity_overridden, probe_error FROM items WHERE id=?`, id)
+	rows, err := l.db.Query(`SELECT `+itemColumns+` FROM items WHERE id=?`, id)
 	if err != nil {
 		return nil, err
 	}
@@ -213,11 +264,19 @@ func (l *Library) GetItem(id int64) (*Item, error) {
 	return &it, nil
 }
 
+// Count reports how many items the library holds (startup uses it to decide
+// whether an initial scan is warranted).
+func (l *Library) Count() (int, error) {
+	var n int
+	err := l.db.QueryRow(`SELECT COUNT(*) FROM items`).Scan(&n)
+	return n, err
+}
+
 func scanItem(rows *sql.Rows) (Item, error) {
 	var it Item
-	var mi, ident sql.NullString
+	var mi, ident, enr sql.NullString
 	var overridden int
-	if err := rows.Scan(&it.ID, &it.ObjectKey, &it.ETag, &it.Size, &mi, &ident, &overridden, &it.ProbeError); err != nil {
+	if err := rows.Scan(&it.ID, &it.ObjectKey, &it.ETag, &it.Size, &mi, &ident, &overridden, &enr, &it.ProbeError); err != nil {
 		return it, err
 	}
 	it.IdentityOverridden = overridden == 1
@@ -233,7 +292,52 @@ func scanItem(rows *sql.Rows) (Item, error) {
 			return it, err
 		}
 	}
+	if enr.Valid {
+		it.Enrichment = &model.Enrichment{}
+		if err := json.Unmarshal([]byte(enr.String), it.Enrichment); err != nil {
+			return it, err
+		}
+	}
 	return it, nil
+}
+
+// NeedingEnrichment returns identified items whose enrichment is missing or
+// was computed from a different (older) identity. The kind filter (only
+// movies/episodes are enrichable) lives in the enricher, which owns that rule.
+func (l *Library) NeedingEnrichment() ([]Item, error) {
+	rows, err := l.db.Query(`SELECT ` + itemColumns + ` FROM items
+		WHERE identity IS NOT NULL
+		  AND (enrichment IS NULL OR enrichment_identity IS NOT identity)
+		ORDER BY object_key`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Item
+	for rows.Next() {
+		it, err := scanItem(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, it)
+	}
+	return out, rows.Err()
+}
+
+// SetEnrichment stores an enrichment result along with the identity it was
+// derived from, so a later identity change invalidates it automatically.
+func (l *Library) SetEnrichment(id int64, e *model.Enrichment, ident *model.Identity) error {
+	eb, err := json.Marshal(e)
+	if err != nil {
+		return err
+	}
+	ib, err := json.Marshal(ident)
+	if err != nil {
+		return err
+	}
+	_, err = l.db.Exec(`UPDATE items SET enrichment=?, enrichment_identity=? WHERE id=?`,
+		string(eb), string(ib), id)
+	return err
 }
 
 // OverrideIdentity persists a user correction; scans will never undo it.
@@ -264,7 +368,42 @@ func OpenState(path string) (*State, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Users are lightweight profiles: progress rows key on client_id, and
+	// clients simply pass the profile name as client_id — no join needed.
+	_, err = db.Exec(`
+		CREATE TABLE IF NOT EXISTS users (
+			name TEXT PRIMARY KEY,
+			created_at REAL NOT NULL
+		)`)
+	if err != nil {
+		return nil, err
+	}
 	return &State{db: db}, nil
+}
+
+// ListUsers returns all profile names, oldest first.
+func (s *State) ListUsers() ([]string, error) {
+	rows, err := s.db.Query(`SELECT name FROM users ORDER BY created_at, name`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var n string
+		if err := rows.Scan(&n); err != nil {
+			return nil, err
+		}
+		out = append(out, n)
+	}
+	return out, rows.Err()
+}
+
+// CreateUser is idempotent: creating an existing profile is a no-op.
+func (s *State) CreateUser(name string) error {
+	_, err := s.db.Exec(`INSERT OR IGNORE INTO users (name, created_at) VALUES (?, ?)`,
+		name, float64(time.Now().UnixMilli())/1000)
+	return err
 }
 
 func (s *State) SetPosition(itemID int64, clientID string, pos float64) error {

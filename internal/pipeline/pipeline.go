@@ -235,10 +235,18 @@ type SessionManager struct {
 	HW          *HWAccel // detected at startup; nil = software
 	mu          sync.Mutex
 	sessions    map[string]*Session
+	// lastAccess is when each session's HLS output was last fetched. A
+	// client that vanishes (tab closed, cast device unplugged) never sends
+	// a stop — idle sessions are reaped instead of transcoding to file-end.
+	lastAccess map[string]time.Time
 }
 
 func NewSessionManager(streamsRoot string, hw *HWAccel) *SessionManager {
-	return &SessionManager{StreamsRoot: streamsRoot, HW: hw, sessions: map[string]*Session{}}
+	return &SessionManager{
+		StreamsRoot: streamsRoot, HW: hw,
+		sessions:   map[string]*Session{},
+		lastAccess: map[string]time.Time{},
+	}
 }
 
 func (m *SessionManager) Create(inputURL string, target model.TranscodeTarget, seekSeconds float64) (*Session, error) {
@@ -260,8 +268,42 @@ func (m *SessionManager) Create(inputURL string, target model.TranscodeTarget, s
 	}
 	m.mu.Lock()
 	m.sessions[id] = s
+	m.lastAccess[id] = time.Now()
 	m.mu.Unlock()
 	return s, nil
+}
+
+// Touch records that a session's output was just fetched, deferring the reaper.
+func (m *SessionManager) Touch(id string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.sessions[id]; ok {
+		m.lastAccess[id] = time.Now()
+	}
+}
+
+// ReapIdle stops sessions that nobody has fetched from within maxIdle and
+// returns their ids (for logging).
+func (m *SessionManager) ReapIdle(maxIdle time.Duration) []string {
+	m.mu.Lock()
+	ids := idleSessionIDs(m.lastAccess, time.Now(), maxIdle)
+	m.mu.Unlock()
+	for _, id := range ids {
+		m.Stop(id)
+	}
+	return ids
+}
+
+// idleSessionIDs is the pure core of the reaper: which sessions have not
+// been accessed within maxIdle as of now.
+func idleSessionIDs(lastAccess map[string]time.Time, now time.Time, maxIdle time.Duration) []string {
+	var ids []string
+	for id, at := range lastAccess {
+		if now.Sub(at) > maxIdle {
+			ids = append(ids, id)
+		}
+	}
+	return ids
 }
 
 // ActiveCount reports live transcode sessions (used to pause scanning).
@@ -281,6 +323,7 @@ func (m *SessionManager) Stop(id string) {
 	m.mu.Lock()
 	s := m.sessions[id]
 	delete(m.sessions, id)
+	delete(m.lastAccess, id)
 	m.mu.Unlock()
 	if s != nil {
 		s.stop()

@@ -183,10 +183,10 @@ func TestDirectPlayCodecNotCopiedIntoHLS(t *testing.T) {
 		BitrateBps: 7_000_000, AudioChannels: 6,
 	}
 	caps := model.ClientCapabilities{
-		SchemaVersion: 1,
-		Containers:    []string{"mp4", "webm"},
-		VideoCodecs:   []string{"h264"},
-		AudioCodecs:   []string{"aac", "ac3", "eac3"}, // direct play: yes
+		SchemaVersion:    1,
+		Containers:       []string{"mp4", "webm"},
+		VideoCodecs:      []string{"h264"},
+		AudioCodecs:      []string{"aac", "ac3", "eac3"}, // direct play: yes
 		MaxAudioChannels: 6,
 		HLSAudioCodecs:   []string{"aac"}, // in-stream: aac only
 	}
