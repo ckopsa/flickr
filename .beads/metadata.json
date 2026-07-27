@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "flickr",
+  "project_id": "56f0b327-c034-49e9-a7cd-2aa65281a6ad"
+}
