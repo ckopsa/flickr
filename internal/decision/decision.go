@@ -148,7 +148,59 @@ func Decide(media model.MediaInfo, caps model.ClientCapabilities, policy model.S
 		}
 	}
 
+	// ABR ladder: only when video is being re-encoded anyway — that is
+	// exactly when the (CPU-bound) decode cost is already being paid, and the
+	// VPU handles the extra encodes. Copy/remux and audio-only transcodes
+	// stay single-rendition.
+	if target.VideoCodec != "" {
+		target.Renditions = buildLadder(media, caps, *target)
+		trace = append(trace, model.TraceStep{Check: "abr_ladder", Passed: true,
+			Detail: "ladder: " + describeLadder(media, target.Renditions)})
+	}
+
 	trace = append(trace, model.TraceStep{Check: "verdict", Passed: true,
 		Detail: "transcode — " + strings.Join(parts, ", ")})
 	return model.PlayDecision{Method: model.Transcode, Target: target, Trace: trace}
+}
+
+// ladderRungs are the fixed lower-quality rungs offered below the primary
+// transcode target.
+var ladderRungs = []model.Rendition{
+	{Height: 720, VideoBitrateBps: 3_000_000},
+	{Height: 480, VideoBitrateBps: 1_200_000},
+}
+
+// buildLadder assembles the ABR ladder for a video re-encode: the primary
+// target rung first, then any fixed rung strictly below the primary height
+// and within the client's height cap. Always at least the primary rung.
+func buildLadder(media model.MediaInfo, caps model.ClientCapabilities, t model.TranscodeTarget) []model.Rendition {
+	primaryHeight := t.Height
+	if primaryHeight == 0 {
+		primaryHeight = media.Height // Height 0 = keep source height
+	}
+	ladder := []model.Rendition{{Height: t.Height, VideoBitrateBps: t.VideoBitrateBps}}
+	for _, r := range ladderRungs {
+		if r.Height >= primaryHeight {
+			continue // never offer a rung at or above the primary
+		}
+		if caps.MaxHeight > 0 && r.Height > caps.MaxHeight {
+			continue
+		}
+		ladder = append(ladder, r)
+	}
+	return ladder
+}
+
+// describeLadder renders a ladder for the trace, e.g.
+// "1080p@8000kbps, 720p@3000kbps, 480p@1200kbps".
+func describeLadder(media model.MediaInfo, rungs []model.Rendition) string {
+	var parts []string
+	for _, r := range rungs {
+		h := r.Height
+		if h == 0 {
+			h = media.Height
+		}
+		parts = append(parts, fmt.Sprintf("%dp@%dkbps", h, r.VideoBitrateBps/1000))
+	}
+	return strings.Join(parts, ", ")
 }

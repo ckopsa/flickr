@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -61,6 +62,12 @@ func (j Job) seekSplit() (in, out float64) {
 	return j.SeekSeconds, 0
 }
 
+// abr reports whether this job is a multi-variant (ladder) HLS transcode.
+// Only meaningful for video re-encodes: copy jobs ignore any stray ladder.
+func (j Job) abr() bool {
+	return j.Target.VideoCodec != "" && len(j.Target.Renditions) > 1
+}
+
 // BuildArgs is a pure function: job description -> ffmpeg argv (sans binary).
 func BuildArgs(j Job) []string {
 	t := j.Target
@@ -75,6 +82,10 @@ func BuildArgs(j Job) []string {
 	args = append(args, "-i", j.InputURL)
 	if seekOut > 0 {
 		args = append(args, "-ss", fmt.Sprintf("%.3f", seekOut))
+	}
+
+	if j.abr() {
+		return appendABRArgs(args, j)
 	}
 
 	if t.VideoCodec == "" {
@@ -158,6 +169,115 @@ func BuildArgs(j Job) []string {
 	return args
 }
 
+// appendABRArgs turns a multi-rendition job into a single-decode,
+// multi-variant HLS encode: the input video is decoded once, shared filters
+// (detelecine, tonemap) run once BEFORE a split, then each rendition gets
+// its own scale + encoder (hardware encoders take plain nv12 frames, so the
+// per-variant chain ends the same way the single-rendition chain does).
+// Audio is encoded once per variant because the HLS muxer's var_stream_map
+// pairs every video stream with its own audio stream.
+func appendABRArgs(args []string, j Job) []string {
+	t := j.Target
+	enc := ResolveEncoder(j.HW, t.VideoCodec)
+
+	// Shared pre-filters: must run once, before the split.
+	var pre []string
+	if t.Detelecine {
+		// See the single-rendition path: soft telecine re-times the original
+		// progressive frames; never fieldmatch/decimate.
+		pre = append(pre, fmt.Sprintf("fps=%.6f", t.FPS))
+	}
+	if t.Tonemap {
+		pre = append(pre,
+			"zscale=t=linear:npl=100,tonemap=hable,zscale=p=bt709:t=bt709:m=bt709,format=yuv420p")
+	}
+	fc := "[0:v]"
+	if len(pre) > 0 {
+		fc += joinFilters(pre) + ","
+	}
+	fc += fmt.Sprintf("split=%d", len(t.Renditions))
+	for i := range t.Renditions {
+		fc += fmt.Sprintf("[s%d]", i)
+	}
+	for i, r := range t.Renditions {
+		var chain []string
+		if r.Height > 0 {
+			chain = append(chain, fmt.Sprintf("scale=-2:%d", r.Height))
+		}
+		if j.hwEncoder() != "" {
+			switch j.HW.Kind {
+			case "vaapi":
+				chain = append(chain, "format=nv12,hwupload")
+			case "qsv", "rkmpp":
+				chain = append(chain, "format=nv12")
+			}
+		}
+		if len(chain) == 0 {
+			chain = append(chain, "null")
+		}
+		fc += fmt.Sprintf(";[s%d]%s[v%d]", i, joinFilters(chain), i)
+	}
+	args = append(args, "-filter_complex", fc)
+
+	for i, r := range t.Renditions {
+		args = append(args, "-map", fmt.Sprintf("[v%d]", i), fmt.Sprintf("-c:v:%d", i), enc)
+		if r.VideoBitrateBps > 0 {
+			args = append(args, fmt.Sprintf("-b:v:%d", i), strconv.FormatInt(r.VideoBitrateBps, 10))
+		}
+	}
+	if p := presetArgs(enc); len(p) > 0 {
+		args = append(args, p[0]+":v", p[1]) // one preset for every video stream
+	}
+	gop := SegmentSeconds * 30
+	if t.FPS > 0 {
+		gop = int(float64(SegmentSeconds)*t.FPS + 0.5)
+	}
+	args = append(args, "-g", strconv.Itoa(gop), "-sc_threshold", "0")
+
+	// One audio stream per variant (var_stream_map requires the pairing).
+	for range t.Renditions {
+		args = append(args, "-map", "0:a:0")
+	}
+	if t.AudioCodec == "" {
+		args = append(args, "-c:a", "copy")
+	} else {
+		args = append(args, "-af", "aresample=async=1")
+		args = append(args, "-c:a", t.AudioCodec, "-ac", "2")
+		if t.AudioBitrateBps > 0 {
+			args = append(args, "-b:a", strconv.FormatInt(t.AudioBitrateBps, 10))
+		}
+	}
+
+	pairs := make([]string, len(t.Renditions))
+	for i := range t.Renditions {
+		pairs[i] = fmt.Sprintf("v:%d,a:%d", i, i)
+	}
+	args = append(args,
+		"-f", "hls",
+		"-hls_time", strconv.Itoa(SegmentSeconds),
+		"-hls_playlist_type", "event",
+		"-master_pl_name", "master.m3u8",
+		"-var_stream_map", strings.Join(pairs, " "),
+	)
+	// Segments are named flat (v0_seg00000.ts) rather than in v0/ subdirs:
+	// ffmpeg's hls muxer writes only the segment BASENAME into the variant
+	// playlist, so segments must live in the same directory as the playlist
+	// that references them.
+	if t.SegmentFormat == "fmp4" {
+		args = append(args,
+			"-hls_segment_type", "fmp4",
+			"-hls_fmp4_init_filename", "init_%v.mp4",
+			"-hls_segment_filename", filepath.Join(j.OutputDir, "v%v_seg%05d.m4s"),
+		)
+	} else {
+		args = append(args,
+			"-hls_segment_filename", filepath.Join(j.OutputDir, "v%v_seg%05d.ts"),
+		)
+	}
+	args = append(args, filepath.Join(j.OutputDir, "index_%v.m3u8"))
+	return args
+}
+
 func encoderFor(codec string) string {
 	switch codec {
 	case "h264":
@@ -213,12 +333,33 @@ func (s *Session) stop() {
 	os.RemoveAll(s.Job.OutputDir)
 }
 
-// WaitForPlaylist blocks until ffmpeg has produced the HLS playlist (or times out).
+// PlaylistName is the playlist clients should load: the master playlist for
+// ABR sessions, the plain media playlist otherwise.
+func (s *Session) PlaylistName() string {
+	if s.Job.abr() {
+		return "master.m3u8"
+	}
+	return "index.m3u8"
+}
+
+// WaitForPlaylist blocks until ffmpeg has produced the HLS playlist(s) a
+// client needs to start playing (or times out). ABR sessions need both the
+// master playlist and the first variant playlist.
 func (s *Session) WaitForPlaylist(timeout time.Duration) error {
-	playlist := filepath.Join(s.Job.OutputDir, "index.m3u8")
+	playlists := []string{"index.m3u8"}
+	if s.Job.abr() {
+		playlists = []string{"master.m3u8", "index_0.m3u8"}
+	}
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		if st, err := os.Stat(playlist); err == nil && st.Size() > 0 {
+		ready := true
+		for _, p := range playlists {
+			if st, err := os.Stat(filepath.Join(s.Job.OutputDir, p)); err != nil || st.Size() == 0 {
+				ready = false
+				break
+			}
+		}
+		if ready {
 			return nil
 		}
 		if s.cmd.ProcessState != nil {

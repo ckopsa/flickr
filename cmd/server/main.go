@@ -18,6 +18,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -48,7 +49,13 @@ type server struct {
 	policy   model.ServerPolicy
 	hw       *pipeline.HWReport
 	baseURL  string // LAN-reachable address for devices that can't resolve localhost
+	// trickplayBusy guards the background trickplay stage: full-file decodes
+	// are expensive, so at most one stage pass runs at a time.
+	trickplayBusy atomic.Bool
 }
+
+// trickplayDir is where per-item sprite-sheet sets live (data/trickplay/<id>/).
+const trickplayDir = "data/trickplay"
 
 func main() {
 	loadDotEnv(".env")
@@ -127,6 +134,9 @@ func main() {
 	mux.HandleFunc("POST /api/items/{id}/enrich", srv.handleEnrich)
 	mux.HandleFunc("GET /api/items/{id}/subtitles/{file}", srv.handleSubtitle)
 	mux.HandleFunc("GET /api/items/{id}/poster", srv.handlePoster)
+	mux.HandleFunc("GET /api/items/{id}/trickplay.json", srv.handleTrickplayIndex)
+	mux.HandleFunc("GET /api/items/{id}/trickplay/{file}", srv.handleTrickplaySheet)
+	mux.HandleFunc("POST /api/items/{id}/trickplay", srv.handleGenerateTrickplay)
 	mux.HandleFunc("POST /api/scan", srv.handleScan)
 	mux.HandleFunc("GET /api/scan", srv.handleScanStatus)
 	mux.HandleFunc("GET /api/system", srv.handleSystem)
@@ -320,7 +330,9 @@ func (s *server) handlePlay(w http.ResponseWriter, r *http.Request) {
 			httpErr(w, 500, err)
 			return
 		}
-		resp["url"] = "/streams/" + sess.ID + "/index.m3u8"
+		// ABR sessions hand the client the master playlist; hls.js and cast
+		// receivers both speak master playlists natively.
+		resp["url"] = "/streams/" + sess.ID + "/" + sess.PlaylistName()
 		resp["session_id"] = sess.ID
 		if d.Target.VideoCodec != "" {
 			resp["video_encoder"] = pipeline.ResolveEncoder(s.sessions.HW, d.Target.VideoCodec)
@@ -374,8 +386,9 @@ func (s *server) handleScan(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]string{"status": "started"})
 }
 
-// runScan performs one scan and then the TMDB enrichment pass (if enabled).
-// Used by the manual endpoint, the startup scan, and the interval scheduler.
+// runScan performs one scan, then the TMDB enrichment pass (if enabled),
+// then the trickplay generation pass. Used by the manual endpoint, the
+// startup scan, and the interval scheduler.
 func (s *server) runScan(ctx context.Context) {
 	if err := s.scanner.Scan(ctx); err != nil {
 		log.Printf("scan error: %v", err)
@@ -385,15 +398,76 @@ func (s *server) runScan(ctx context.Context) {
 		log.Printf("scan: refreshed identity for %d items without re-probing (identity v%d)",
 			st.IdentityRefreshed, scanner.IdentityVersion)
 	}
-	if s.enricher == nil {
+	if s.enricher != nil {
+		n, err := s.enricher.EnrichAll(ctx)
+		if err != nil {
+			log.Printf("enrichment error: %v", err)
+		} else if n > 0 {
+			log.Printf("enriched %d items from TMDB", n)
+		}
+	}
+	s.runTrickplay(ctx)
+}
+
+// runTrickplay is the post-enrichment trickplay stage: for every item with
+// media info and a meaningful duration that lacks sprite sheets, generate
+// them — strictly one item at a time (a full-file decode each), yielding to
+// live playback between items exactly like the scanner does.
+func (s *server) runTrickplay(ctx context.Context) {
+	if os.Getenv("TRICKPLAY") == "0" {
 		return
 	}
-	n, err := s.enricher.EnrichAll(ctx)
-	if err != nil {
-		log.Printf("enrichment error: %v", err)
-	} else if n > 0 {
-		log.Printf("enriched %d items from TMDB", n)
+	if !s.trickplayBusy.CompareAndSwap(false, true) {
+		return // a previous pass is still running
 	}
+	defer s.trickplayBusy.Store(false)
+
+	items, err := s.library.ListItems()
+	if err != nil {
+		log.Printf("trickplay: list items: %v", err)
+		return
+	}
+	done := 0
+	for _, it := range items {
+		if ctx.Err() != nil {
+			return
+		}
+		if it.MediaInfo == nil || it.MediaInfo.DurationSeconds <= 120 {
+			continue
+		}
+		dest := filepath.Join(trickplayDir, strconv.FormatInt(it.ID, 10))
+		if pipeline.HasTrickplay(dest) {
+			continue
+		}
+		// Same yield condition as scans: active playback sessions own the
+		// storage bandwidth and the decode budget.
+		for s.scanner.Yield != nil && s.scanner.Yield() {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(2 * time.Second):
+			}
+		}
+		if err := s.generateTrickplay(ctx, &it); err != nil {
+			log.Printf("trickplay: item %d (%s): %v", it.ID, it.ObjectKey, err)
+			continue
+		}
+		done++
+		log.Printf("trickplay: generated sheets for item %d (%s)", it.ID, it.ObjectKey)
+	}
+	if done > 0 {
+		log.Printf("trickplay: pass complete, %d items generated", done)
+	}
+}
+
+// generateTrickplay produces the sprite-sheet set for one item.
+func (s *server) generateTrickplay(ctx context.Context, item *store.Item) error {
+	u, err := s.s3.PresignedGetObject(ctx, s.bucket, item.ObjectKey, 6*time.Hour, url.Values{})
+	if err != nil {
+		return err
+	}
+	dest := filepath.Join(trickplayDir, strconv.FormatInt(item.ID, 10))
+	return pipeline.GenerateTrickplay(ctx, u.String(), item.MediaInfo.DurationSeconds, dest)
 }
 
 func (s *server) handleScanStatus(w http.ResponseWriter, r *http.Request) {
@@ -492,6 +566,72 @@ func findSubtitle(info *model.MediaInfo, ordinal int) *model.SubtitleTrack {
 		}
 	}
 	return nil
+}
+
+// handleTrickplayIndex serves the trickplay sidecar; 404 (never an error
+// page) when the item has no generated sheets — clients probe this to decide
+// whether to show hover previews at all.
+func (s *server) handleTrickplayIndex(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if _, err := strconv.ParseInt(id, 10, 64); err != nil {
+		httpErr(w, 400, fmt.Errorf("bad id"))
+		return
+	}
+	path := filepath.Join(trickplayDir, id, "index.json")
+	if _, err := os.Stat(path); err != nil {
+		httpErr(w, 404, fmt.Errorf("no trickplay for item %s", id))
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	http.ServeFile(w, r, path)
+}
+
+// handleTrickplaySheet serves one sprite sheet ({n}.jpg -> sheet<n>.jpg).
+func (s *server) handleTrickplaySheet(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if _, err := strconv.ParseInt(id, 10, 64); err != nil {
+		httpErr(w, 400, fmt.Errorf("bad id"))
+		return
+	}
+	name, isJpg := strings.CutSuffix(r.PathValue("file"), ".jpg")
+	n, numErr := strconv.Atoi(name)
+	if !isJpg || numErr != nil || n < 0 {
+		httpErr(w, 404, fmt.Errorf("no such sheet"))
+		return
+	}
+	path := filepath.Join(trickplayDir, id, fmt.Sprintf("sheet%d.jpg", n))
+	if _, err := os.Stat(path); err != nil {
+		httpErr(w, 404, fmt.Errorf("no such sheet"))
+		return
+	}
+	w.Header().Set("Content-Type", "image/jpeg")
+	http.ServeFile(w, r, path)
+}
+
+// handleGenerateTrickplay force-generates the sprite sheets for one item,
+// synchronously (useful for testing and for pre-warming a single title
+// without waiting for the next scan). Regenerates even if sheets exist.
+func (s *server) handleGenerateTrickplay(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		httpErr(w, 400, fmt.Errorf("bad id"))
+		return
+	}
+	item, err := s.library.GetItem(id)
+	if err != nil || item == nil {
+		httpErr(w, 404, fmt.Errorf("no such item"))
+		return
+	}
+	if item.MediaInfo == nil || item.MediaInfo.DurationSeconds <= 0 {
+		httpErr(w, 409, fmt.Errorf("item has no usable media info"))
+		return
+	}
+	if err := s.generateTrickplay(r.Context(), item); err != nil {
+		httpErr(w, 500, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	http.ServeFile(w, r, filepath.Join(trickplayDir, r.PathValue("id"), "index.json"))
 }
 
 func (s *server) handlePoster(w http.ResponseWriter, r *http.Request) {

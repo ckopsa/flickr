@@ -149,6 +149,17 @@ type TranscodeTarget struct {
 	SegmentFormat   string  `json:"segment_format,omitempty"` // "ts" (default) or "fmp4"
 	Detelecine      bool    `json:"detelecine,omitempty"`     // inverse-telecine before encoding
 	FPS             float64 `json:"fps,omitempty"`            // effective output fps (keyframe cadence)
+	// Renditions is the adaptive-bitrate ladder, present only when video is
+	// being re-encoded anyway (decode cost already paid): the primary rung
+	// first, then lower quality rungs. Empty/single-entry = plain HLS.
+	Renditions []Rendition `json:"renditions,omitempty"`
+}
+
+// Rendition is one rung of an ABR ladder. Height 0 means "keep source
+// height" (only ever the primary rung).
+type Rendition struct {
+	Height          int   `json:"height"`
+	VideoBitrateBps int64 `json:"video_bitrate_bps"`
 }
 
 // PlayDecision is the decision engine's output, trace included.

@@ -249,6 +249,107 @@ func TestH264TranscodeUsesTsByDefault(t *testing.T) {
 	}
 }
 
+func TestVideoReencodeGetsABRLadder(t *testing.T) {
+	// 4K HEVC HDR + h264-only 1080p client: video re-encode to 1080p, so the
+	// ladder is primary 1080p plus the 720p and 480p rungs.
+	d := Decide(hevc4kHDR(), chromecastV1, model.DefaultPolicy())
+	want := []model.Rendition{
+		{Height: 1080, VideoBitrateBps: 8_000_000},
+		{Height: 720, VideoBitrateBps: 3_000_000},
+		{Height: 480, VideoBitrateBps: 1_200_000},
+	}
+	if len(d.Target.Renditions) != len(want) {
+		t.Fatalf("expected %d rungs, got %+v", len(want), d.Target.Renditions)
+	}
+	for i, r := range want {
+		if d.Target.Renditions[i] != r {
+			t.Errorf("rung %d: got %+v, want %+v", i, d.Target.Renditions[i], r)
+		}
+	}
+	found := false
+	for _, s := range d.Trace {
+		if s.Check == "abr_ladder" && s.Passed {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("trace must list the ladder: %+v", d.Trace)
+	}
+}
+
+func TestLadderDropsRungsAtOrAbovePrimary(t *testing.T) {
+	caps := chromecastV1
+	caps.MaxWidth, caps.MaxHeight = 1280, 720 // primary target becomes 720p
+	d := Decide(hevc4kHDR(), caps, model.DefaultPolicy())
+	if d.Target.Height != 720 {
+		t.Fatalf("expected 720p primary, got %d", d.Target.Height)
+	}
+	want := []model.Rendition{
+		{Height: 720, VideoBitrateBps: 8_000_000},
+		{Height: 480, VideoBitrateBps: 1_200_000},
+	}
+	if len(d.Target.Renditions) != 2 || d.Target.Renditions[0] != want[0] || d.Target.Renditions[1] != want[1] {
+		t.Errorf("expected [720 primary, 480], got %+v", d.Target.Renditions)
+	}
+}
+
+func TestLadderAlwaysHasPrimaryRung(t *testing.T) {
+	caps := chromecastV1
+	caps.MaxWidth, caps.MaxHeight = 640, 480 // nothing below the primary fits
+	d := Decide(hevc4kHDR(), caps, model.DefaultPolicy())
+	if len(d.Target.Renditions) != 1 {
+		t.Fatalf("expected only the primary rung, got %+v", d.Target.Renditions)
+	}
+	if d.Target.Renditions[0].Height != d.Target.Height {
+		t.Errorf("primary rung must mirror the target: %+v vs height %d",
+			d.Target.Renditions[0], d.Target.Height)
+	}
+}
+
+func TestAudioOnlyTranscodeHasNoLadder(t *testing.T) {
+	m := h264Compatible()
+	m.AudioCodec = "dts"
+	d := Decide(m, chromecastV1, model.DefaultPolicy())
+	if d.Target.VideoCodec != "" {
+		t.Fatalf("precondition: video should be copied, got %q", d.Target.VideoCodec)
+	}
+	if d.Target.Renditions != nil {
+		t.Errorf("audio-only transcode must not carry a ladder: %+v", d.Target.Renditions)
+	}
+}
+
+func TestRemuxHasNoLadder(t *testing.T) {
+	m := hevc4kHDR() // hevc copy into fmp4 (remux-ish: no video re-encode)
+	caps := modernTV
+	caps.Containers = []string{"mp4"}
+	caps.SupportsHDR = []string{"hdr10"}
+	caps.HLSSegmentFormats = []string{"ts", "fmp4"}
+	d := Decide(m, caps, model.DefaultPolicy())
+	if d.Target.VideoCodec != "" {
+		t.Fatalf("precondition: hevc should be copied, got %q", d.Target.VideoCodec)
+	}
+	if d.Target.Renditions != nil {
+		t.Errorf("copied video must not carry a ladder: %+v", d.Target.Renditions)
+	}
+}
+
+func TestForcedHevcReencodeGetsLadderToo(t *testing.T) {
+	// TS-only client turns an hevc copy into a re-encode — decode cost is
+	// being paid, so the ladder applies here as well.
+	m := hevc4kHDR()
+	caps := modernTV
+	caps.Containers = []string{"mp4"}
+	caps.SupportsHDR = []string{"hdr10"}
+	caps.HLSSegmentFormats = []string{"ts"}
+	d := Decide(m, caps, model.DefaultPolicy())
+	if d.Target.VideoCodec != "h264" {
+		t.Fatalf("precondition: expected forced h264 re-encode, got %q", d.Target.VideoCodec)
+	}
+	if len(d.Target.Renditions) < 2 {
+		t.Errorf("forced re-encode should still ladder: %+v", d.Target.Renditions)
+	}
+}
+
 func TestSparseCapabilityManifestGetsDefaults(t *testing.T) {
 	// A minimal client manifest (old schema, few fields) must not panic
 	// or produce nonsense — Normalize fills defaults.

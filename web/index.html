@@ -81,6 +81,9 @@
   #scrub .avail { position: absolute; left: 0; top: 8px; height: 6px; background: #3d4250; border-radius: 3px; width: 0; }
   #scrub .fill { position: absolute; left: 0; top: 8px; height: 6px; background: #5b8def; border-radius: 3px; width: 0; }
   #scrub .tick { position: absolute; top: 6px; width: 2px; height: 10px; background: #8a92a8; border-radius: 1px; }
+  #thumb { position: absolute; bottom: 26px; transform: translateX(-50%); z-index: 5; pointer-events: none; text-align: center; }
+  #thumb-img { background-color: #000; background-repeat: no-repeat; border: 1px solid #3a3d47; border-radius: 4px; box-shadow: 0 4px 14px rgba(0,0,0,0.5); }
+  #thumb-time { display: inline-block; margin-top: 3px; font-size: 11px; padding: 1px 7px; border-radius: 8px; background: rgba(20,21,26,0.9); color: #c5c8d4; font-variant-numeric: tabular-nums; }
   #timebar { display: flex; justify-content: space-between; font-size: 12px; color: #9a9daa; font-variant-numeric: tabular-nums; }
   #controls { display: flex; gap: 8px; align-items: center; margin-top: 8px; flex-wrap: wrap; }
   #controls button { min-width: 42px; }
@@ -167,7 +170,7 @@
       <div id="now-playing"></div>
       <video id="video" controls></video>
       <div id="cast-overlay">▶ Casting to <span id="cast-device"></span></div>
-      <div id="scrub"><div class="rail"></div><div class="avail"></div><div class="fill"></div></div>
+      <div id="scrub"><div class="rail"></div><div class="avail"></div><div class="fill"></div><div id="thumb" hidden><div id="thumb-img"></div><div id="thumb-time"></div></div></div>
       <div id="timebar"><span id="t-now">0:00</span><span id="t-total">0:00</span></div>
       <div id="controls">
         <button id="btn-play" title="Play/Pause">⏵</button>
@@ -688,10 +691,51 @@ async function playItem(item, startAt) {
     } catch (e) { /* no saved progress */ }
   }
   renderSubSelector(item);
+  loadTrickplay(item); // lazy, in the background; feature hides itself on 404
   await startPlayback(item, resume);
   renderChapters();
   $('t-total').textContent = fmtTime(duration());
 }
+
+// ---------------------------------------------------------------------------
+// trickplay scrub previews (mouse only; touch devices skip this)
+// ---------------------------------------------------------------------------
+let trickplay = null, trickplayItemId = null;
+
+async function loadTrickplay(item) {
+  if (trickplayItemId === item.id) return; // once per played item
+  trickplay = null;
+  trickplayItemId = item.id;
+  $('thumb').hidden = true;
+  try {
+    const idx = await api(`/api/items/${item.id}/trickplay.json`);
+    if (trickplayItemId === item.id) trickplay = idx;
+  } catch (e) { /* 404: no sprite sheets — feature stays hidden */ }
+}
+
+scrub.addEventListener('mousemove', e => {
+  const dur = duration();
+  if (!trickplay || !currentItem || currentItem.id !== trickplayItemId || dur <= 0) return;
+  const rect = scrub.getBoundingClientRect();
+  const frac = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
+  const t = frac * dur;
+  const per = trickplay.cols * trickplay.rows;
+  const frame = Math.min(Math.floor(t / trickplay.interval_seconds), trickplay.sheets * per - 1);
+  const sheet = Math.floor(frame / per);
+  const tile = frame % per;
+  const col = tile % trickplay.cols, row = Math.floor(tile / trickplay.cols);
+  const tw = trickplay.tile_width, th = trickplay.tile_height || 180;
+  const img = $('thumb-img');
+  img.style.width = tw + 'px';
+  img.style.height = th + 'px';
+  img.style.backgroundImage = `url(/api/items/${currentItem.id}/trickplay/${sheet}.jpg)`;
+  img.style.backgroundPosition = `-${col * tw}px -${row * th}px`;
+  $('thumb-time').textContent = fmtTime(t);
+  const el = $('thumb');
+  el.style.left = Math.min(Math.max(e.clientX - rect.left, tw / 2), Math.max(rect.width - tw / 2, tw / 2)) + 'px';
+  el.hidden = false;
+});
+scrub.addEventListener('mouseleave', () => { $('thumb').hidden = true; });
 
 // ---------------------------------------------------------------------------
 // playback core (behavior preserved from the original single-list app)

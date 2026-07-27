@@ -39,7 +39,18 @@ a handful of architectural decisions (see design notes below):
    and probing now extracts subtitle streams; text tracks are served as
    WebVTT (`.vtt` endpoint, extracted on demand with ffmpeg, cached in
    `data/subs/`), bitmap tracks are listed but marked unsupported.
-9. **Profiles and telemetry stay lightweight** — user profiles are names in
+9. **ABR only when decode is already being paid for** — a video re-encode
+   carries an adaptive-bitrate ladder (primary rung + 720p/1.2–3 Mbps rungs
+   below it, capped by the client's `max_height`): one decode, per-variant
+   scale+encode, one HLS master playlist (`master.m3u8`). Copy/remux and
+   audio-only transcodes stay single-rendition — the ladder never causes a
+   decode that the decision engine didn't already order.
+10. **Trickplay previews as a post-scan stage** — after scan + enrichment,
+   sprite sheets (1 frame/10 s, 320px tiles, 10x10 grids) are generated one
+   item at a time under `data/trickplay/<id>/`, written atomically, yielding
+   to live playback exactly like scans do; `TRICKPLAY=0` disables the stage.
+   The web UI shows hover previews on the scrub bar when the sidecar exists.
+11. **Profiles and telemetry stay lightweight** — user profiles are names in
    `state.db` (`/api/users`); clients pass the profile name as `client_id` to
    the unchanged progress API. `POST /api/telemetry` appends any JSON object
    to `data/telemetry.jsonl` for client-side error forensics.
@@ -69,6 +80,9 @@ locally except HLS segments in `data/streams/`.
 | `POST /api/items/{id}/enrich` | TMDB-enrich one item on demand (503 if no API key) |
 | `GET /api/items/{id}/subtitles/{ordinal}.vtt` | subtitle track as WebVTT (415 for bitmap tracks, 404 for bad ordinal) |
 | `GET /api/items/{id}/poster` | cached TMDB poster (image/jpeg, 404 if absent) |
+| `GET /api/items/{id}/trickplay.json` | scrub-preview sprite index (404 if not generated) |
+| `GET /api/items/{id}/trickplay/{n}.jpg` | sprite sheet n |
+| `POST /api/items/{id}/trickplay` | force-generate sprites for one item (synchronous) |
 | `DELETE /api/sessions/{id}` | stop a transcode session (idle sessions are auto-reaped) |
 | `POST/GET /api/progress` | playback position per (item, client) |
 | `GET/POST /api/users` | list / idempotently create profile names (clients use the name as `client_id`) |
