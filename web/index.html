@@ -1,0 +1,442 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>flickr — media PoC</title>
+<script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.13/dist/hls.min.js"></script>
+<script src="https://www.gstatic.com/cv/js/sender/v1/cast_sender.js?loadCastFramework=1"></script>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: system-ui, sans-serif; background: #14151a; color: #e8e8ea; }
+  header { padding: 14px 20px; display: flex; gap: 12px; align-items: center; border-bottom: 1px solid #2a2c33; }
+  header h1 { font-size: 16px; margin: 0 auto 0 0; font-weight: 600; }
+  button, select { background: #23252d; color: inherit; border: 1px solid #3a3d47; border-radius: 6px; padding: 6px 12px; font-size: 13px; cursor: pointer; }
+  button:hover { background: #2c2f38; }
+  main { display: grid; grid-template-columns: 320px 1fr; min-height: calc(100vh - 53px); }
+  #list { border-right: 1px solid #2a2c33; overflow-y: auto; max-height: calc(100vh - 53px); }
+  .item { padding: 10px 16px; border-bottom: 1px solid #1e2026; cursor: pointer; }
+  .item:hover, .item.active { background: #1e222c; }
+  .item .title { font-size: 14px; }
+  .item .meta { font-size: 11px; color: #9a9daa; margin-top: 2px; }
+  #player-pane { padding: 20px; }
+  video { width: 100%; max-height: 52vh; background: #000; border-radius: 8px; }
+  body.casting video { opacity: 0.25; }
+  #cast-overlay { display: none; font-size: 14px; color: #8db4f0; margin: 6px 0; }
+  body.casting #cast-overlay { display: block; }
+  #scrub { position: relative; height: 22px; margin: 10px 0 2px; cursor: pointer; }
+  #scrub .rail { position: absolute; left: 0; right: 0; top: 8px; height: 6px; background: #2a2c33; border-radius: 3px; }
+  #scrub .avail { position: absolute; left: 0; top: 8px; height: 6px; background: #3d4250; border-radius: 3px; width: 0; }
+  #scrub .fill { position: absolute; left: 0; top: 8px; height: 6px; background: #5b8def; border-radius: 3px; width: 0; }
+  #scrub .tick { position: absolute; top: 6px; width: 2px; height: 10px; background: #8a92a8; border-radius: 1px; }
+  #timebar { display: flex; justify-content: space-between; font-size: 12px; color: #9a9daa; font-variant-numeric: tabular-nums; }
+  #controls { display: flex; gap: 8px; align-items: center; margin-top: 8px; }
+  #controls button { min-width: 42px; }
+  #controls input[type=range] { width: 110px; accent-color: #5b8def; }
+  google-cast-launcher { width: 28px; height: 28px; cursor: pointer; --connected-color: #5b8def; --disconnected-color: #9a9daa; }
+  #chapters { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+  #chapters button { font-size: 12px; padding: 4px 10px; }
+  #status { font-size: 13px; color: #9a9daa; margin: 10px 0; }
+  .badge { display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 10px; margin-right: 6px; }
+  .badge.direct { background: #14432a; color: #6ee7a0; }
+  .badge.transcode { background: #4a3413; color: #f0b45c; }
+  .badge.deny { background: #4a1a1a; color: #f08080; }
+  #trace { margin-top: 14px; font-size: 13px; }
+  #trace h3 { font-size: 13px; color: #9a9daa; margin: 14px 0 6px; }
+  .step { display: flex; gap: 8px; padding: 3px 0; font-family: ui-monospace, monospace; font-size: 12px; }
+  .step .mark { width: 16px; }
+  .step.pass .mark { color: #6ee7a0; }
+  .step.fail .mark { color: #f08080; }
+  .step .check { width: 130px; color: #c5c8d4; }
+  .step .detail { color: #9a9daa; }
+  #empty { padding: 40px; color: #9a9daa; font-size: 14px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>flickr <span style="color:#9a9daa;font-weight:400">— media server PoC</span></h1>
+  <label style="font-size:12px;color:#9a9daa">Play as:</label>
+  <select id="profile">
+    <option value="browser">This browser (detected)</option>
+    <option value="chromecast1">Chromecast v1 (h264/1080p only)</option>
+    <option value="chromecastUltra">Chromecast Ultra (4K, hevc/vp9, HDR)</option>
+    <option value="tv4k">4K HDR TV (hevc, hdr10)</option>
+    <option value="cellular">Phone on cellular (3 Mbps cap)</option>
+  </select>
+  <button id="scan">Scan library</button>
+  <span id="scan-status" style="font-size:12px;color:#9a9daa"></span>
+  <span id="hw" title="" style="font-size:11px;padding:2px 8px;border-radius:10px;background:#1e2c42;color:#8db4f0;cursor:help"></span>
+</header>
+<main>
+  <div id="list"><div id="empty">No items yet — run a scan.</div></div>
+  <div id="player-pane">
+    <video id="video" controls></video>
+    <div id="cast-overlay">▶ Casting to <span id="cast-device"></span></div>
+    <div id="scrub"><div class="rail"></div><div class="avail"></div><div class="fill"></div></div>
+    <div id="timebar"><span id="t-now">0:00</span><span id="t-total">0:00</span></div>
+    <div id="controls">
+      <button id="btn-play" title="Play/Pause">⏵</button>
+      <button id="btn-back" title="Back 10s">⏪</button>
+      <button id="btn-fwd" title="Forward 30s">⏩</button>
+      <button id="btn-stop" title="Stop">⏹</button>
+      <span style="font-size:12px;color:#9a9daa">vol</span>
+      <input type="range" id="vol" min="0" max="1" step="0.05" value="1">
+      <google-cast-launcher id="cast-btn"></google-cast-launcher>
+    </div>
+    <div id="status">Select an item to play.</div>
+    <div id="chapters"></div>
+    <div id="trace"></div>
+  </div>
+</main>
+<script>
+const clientId = localStorage.clientId ||= 'web-' + Math.random().toString(36).slice(2, 8);
+let hls = null, sessionId = null, currentItem = null, seekOffset = 0, method = null;
+let baseUrl = location.origin, remotePlayer = null, remoteController = null;
+const video = document.getElementById('video');
+const scrub = document.getElementById('scrub');
+
+function detectBrowserCaps() {
+  const v = document.createElement('video');
+  const codecs = ['h264'];
+  if (v.canPlayType('video/mp4; codecs="hev1.1.6.L93.B0"')) codecs.push('hevc');
+  if (v.canPlayType('video/mp4; codecs="av01.0.05M.08"')) codecs.push('av1');
+  return {
+    schema_version: 1,
+    containers: ['mp4', 'webm', 'm4v'],
+    video_codecs: codecs,
+    audio_codecs: ['aac', 'mp3', 'opus', 'flac', 'vorbis'],
+    max_width: 3840, max_height: 2160,
+    max_audio_channels: 2,
+    hls_segment_formats: ['ts', 'fmp4'],
+    hls_audio_codecs: ['aac', 'mp3'],
+  };
+}
+
+const profiles = {
+  browser: detectBrowserCaps(),
+  chromecast1: {
+    schema_version: 1, containers: ['mp4'], video_codecs: ['h264'],
+    audio_codecs: ['aac', 'mp3'], max_width: 1920, max_height: 1080, max_audio_channels: 2,
+    hls_segment_formats: ['ts'], hls_audio_codecs: ['aac'],
+  },
+  chromecastUltra: {
+    schema_version: 1, containers: ['mp4', 'webm'],
+    video_codecs: ['h264', 'hevc', 'vp9'],
+    audio_codecs: ['aac', 'mp3', 'opus', 'flac', 'vorbis', 'ac3', 'eac3'],
+    max_width: 3840, max_height: 2160,
+    supports_hdr: ['hdr10', 'dolbyvision'], max_audio_channels: 6,
+    hls_segment_formats: ['ts', 'fmp4'], hls_audio_codecs: ['aac'],
+  },
+  tv4k: {
+    schema_version: 1, containers: ['mp4', 'mkv'], video_codecs: ['h264', 'hevc', 'av1'],
+    audio_codecs: ['aac', 'ac3', 'eac3'], max_width: 3840, max_height: 2160,
+    supports_hdr: ['hdr10', 'hlg'], max_audio_channels: 8,
+    hls_segment_formats: ['ts', 'fmp4'], hls_audio_codecs: ['aac', 'ac3', 'eac3'],
+  },
+  cellular: {
+    schema_version: 1, containers: ['mp4'], video_codecs: ['h264'],
+    audio_codecs: ['aac'], max_width: 1280, max_height: 720,
+    max_bitrate_bps: 3000000, max_audio_channels: 2,
+    hls_segment_formats: ['ts'], hls_audio_codecs: ['aac'],
+  },
+};
+
+async function api(path, opts) {
+  const r = await fetch(path, opts);
+  const body = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(body.error || r.statusText);
+  return body;
+}
+
+function fmtSize(n) { return (n / 1e9).toFixed(2) + ' GB'; }
+function fmtRes(mi) { return mi ? `${mi.width}x${mi.height} ${mi.video_codec}/${mi.audio_codec}${mi.hdr ? ' ' + mi.hdr.toUpperCase() : ''}` : 'probe failed'; }
+function fmtTime(s) {
+  s = Math.max(0, Math.floor(s));
+  const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), sec = s % 60;
+  return (h ? h + ':' + String(m).padStart(2, '0') : m) + ':' + String(sec).padStart(2, '0');
+}
+function itemTitle(it) {
+  const t = it.identity?.title || it.object_key;
+  return it.identity?.kind === 'episode' ? `${t} S${it.identity.season}E${it.identity.episode}` :
+         it.identity?.year ? `${t} (${it.identity.year})` : t;
+}
+
+// --- cast plumbing ---
+function casting() { return !!(remotePlayer && remotePlayer.isConnected); }
+
+window.__onGCastApiAvailable = (ok) => { if (ok) initCast(); };
+function initCast() {
+  const ctx = cast.framework.CastContext.getInstance();
+  ctx.setOptions({
+    receiverApplicationId: chrome.cast.media.DEFAULT_MEDIA_RECEIVER_APP_ID,
+    autoJoinPolicy: chrome.cast.AutoJoinPolicy.ORIGIN_SCOPED,
+  });
+  remotePlayer = new cast.framework.RemotePlayer();
+  remoteController = new cast.framework.RemotePlayerController(remotePlayer);
+  remoteController.addEventListener(
+    cast.framework.RemotePlayerEventType.IS_CONNECTED_CHANGED, onCastConnectionChanged);
+  remoteController.addEventListener(
+    cast.framework.RemotePlayerEventType.PLAYER_STATE_CHANGED, syncPlayButton);
+}
+
+function onCastConnectionChanged() {
+  document.body.classList.toggle('casting', casting());
+  if (casting()) {
+    const dev = cast.framework.CastContext.getInstance().getCurrentSession()?.getCastDevice();
+    document.getElementById('cast-device').textContent = dev?.friendlyName || 'Chromecast';
+    video.pause();
+  }
+  // Hand playback over in either direction, keeping the position.
+  if (currentItem) {
+    const pos = position();
+    startPlayback(currentItem, pos > 5 ? pos : 0);
+  }
+}
+
+async function castLoad(url, isHls, title, resumeForDirect, segFormat) {
+  const abs = url.startsWith('/') ? baseUrl + url : url;
+  const media = new chrome.cast.media.MediaInfo(abs, isHls ? 'application/x-mpegurl' : 'video/mp4');
+  if (isHls) {
+    const fmp4 = segFormat === 'fmp4';
+    media.hlsSegmentFormat = fmp4 ? chrome.cast.media.HlsSegmentFormat.FMP4
+                                  : chrome.cast.media.HlsSegmentFormat.TS;
+    media.hlsVideoSegmentFormat = fmp4 ? chrome.cast.media.HlsVideoSegmentFormat.FMP4
+                                       : chrome.cast.media.HlsVideoSegmentFormat.TS;
+    media.streamType = chrome.cast.media.StreamType.BUFFERED;
+  }
+  media.metadata = new chrome.cast.media.GenericMediaMetadata();
+  media.metadata.title = title;
+  const req = new chrome.cast.media.LoadRequest(media);
+  // HLS sessions are already positioned server-side; pin to 0 so the
+  // receiver doesn't jump to the live edge of the growing playlist.
+  req.currentTime = isHls ? 0 : (resumeForDirect > 0 ? resumeForDirect : 0);
+  req.autoplay = true;
+  await cast.framework.CastContext.getInstance().getCurrentSession().loadMedia(req);
+}
+
+// --- unified player state ---
+function duration() { return currentItem?.media_info?.duration_seconds || video.duration || 0; }
+function position() {
+  const t = casting() ? (remotePlayer.currentTime || 0) : (video.currentTime || 0);
+  return seekOffset + t;
+}
+function availableEnd() {
+  if (method !== 'transcode') return duration();
+  const end = casting()
+    ? (remotePlayer.duration > 0 ? remotePlayer.duration : 0)
+    : (video.seekable.length ? video.seekable.end(video.seekable.length - 1) : 0);
+  return seekOffset + end;
+}
+function isPlaying() {
+  return casting() ? remotePlayer.playerState === 'PLAYING' : (!video.paused && !video.ended);
+}
+
+async function loadItems() {
+  const items = await api('/api/items');
+  const list = document.getElementById('list');
+  list.innerHTML = items.length ? '' : '<div id="empty">No items yet — run a scan.</div>';
+  for (const it of items) {
+    const div = document.createElement('div');
+    div.className = 'item';
+    const chapters = it.media_info?.chapters?.length ? ` · ${it.media_info.chapters.length} chapters` : '';
+    div.innerHTML = `<div class="title">${itemTitle(it)}</div>
+      <div class="meta">${fmtRes(it.media_info)} · ${fmtSize(it.size)}${chapters}</div>`;
+    div.onclick = () => selectItem(it, div);
+    list.appendChild(div);
+  }
+}
+
+function renderTrace(decision, videoEncoder) {
+  const badge = `<span class="badge ${decision.method === 'direct_play' ? 'direct' : decision.method === 'transcode' ? 'transcode' : 'deny'}">${decision.method.replace('_', ' ')}</span>`;
+  const enc = videoEncoder ? ` <span style="color:#8db4f0">via ${videoEncoder}</span>` : '';
+  const dest = casting() ? ' <span style="color:#8db4f0">→ cast</span>' : '';
+  document.getElementById('status').innerHTML = badge + (decision.trace.at(-1)?.detail || '') + enc + dest;
+  document.getElementById('trace').innerHTML = '<h3>Decision trace</h3>' +
+    decision.trace.map(s => `<div class="step ${s.passed ? 'pass' : 'fail'}">
+      <span class="mark">${s.passed ? '✓' : '✗'}</span>
+      <span class="check">${s.check}</span>
+      <span class="detail">${s.detail}</span></div>`).join('');
+}
+
+function renderChapters() {
+  const chs = currentItem?.media_info?.chapters || [];
+  const pane = document.getElementById('chapters');
+  pane.innerHTML = '';
+  scrub.querySelectorAll('.tick').forEach(t => t.remove());
+  const dur = duration();
+  for (const ch of chs) {
+    const b = document.createElement('button');
+    b.textContent = `${ch.title} · ${fmtTime(ch.start_seconds)}`;
+    b.onclick = () => seekTo(ch.start_seconds);
+    pane.appendChild(b);
+    if (dur > 0) {
+      const tick = document.createElement('div');
+      tick.className = 'tick';
+      tick.style.left = (ch.start_seconds / dur * 100) + '%';
+      scrub.appendChild(tick);
+    }
+  }
+}
+
+async function stopSession() {
+  if (sessionId) { fetch('/api/sessions/' + sessionId, { method: 'DELETE' }); sessionId = null; }
+  if (hls) { hls.destroy(); hls = null; }
+}
+
+// startPlayback asks the server to decide-and-act, then routes the result
+// to the local <video> or the cast device. Capabilities are the REAL
+// playback device's: when casting, the Chromecast's manifest is sent no
+// matter what the simulation dropdown says.
+async function startPlayback(item, seekSeconds) {
+  await stopSession();
+  const caps = casting() ? profiles.chromecastUltra
+                         : profiles[document.getElementById('profile').value];
+  let resp;
+  try {
+    resp = await api(`/api/items/${item.id}/play`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ capabilities: caps, client_id: clientId, seek_seconds: seekSeconds }),
+    });
+  } catch (e) {
+    document.getElementById('status').textContent = 'Error: ' + e.message;
+    return;
+  }
+  renderTrace(resp.decision, resp.video_encoder);
+  method = resp.decision.method;
+  if (method === 'deny') return;
+  const isHls = method === 'transcode';
+  sessionId = isHls ? resp.session_id : null;
+  seekOffset = isHls ? seekSeconds : 0;
+
+  if (casting()) {
+    try {
+      await castLoad(resp.url, isHls, itemTitle(item), seekSeconds,
+                     resp.decision.target?.segment_format);
+    } catch (e) {
+      document.getElementById('status').textContent = 'Cast error: ' + (e.description || e.message || e);
+    }
+    return;
+  }
+  if (!isHls) {
+    video.src = resp.url;
+    if (seekSeconds) video.currentTime = seekSeconds;
+    video.play();
+  } else if (Hls.isSupported()) {
+    hls = new Hls();
+    hls.loadSource(resp.url);
+    hls.attachMedia(video);
+    video.play();
+  } else {
+    video.src = resp.url;
+    video.play();
+  }
+}
+
+function seekTo(t) {
+  if (!currentItem || method === null) return;
+  t = Math.max(0, Math.min(t, duration()));
+  const rel = t - seekOffset;
+  const canLocal = method === 'direct_play' || (rel >= 0 && rel <= (availableEnd() - seekOffset) - 0.5);
+  if (canLocal) {
+    if (casting()) {
+      remotePlayer.currentTime = rel;
+      remoteController.seek();
+    } else {
+      video.currentTime = rel;
+    }
+  } else {
+    document.getElementById('status').textContent =
+      `Seeking to ${fmtTime(t)} — restarting transcode at that point…`;
+    startPlayback(currentItem, t);
+  }
+}
+
+async function selectItem(item, el) {
+  document.querySelectorAll('.item').forEach(d => d.classList.remove('active'));
+  el?.classList.add('active');
+  currentItem = item;
+  seekOffset = 0;
+  const { position_seconds } = await api(`/api/progress?item_id=${item.id}&client_id=${clientId}`);
+  const dur = item.media_info?.duration_seconds ?? Infinity;
+  const resume = position_seconds > 5 && position_seconds < dur - 10 ? position_seconds : 0;
+  await startPlayback(item, resume);
+  renderChapters();
+  document.getElementById('t-total').textContent = fmtTime(duration());
+}
+
+// --- controls ---
+function syncPlayButton() {
+  document.getElementById('btn-play').textContent = isPlaying() ? '⏸' : '⏵';
+}
+document.getElementById('btn-play').onclick = () => {
+  if (casting()) remoteController.playOrPause();
+  else video.paused ? video.play() : video.pause();
+};
+document.getElementById('btn-back').onclick = () => seekTo(position() - 10);
+document.getElementById('btn-fwd').onclick = () => seekTo(position() + 30);
+document.getElementById('btn-stop').onclick = () => {
+  if (casting()) remoteController.stop();
+  else { video.pause(); video.removeAttribute('src'); video.load(); }
+  stopSession();
+};
+document.getElementById('vol').oninput = (e) => {
+  const v = parseFloat(e.target.value);
+  if (casting()) { remotePlayer.volumeLevel = v; remoteController.setVolumeLevel(); }
+  else video.volume = v;
+};
+
+scrub.addEventListener('click', e => {
+  const rect = scrub.getBoundingClientRect();
+  seekTo((e.clientX - rect.left) / rect.width * duration());
+});
+
+setInterval(() => {
+  const dur = duration();
+  if (dur > 0) {
+    scrub.querySelector('.fill').style.width = Math.min(100, position() / dur * 100) + '%';
+    scrub.querySelector('.avail').style.width = Math.min(100, availableEnd() / dur * 100) + '%';
+    document.getElementById('t-now').textContent = fmtTime(position());
+  }
+  syncPlayButton();
+}, 250);
+
+setInterval(() => {
+  if (currentItem && isPlaying()) {
+    fetch('/api/progress', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        item_id: currentItem.id, client_id: clientId,
+        position_seconds: position(),
+      }),
+    });
+  }
+}, 5000);
+
+document.getElementById('scan').onclick = async () => {
+  await api('/api/scan', { method: 'POST' });
+  const el = document.getElementById('scan-status');
+  const poll = setInterval(async () => {
+    const s = await api('/api/scan');
+    el.textContent = s.running
+      ? (s.paused ? `scan paused (playback active) — ${s.probed}/${s.total} probed`
+                  : `scanning… ${s.probed}/${s.total} probed, ${s.skipped} unchanged`)
+      : `done: ${s.probed} probed, ${s.skipped} unchanged, ${s.removed} removed${s.errors ? ', ' + s.errors + ' errors' : ''}`;
+    if (!s.running) { clearInterval(poll); loadItems(); }
+  }, 1000);
+};
+
+window.addEventListener('beforeunload', stopSession);
+loadItems();
+api('/api/system').then(sys => {
+  baseUrl = sys.base_url || location.origin;
+  const el = document.getElementById('hw');
+  const hw = sys.hardware;
+  el.textContent = hw.chosen
+    ? `HW: ${hw.chosen.kind} (${Object.values(hw.chosen.encoders).join(', ')})`
+    : 'HW: software only';
+  el.title = hw.trace.map(s => `${s.ok ? '✓' : '✗'} ${s.candidate}: ${s.detail}`).join('\n');
+});
+</script>
+</body>
+</html>

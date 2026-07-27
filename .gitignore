@@ -1,0 +1,6 @@
+.env
+data/
+bin/
+server.log
+.venv/
+nohup.out
