@@ -119,7 +119,8 @@ func main() {
 
 	if key := os.Getenv("TMDB_API_KEY"); key != "" {
 		srv.enricher = &tmdb.Enricher{
-			Client: tmdb.NewHTTPClient(key), Library: library, PostersDir: "data/posters",
+			Client: tmdb.NewHTTPClient(key), Library: library,
+			PostersDir: "data/posters", StillsDir: "data/stills",
 		}
 	} else {
 		log.Printf("TMDB enrichment disabled (TMDB_API_KEY not set)")
@@ -134,6 +135,7 @@ func main() {
 	mux.HandleFunc("POST /api/items/{id}/enrich", srv.handleEnrich)
 	mux.HandleFunc("GET /api/items/{id}/subtitles/{file}", srv.handleSubtitle)
 	mux.HandleFunc("GET /api/items/{id}/poster", srv.handlePoster)
+	mux.HandleFunc("GET /api/items/{id}/still", srv.handleStill)
 	mux.HandleFunc("GET /api/items/{id}/trickplay.json", srv.handleTrickplayIndex)
 	mux.HandleFunc("GET /api/items/{id}/trickplay/{file}", srv.handleTrickplaySheet)
 	mux.HandleFunc("POST /api/items/{id}/trickplay", srv.handleGenerateTrickplay)
@@ -239,6 +241,13 @@ type decisionInput struct {
 	Capabilities model.ClientCapabilities `json:"capabilities"`
 	ClientID     string                   `json:"client_id"`
 	SeekSeconds  float64                  `json:"seek_seconds"`
+	// AudioTrack is the ordinal (into media_info.audio_tracks) of the audio
+	// stream to play; nil = first/default track.
+	AudioTrack *int `json:"audio_track"`
+	// SubtitleBurn is the ordinal (into media_info.subtitles) of an EMBEDDED
+	// subtitle track to burn into the video — intended for bitmap tracks
+	// (PGS/VobSub) that cannot be served as WebVTT. Forces a video re-encode.
+	SubtitleBurn *int `json:"subtitle_burn"`
 }
 
 func (s *server) itemAndDecision(w http.ResponseWriter, r *http.Request) (*store.Item, *decisionInput, *model.PlayDecision, bool) {
@@ -265,7 +274,30 @@ func (s *server) itemAndDecision(w http.ResponseWriter, r *http.Request) (*store
 		httpErr(w, 400, err)
 		return nil, nil, nil, false
 	}
-	d := decision.Decide(*item.MediaInfo, in.Capabilities, s.policy)
+	// Validate playback selections against the probed streams before they
+	// reach the (pure) decision engine; bad ordinals are a client error.
+	if in.AudioTrack != nil {
+		if n := *in.AudioTrack; n < 0 || n >= len(item.MediaInfo.AudioTracks) {
+			httpErr(w, 400, fmt.Errorf("audio_track %d out of range (item has %d audio tracks)",
+				n, len(item.MediaInfo.AudioTracks)))
+			return nil, nil, nil, false
+		}
+	}
+	if in.SubtitleBurn != nil {
+		tr := findSubtitle(item.MediaInfo, *in.SubtitleBurn)
+		if tr == nil {
+			httpErr(w, 400, fmt.Errorf("subtitle_burn %d: item has no such subtitle track", *in.SubtitleBurn))
+			return nil, nil, nil, false
+		}
+		if tr.External {
+			httpErr(w, 400, fmt.Errorf("subtitle_burn %d: track is an external sidecar, only embedded tracks can be burned in", *in.SubtitleBurn))
+			return nil, nil, nil, false
+		}
+	}
+	// DecideWith takes media by value and substitutes the selected track's
+	// codec/channels into its own copy — the stored MediaInfo is never mutated.
+	d := decision.DecideWith(*item.MediaInfo, in.Capabilities, s.policy,
+		decision.Options{AudioTrack: in.AudioTrack, BurnSubtitle: in.SubtitleBurn})
 	return item, &in, &d, true
 }
 
@@ -541,18 +573,73 @@ func (s *server) handleSubtitle(w http.ResponseWriter, r *http.Request) {
 	}
 	cachePath := filepath.Join("data/subs", fmt.Sprintf("%d-%d.vtt", id, ordinal))
 	if _, err := os.Stat(cachePath); err != nil {
-		u, err := s.s3.PresignedGetObject(r.Context(), s.bucket, item.ObjectKey, time.Hour, url.Values{})
-		if err != nil {
-			httpErr(w, 500, err)
-			return
-		}
-		if err := pipeline.ExtractSubtitle(r.Context(), u.String(), ordinal, cachePath); err != nil {
-			httpErr(w, 500, err)
-			return
+		if track.External {
+			// External sidecar: the subtitle is its own object, not a stream
+			// inside the video container.
+			if err := s.cacheExternalSubtitle(r.Context(), track, cachePath); err != nil {
+				httpErr(w, 500, err)
+				return
+			}
+		} else {
+			u, err := s.s3.PresignedGetObject(r.Context(), s.bucket, item.ObjectKey, time.Hour, url.Values{})
+			if err != nil {
+				httpErr(w, 500, err)
+				return
+			}
+			// Embedded ordinals count subtitle streams inside the container;
+			// external tracks never reach here, so the ordinal maps 1:1.
+			if err := pipeline.ExtractSubtitle(r.Context(), u.String(), ordinal, cachePath); err != nil {
+				httpErr(w, 500, err)
+				return
+			}
 		}
 	}
 	w.Header().Set("Content-Type", "text/vtt")
 	http.ServeFile(w, r, cachePath)
+}
+
+// cacheExternalSubtitle fills the .vtt cache from a sidecar object: .vtt
+// files pass through unchanged, .srt/.ass/.ssa are converted with ffmpeg.
+func (s *server) cacheExternalSubtitle(ctx context.Context, track *model.SubtitleTrack, cachePath string) error {
+	if track.ObjectKey == "" {
+		return fmt.Errorf("external subtitle has no object key (re-scan needed)")
+	}
+	if track.Codec == "webvtt" {
+		obj, err := s.s3.GetObject(ctx, s.bucket, track.ObjectKey, minio.GetObjectOptions{})
+		if err != nil {
+			return err
+		}
+		defer obj.Close()
+		return writeFileAtomic(cachePath, obj)
+	}
+	u, err := s.s3.PresignedGetObject(ctx, s.bucket, track.ObjectKey, time.Hour, url.Values{})
+	if err != nil {
+		return err
+	}
+	return pipeline.ConvertSubtitle(ctx, u.String(), cachePath)
+}
+
+// writeFileAtomic streams src to path via temp file + rename, so a failed
+// download never leaves a truncated file to be served from cache forever.
+func writeFileAtomic(path string, src io.Reader) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	tmp := path + ".tmp"
+	f, err := os.Create(tmp)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(f, src); err != nil {
+		f.Close()
+		os.Remove(tmp)
+		return err
+	}
+	if err := f.Close(); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	return os.Rename(tmp, path)
 }
 
 // findSubtitle returns the probed subtitle track with the given ordinal, or nil.
@@ -635,14 +722,24 @@ func (s *server) handleGenerateTrickplay(w http.ResponseWriter, r *http.Request)
 }
 
 func (s *server) handlePoster(w http.ResponseWriter, r *http.Request) {
+	s.serveItemImage(w, r, "data/posters", "no poster")
+}
+
+// handleStill serves the cached TMDB episode still (jpeg or 404) written by
+// the enrichment stage.
+func (s *server) handleStill(w http.ResponseWriter, r *http.Request) {
+	s.serveItemImage(w, r, "data/stills", "no still")
+}
+
+func (s *server) serveItemImage(w http.ResponseWriter, r *http.Request, dir, missing string) {
 	id := r.PathValue("id")
 	if _, err := strconv.ParseInt(id, 10, 64); err != nil {
 		httpErr(w, 400, fmt.Errorf("bad id"))
 		return
 	}
-	f, err := os.Open(filepath.Join("data/posters", id+".jpg"))
+	f, err := os.Open(filepath.Join(dir, id+".jpg"))
 	if err != nil {
-		httpErr(w, 404, fmt.Errorf("no poster"))
+		httpErr(w, 404, fmt.Errorf("%s", missing))
 		return
 	}
 	defer f.Close()

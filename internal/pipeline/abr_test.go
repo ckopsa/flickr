@@ -207,3 +207,34 @@ func TestABRSessionWaitsForMasterName(t *testing.T) {
 		t.Errorf("single-rendition sessions keep index.m3u8, got %s", single.PlaylistName())
 	}
 }
+
+func TestABRBurnOverlayBeforeSplit(t *testing.T) {
+	j := abrJob()
+	j.Target.BurnSubtitleOrdinal = intp(2)
+	j.Target.Detelecine = true
+	j.Target.FPS = 23.976
+	args := BuildArgs(j)
+	fc := args[slices.Index(args, "-filter_complex")+1]
+	if !strings.HasPrefix(fc, "[0:v][0:s:2]overlay,") {
+		t.Errorf("overlay must lead the shared chain: %s", fc)
+	}
+	ov, fps, split := strings.Index(fc, "overlay"), strings.Index(fc, "fps="), strings.Index(fc, "split=")
+	if !(ov < fps && fps < split) {
+		t.Errorf("expected overlay -> shared filters -> split ordering: %s", fc)
+	}
+	if strings.Count(fc, "overlay") != 1 {
+		t.Errorf("overlay must run once, before the split: %s", fc)
+	}
+}
+
+func TestABRSelectedAudioMappedPerVariant(t *testing.T) {
+	j := abrJob()
+	j.Target.AudioStreamOrdinal = 1
+	s := argString(j)
+	if n := strings.Count(s, "-map 0:a:1"); n != 3 {
+		t.Errorf("expected 3 maps of the selected stream, got %d: %s", n, s)
+	}
+	if strings.Contains(s, "0:a:0") {
+		t.Errorf("default stream must not be mapped: %s", s)
+	}
+}

@@ -363,3 +363,146 @@ func TestSparseCapabilityManifestGetsDefaults(t *testing.T) {
 		t.Fatalf("expected direct_play with defaulted limits, got %s (trace: %+v)", d.Method, d.Trace)
 	}
 }
+
+// --- playback selections: audio track + subtitle burn-in ---
+
+func intp(n int) *int { return &n }
+
+func TestSelectedAudioTrackForcesAudioReencode(t *testing.T) {
+	// Track 0 (aac) would have been copied; the client selected the ac3
+	// commentary track, which an aac-only client needs re-encoded.
+	m := h264Compatible()
+	m.AudioTracks = []model.AudioTrack{
+		{Ordinal: 0, Codec: "aac", Channels: 2, Default: true},
+		{Ordinal: 1, Codec: "ac3", Channels: 6, Language: "eng"},
+	}
+	d := DecideWith(m, chromecastV1, model.DefaultPolicy(), Options{AudioTrack: intp(1)})
+	if d.Method != model.Transcode {
+		t.Fatalf("expected transcode for selected ac3 on aac-only client, got %s (trace %+v)", d.Method, d.Trace)
+	}
+	if d.Target.AudioCodec != "aac" {
+		t.Errorf("selected ac3 5.1 track must be re-encoded to aac, got %q", d.Target.AudioCodec)
+	}
+	if d.Target.VideoCodec != "" {
+		t.Errorf("video is compatible and should be copied, got %q", d.Target.VideoCodec)
+	}
+	if d.Target.AudioStreamOrdinal != 1 {
+		t.Errorf("target must carry the selected stream ordinal, got %d", d.Target.AudioStreamOrdinal)
+	}
+	if s := d.Trace[0]; s.Check != "audio_track" || !s.Passed || s.Detail != "track 1 selected: ac3 5.1 (eng)" {
+		t.Errorf("expected leading audio_track trace step, got %+v", d.Trace[0])
+	}
+}
+
+func TestSelectedAudioTrackAllowsCopy(t *testing.T) {
+	// Vice versa: the first track (ac3 5.1) would need a re-encode, but the
+	// client picked the aac stereo track — audio is copied.
+	m := h264Compatible()
+	m.Container = "mkv" // force a remux so the audio verdict is observable
+	m.AudioCodec, m.AudioChannels = "ac3", 6
+	m.AudioTracks = []model.AudioTrack{
+		{Ordinal: 0, Codec: "ac3", Channels: 6, Default: true},
+		{Ordinal: 1, Codec: "aac", Channels: 2},
+	}
+	base := Decide(m, chromecastV1, model.DefaultPolicy())
+	if base.Target == nil || base.Target.AudioCodec != "aac" {
+		t.Fatalf("precondition: default track should re-encode audio, got %+v", base.Target)
+	}
+	d := DecideWith(m, chromecastV1, model.DefaultPolicy(), Options{AudioTrack: intp(1)})
+	if d.Method != model.Transcode {
+		t.Fatalf("expected remux transcode, got %s", d.Method)
+	}
+	if d.Target.AudioCodec != "" {
+		t.Errorf("selected aac track is compatible and must be copied, got %q", d.Target.AudioCodec)
+	}
+	if d.Target.AudioStreamOrdinal != 1 {
+		t.Errorf("target must map stream 1, got %d", d.Target.AudioStreamOrdinal)
+	}
+}
+
+func TestSelectedAudioTrackKeepsDirectPlay(t *testing.T) {
+	// Direct play hands the whole file to the client, which switches tracks
+	// natively — a selected-but-compatible track never blocks direct play.
+	m := h264Compatible()
+	m.Container = "mp4"
+	m.AudioTracks = []model.AudioTrack{
+		{Ordinal: 0, Codec: "aac", Channels: 2, Default: true},
+		{Ordinal: 1, Codec: "ac3", Channels: 6, Language: "eng"},
+	}
+	d := DecideWith(m, modernTV, model.DefaultPolicy(), Options{AudioTrack: intp(1)})
+	if d.Method != model.DirectPlay {
+		t.Fatalf("expected direct play (client decodes ac3 natively), got %s (trace %+v)", d.Method, d.Trace)
+	}
+	if d.Trace[0].Check != "audio_track" {
+		t.Errorf("trace should still record the selection: %+v", d.Trace[0])
+	}
+}
+
+func TestBurnForcesVideoReencode(t *testing.T) {
+	m := h264Compatible()
+	m.Subtitles = []model.SubtitleTrack{
+		{Ordinal: 2, Codec: "hdmv_pgs_subtitle", Language: "eng", Supported: false},
+	}
+	if d := Decide(m, chromecastV1, model.DefaultPolicy()); d.Method != model.DirectPlay {
+		t.Fatalf("precondition: without a burn this direct-plays, got %s", d.Method)
+	}
+	d := DecideWith(m, chromecastV1, model.DefaultPolicy(), Options{BurnSubtitle: intp(2)})
+	if d.Method != model.Transcode {
+		t.Fatalf("burn must force a transcode, got %s", d.Method)
+	}
+	if d.Target.VideoCodec == "" {
+		t.Error("burn must force a video re-encode (subs only exist in decoded frames)")
+	}
+	if d.Target.BurnSubtitleOrdinal == nil || *d.Target.BurnSubtitleOrdinal != 2 {
+		t.Errorf("target must carry the burn ordinal, got %v", d.Target.BurnSubtitleOrdinal)
+	}
+	found := false
+	for _, s := range d.Trace {
+		if s.Check == "subtitle_burn" && !s.Passed &&
+			s.Detail == "burning track 2 (hdmv_pgs_subtitle, eng) — forces video re-encode" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("trace must explain the burn: %+v", d.Trace)
+	}
+}
+
+func TestBurnHevcSegmentFormatInterplay(t *testing.T) {
+	// Burning an hevc source re-encodes to the policy codec (h264), so the
+	// output rides TS even for a ts-only client — no fmp4 dead end.
+	m := hevc4kHDR()
+	m.Subtitles = []model.SubtitleTrack{{Ordinal: 0, Codec: "dvd_subtitle", Supported: false}}
+	caps := modernTV
+	caps.Containers = []string{"mp4"}
+	caps.SupportsHDR = []string{"hdr10"}
+	caps.HLSSegmentFormats = []string{"ts"}
+	d := DecideWith(m, caps, model.DefaultPolicy(), Options{BurnSubtitle: intp(0)})
+	if d.Method != model.Transcode || d.Target.VideoCodec != "h264" {
+		t.Fatalf("expected h264 re-encode, got %+v", d)
+	}
+	if d.Target.SegmentFormat != "ts" {
+		t.Errorf("h264 output should ship in ts, got %q", d.Target.SegmentFormat)
+	}
+	if len(d.Target.Renditions) < 2 {
+		t.Errorf("burn pays the decode cost, so the ABR ladder applies: %+v", d.Target.Renditions)
+	}
+	if d.Target.BurnSubtitleOrdinal == nil || *d.Target.BurnSubtitleOrdinal != 0 {
+		t.Errorf("burn ordinal lost: %v", d.Target.BurnSubtitleOrdinal)
+	}
+}
+
+func TestBurnIgnoresExternalAndUnknownOrdinals(t *testing.T) {
+	// The HTTP layer 400s these before Decide; the pure engine just ignores
+	// ordinals that don't resolve to an embedded track.
+	m := h264Compatible()
+	m.Subtitles = []model.SubtitleTrack{
+		{Ordinal: 3, Codec: "subrip", Supported: true, External: true, ObjectKey: "x.srt"},
+	}
+	for _, ord := range []int{3, 9} {
+		d := DecideWith(m, chromecastV1, model.DefaultPolicy(), Options{BurnSubtitle: intp(ord)})
+		if d.Method != model.DirectPlay {
+			t.Errorf("ordinal %d must not trigger a burn, got %s", ord, d.Method)
+		}
+	}
+}

@@ -32,8 +32,9 @@ import (
 // ProbeVersion is bumped whenever Probe extracts new information, so an
 // incremental scan re-probes existing items instead of skipping them on a
 // matching etag. v2: added chapter extraction. v3: fps + telecine detection.
-// v4: adds subtitle streams.
-const ProbeVersion = 4
+// v4: adds subtitle streams. v5: all audio streams (audio_tracks) + external
+// subtitle sidecars.
+const ProbeVersion = 5
 
 // IdentityVersion is bumped whenever Identify learns new tricks. Unlike a
 // ProbeVersion bump, refreshing identity needs no ffprobe and no bandwidth —
@@ -68,6 +69,10 @@ type Status struct {
 	// IdentityRefreshed counts items whose identity was recomputed from the
 	// key alone (no re-probe) because IdentityVersion moved.
 	IdentityRefreshed int `json:"identity_refreshed,omitempty"`
+	// SidecarRefreshed counts items whose external subtitle sidecars were
+	// re-attached (added/removed/replaced .srt next to the video) without a
+	// re-probe — the video itself was unchanged.
+	SidecarRefreshed int `json:"sidecar_refreshed,omitempty"`
 }
 
 type Scanner struct {
@@ -113,22 +118,39 @@ func (s *Scanner) Scan(ctx context.Context) error {
 		return err
 	}
 
+	// Listing pass: buffer videos and subtitle sidecars separately. Sidecars
+	// must be matched to videos after the whole listing — lexical object
+	// order means a sidecar ("Movie.en.srt") can arrive before OR after its
+	// video ("Movie.mkv"), so streaming the match is not possible.
 	present := map[string]bool{}
-	var todo []minio.ObjectInfo
-	var refresh []store.IdentityUpdate
+	var videos []minio.ObjectInfo
+	subsByDir := map[string][]sidecarFile{}
 	for obj := range s.Client.ListObjects(ctx, s.Bucket, minio.ListObjectsOptions{Recursive: true}) {
 		if obj.Err != nil {
 			return obj.Err
 		}
-		if !videoExts[strings.ToLower(path.Ext(obj.Key))] {
-			continue
-		}
 		// macOS AppleDouble sidecars (._foo.mkv) are resource-fork junk that
-		// share the video extension but always fail probing.
+		// share real extensions but always fail probing/parsing.
 		if strings.HasPrefix(path.Base(obj.Key), "._") {
 			continue
 		}
+		if isSubtitleKey(obj.Key) {
+			d := path.Dir(obj.Key)
+			subsByDir[d] = append(subsByDir[d], sidecarFile{Key: obj.Key, ETag: strings.Trim(obj.ETag, `"`)})
+			continue
+		}
+		if !videoExts[strings.ToLower(path.Ext(obj.Key))] {
+			continue
+		}
 		present[obj.Key] = true
+		videos = append(videos, obj)
+	}
+
+	var todo []probeJob
+	var refresh []store.IdentityUpdate
+	var sidecarRefresh []store.SidecarUpdate
+	for _, obj := range videos {
+		subs := matchSidecars(obj.Key, subsByDir[path.Dir(obj.Key)])
 		k, ok := known[obj.Key]
 		if ok && k.ETag == strings.Trim(obj.ETag, `"`) && k.ProbeVersion == ProbeVersion {
 			// Content unchanged — but if identification logic moved on since
@@ -139,16 +161,34 @@ func (s *Scanner) Scan(ctx context.Context) error {
 					ObjectKey: obj.Key, Identity: Identify(obj.Key),
 				})
 			}
+			// Likewise if the sidecar set changed (subtitle file added,
+			// removed, or replaced): re-attach external tracks to the stored
+			// media_info without re-probing the unchanged video. The store
+			// applies Attach inside its read-modify-write transaction.
+			if sig := sidecarSignature(subs); sig != k.SidecarSig {
+				key, matched := obj.Key, subs
+				sidecarRefresh = append(sidecarRefresh, store.SidecarUpdate{
+					ObjectKey:  key,
+					SidecarSig: sig,
+					Attach:     func(info *model.MediaInfo) { attachSidecars(info, key, matched) },
+				})
+			}
 			s.update(func(st *Status) { st.Skipped++ })
 			continue
 		}
-		todo = append(todo, obj)
+		todo = append(todo, probeJob{obj: obj, sidecars: subs})
 	}
 	if len(refresh) > 0 {
 		if err := s.Library.UpdateIdentities(refresh, IdentityVersion); err != nil {
 			return err
 		}
 		s.update(func(st *Status) { st.IdentityRefreshed = len(refresh) })
+	}
+	if len(sidecarRefresh) > 0 {
+		if err := s.Library.UpdateSidecars(sidecarRefresh); err != nil {
+			return err
+		}
+		s.update(func(st *Status) { st.SidecarRefreshed = len(sidecarRefresh) })
 	}
 	s.update(func(st *Status) { st.Total = len(todo) })
 
@@ -157,14 +197,14 @@ func (s *Scanner) Scan(ctx context.Context) error {
 	if workers <= 0 {
 		workers = 4
 	}
-	jobs := make(chan minio.ObjectInfo)
+	jobs := make(chan probeJob)
 	results := make(chan store.Item)
 	var wg sync.WaitGroup
 	for range workers {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for obj := range jobs {
+			for job := range jobs {
 				for s.Yield != nil && s.Yield() {
 					s.update(func(st *Status) { st.Paused = true })
 					select {
@@ -174,13 +214,13 @@ func (s *Scanner) Scan(ctx context.Context) error {
 					}
 				}
 				s.update(func(st *Status) { st.Paused = false })
-				results <- s.probeOne(ctx, obj)
+				results <- s.probeOne(ctx, job)
 			}
 		}()
 	}
 	go func() {
-		for _, obj := range todo {
-			jobs <- obj
+		for _, job := range todo {
+			jobs <- job
 		}
 		close(jobs)
 		wg.Wait()
@@ -225,26 +265,60 @@ func (s *Scanner) Scan(ctx context.Context) error {
 }
 
 // ReprobeKey probes a single object on demand and persists the result —
-// for newly-added probe fields or files fixed in place.
+// for newly-added probe fields or files fixed in place. It re-lists the
+// video's directory for subtitle sidecars, so dropping an .srt next to a
+// file and hitting reprobe attaches it without a full scan.
 func (s *Scanner) ReprobeKey(ctx context.Context, objectKey string) (*store.Item, error) {
 	stat, err := s.Client.StatObject(ctx, s.Bucket, objectKey, minio.StatObjectOptions{})
 	if err != nil {
 		return nil, err
 	}
-	item := s.probeOne(ctx, minio.ObjectInfo{Key: objectKey, ETag: stat.ETag, Size: stat.Size})
+	item := s.probeOne(ctx, probeJob{
+		obj:      minio.ObjectInfo{Key: objectKey, ETag: stat.ETag, Size: stat.Size},
+		sidecars: s.listSidecars(ctx, objectKey),
+	})
 	if err := s.Library.UpsertBatch([]store.Item{item}); err != nil {
 		return nil, err
 	}
 	return &item, nil
 }
 
-func (s *Scanner) probeOne(ctx context.Context, obj minio.ObjectInfo) store.Item {
+// listSidecars lists a video's directory (non-recursive) and returns the
+// subtitle sidecars matching it. Listing errors degrade to "no sidecars" —
+// a reprobe should not fail outright over a sidecar listing hiccup.
+func (s *Scanner) listSidecars(ctx context.Context, videoKey string) []sidecarFile {
+	prefix := ""
+	if dir := path.Dir(videoKey); dir != "." {
+		prefix = dir + "/"
+	}
+	var found []sidecarFile
+	for obj := range s.Client.ListObjects(ctx, s.Bucket, minio.ListObjectsOptions{Prefix: prefix}) {
+		if obj.Err != nil {
+			return nil
+		}
+		if isSubtitleKey(obj.Key) {
+			found = append(found, sidecarFile{Key: obj.Key, ETag: strings.Trim(obj.ETag, `"`)})
+		}
+	}
+	return matchSidecars(videoKey, found)
+}
+
+// probeJob is one probe work unit: the video object plus its matched
+// subtitle sidecars from the listing pass.
+type probeJob struct {
+	obj      minio.ObjectInfo
+	sidecars []sidecarFile
+}
+
+func (s *Scanner) probeOne(ctx context.Context, job probeJob) store.Item {
+	obj := job.obj
 	item := store.Item{
 		ObjectKey:       obj.Key,
 		ETag:            strings.Trim(obj.ETag, `"`),
 		Size:            obj.Size,
 		ProbeVersion:    ProbeVersion,
 		IdentityVersion: IdentityVersion,
+		SidecarSig:      sidecarSignature(job.sidecars),
 	}
 	ident := Identify(obj.Key)
 	item.Identity = &ident
@@ -259,6 +333,7 @@ func (s *Scanner) probeOne(ctx context.Context, obj minio.ObjectInfo) store.Item
 		item.ProbeError = fmt.Sprintf("probe %s: %v", obj.Key, err)
 		return item
 	}
+	attachSidecars(info, obj.Key, job.sidecars)
 	item.MediaInfo = info
 	return item
 }
@@ -278,7 +353,10 @@ type ffprobeOut struct {
 		Channels      int    `json:"channels"`
 		ColorTransfer string `json:"color_transfer"`
 		AvgFrameRate  string `json:"avg_frame_rate"`
-		Tags          struct {
+		Disposition   struct {
+			Default int `json:"default"`
+		} `json:"disposition"`
+		Tags struct {
 			Language string `json:"language"`
 			Title    string `json:"title"`
 		} `json:"tags"`
@@ -389,10 +467,21 @@ func parseProbe(out []byte, objectKey string) (*model.MediaInfo, error) {
 				info.HDR = "hlg"
 			}
 		case "audio":
+			// Scalars stay pinned to the first stream (the decision engine's
+			// input); the full track list rides alongside for selection UIs
+			// (ordinal = index among audio streams -> -map 0:a:<ordinal>).
 			if info.AudioCodec == "" {
 				info.AudioCodec = st.CodecName
 				info.AudioChannels = st.Channels
 			}
+			info.AudioTracks = append(info.AudioTracks, model.AudioTrack{
+				Ordinal:  len(info.AudioTracks),
+				Codec:    st.CodecName,
+				Language: st.Tags.Language,
+				Title:    st.Tags.Title,
+				Channels: st.Channels,
+				Default:  st.Disposition.Default == 1,
+			})
 		case "subtitle":
 			info.Subtitles = append(info.Subtitles, model.SubtitleTrack{
 				Ordinal:   len(info.Subtitles), // index among subtitle streams only (-map 0:s:<n>)

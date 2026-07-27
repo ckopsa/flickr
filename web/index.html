@@ -4,6 +4,10 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>flickr — media PoC</title>
+<meta name="theme-color" content="#14151a">
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" href="/icon-192.png" type="image/png">
+<link rel="apple-touch-icon" href="/icon-192.png">
 <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.13/dist/hls.min.js"></script>
 <script src="https://www.gstatic.com/cv/js/sender/v1/cast_sender.js?loadCastFramework=1"></script>
 <style>
@@ -46,6 +50,28 @@
   .card .c-sub { font-size: 11px; color: #9a9daa; margin-top: 2px; }
   .card .c-tech { font-size: 10px; color: #6f7280; margin-top: 2px; font-family: ui-monospace, monospace; }
   #empty { padding: 40px; color: #9a9daa; font-size: 14px; }
+
+  /* genre chip row */
+  #genre-row { display: flex; gap: 8px; padding: 12px 20px 0; overflow-x: auto; scrollbar-width: thin; }
+  #genre-row button { white-space: nowrap; border-radius: 14px; font-size: 12px; padding: 5px 14px; }
+  #genre-row button.active { background: #2a4a8a; border-color: #3a5da8; color: #dbe6fa; }
+
+  /* continue-watching row */
+  #cw { padding: 14px 20px 0; }
+  #cw h3 { font-size: 13px; color: #9a9daa; margin: 0 0 8px; font-weight: 600; }
+  #cw-row { display: flex; gap: 12px; overflow-x: auto; scrollbar-width: thin; padding-bottom: 6px; }
+  .cw-card { flex: 0 0 130px; cursor: pointer; }
+  .cw-card:hover .poster-wrap { outline: 2px solid #5b8def; }
+  .cw-card .poster-wrap { aspect-ratio: 2/3; border-radius: 8px; }
+  .cw-card .cw-bar { height: 3px; background: #2a2c33; border-radius: 2px; margin-top: 4px; overflow: hidden; }
+  .cw-card .cw-bar > div { height: 100%; background: #5b8def; }
+  .cw-card .c-title { font-size: 12px; margin-top: 5px; font-weight: 600; line-height: 1.3; }
+
+  /* enriched episode rows */
+  .item.enriched { display: flex; gap: 12px; align-items: flex-start; }
+  .item.enriched img.still { width: 128px; aspect-ratio: 16/9; object-fit: cover; border-radius: 4px; background: #1e2026; flex: 0 0 auto; }
+  .item.enriched .overview { font-size: 12px; color: #9a9daa; margin-top: 3px; line-height: 1.4;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 
   /* show (episode list) view */
   #view-show h2 { margin: 14px 20px 6px; font-size: 18px; }
@@ -139,6 +165,11 @@
 <main>
   <!-- library: poster grid -->
   <div id="view-library">
+    <div id="genre-row" hidden></div>
+    <div id="cw" hidden>
+      <h3>Continue watching</h3>
+      <div id="cw-row"></div>
+    </div>
     <div id="lib-bar">
       <input type="text" id="search" placeholder="Search titles…">
       <span id="lib-count"></span>
@@ -180,6 +211,7 @@
         <span style="font-size:12px;color:#9a9daa">vol</span>
         <input type="range" id="vol" min="0" max="1" step="0.05" value="1">
         <select id="subs" title="Subtitles" style="display:none"></select>
+        <select id="audio" title="Audio track" style="display:none"></select>
         <google-cast-launcher id="cast-btn"></google-cast-launcher>
       </div>
       <div id="status">Select an item to play.</div>
@@ -198,7 +230,10 @@ let usersApiLive = true;   // false => /api/users 404'd, localStorage-only profi
 let hls = null, sessionId = null, currentItem = null, seekOffset = 0, method = null;
 let baseUrl = location.origin, remotePlayer = null, remoteController = null;
 let allItems = [], currentShow = null, detailItem = null;
-let selectedSubOrdinal = null; // per-session subtitle choice, default Off
+let selectedSubOrdinal = null; // per-session TEXT subtitle choice, default Off
+let burnSubOrdinal = null;     // embedded bitmap track burned in server-side (subtitle_burn)
+let selectedAudioOrdinal = null; // per-session audio-track choice, sent as audio_track in /play
+let activeGenre = null; // genre chip filter, null = All
 const video = document.getElementById('video');
 const scrub = document.getElementById('scrub');
 const $ = id => document.getElementById(id);
@@ -339,6 +374,7 @@ function selectProfile(name) {
   localStorage.profileName = name;
   $('profile-chip').textContent = '👤 ' + name;
   $('gate').hidden = true;
+  renderContinueWatching(); // row is per-profile
 }
 
 $('gate-create').onclick = () => createProfile($('gate-name').value);
@@ -445,21 +481,39 @@ function isPlaying() {
 function supportedSubs(item) {
   return (item?.media_info?.subtitles || []).filter(s => s.supported);
 }
+// Embedded bitmap tracks (PGS/VobSub): not convertible to WebVTT, but the
+// server can burn them into the picture. External sidecars never qualify.
+function burnableSubs(item) {
+  return (item?.media_info?.subtitles || []).filter(s => !s.supported && !s.external);
+}
 function subLabel(s) {
   return s.title && s.language ? `${s.title} (${s.language})` : (s.title || s.language || 'Track ' + s.ordinal);
+}
+function burnLabel(s) {
+  const codec = { hdmv_pgs_subtitle: 'PGS', dvd_subtitle: 'DVD', dvb_subtitle: 'DVB' }[s.codec]
+    || (s.codec || '?').toUpperCase();
+  return `${s.language || s.title || 'Track ' + s.ordinal} · ${codec} (burned-in)`;
 }
 
 function renderSubSelector(item) {
   const sel = $('subs');
   const subs = supportedSubs(item);
-  if (!subs.length) { sel.style.display = 'none'; selectedSubOrdinal = null; return; }
+  const burns = burnableSubs(item);
+  if (!subs.length && !burns.length) {
+    sel.style.display = 'none'; selectedSubOrdinal = null; burnSubOrdinal = null; return;
+  }
   sel.style.display = '';
   sel.innerHTML = '<option value="">Subtitles: Off</option>' +
-    subs.map(s => `<option value="${s.ordinal}">${esc(subLabel(s))}</option>`).join('');
+    subs.map(s => `<option value="${s.ordinal}">${esc(subLabel(s))}${s.external ? ' [ext]' : ''}</option>`).join('') +
+    burns.map(s => `<option value="burn:${s.ordinal}">${esc(burnLabel(s))}</option>`).join('');
   if (selectedSubOrdinal != null && !subs.some(s => s.ordinal === selectedSubOrdinal)) {
     selectedSubOrdinal = null; // previous choice doesn't exist on this item
   }
-  sel.value = selectedSubOrdinal == null ? '' : String(selectedSubOrdinal);
+  if (burnSubOrdinal != null && !burns.some(s => s.ordinal === burnSubOrdinal)) {
+    burnSubOrdinal = null;
+  }
+  sel.value = burnSubOrdinal != null ? 'burn:' + burnSubOrdinal
+            : selectedSubOrdinal == null ? '' : String(selectedSubOrdinal);
 }
 
 // (Re-)attach <track> elements for local playback. Called on every
@@ -484,9 +538,35 @@ function applyLocalSubSelection() {
   }
 }
 
+// Restart the stream at the current position — burning a subtitle or
+// switching the audio track changes the stream itself, so the seek-restart
+// machinery (startPlayback with a seek offset) is reused.
+function restartFromCurrent() {
+  if (!currentItem || method === null) return;
+  const t = position();
+  $('status').textContent = `Restarting stream at ${fmtTime(t)}…`;
+  startPlayback(currentItem, t);
+}
+
 $('subs').onchange = () => {
   const v = $('subs').value;
+  if (v.startsWith('burn:')) {
+    // Bitmap track: burned server-side; hide any local text track and
+    // restart so the new stream carries the subtitles.
+    selectedSubOrdinal = null;
+    applyLocalSubSelection();
+    const ord = Number(v.slice(5));
+    if (ord !== burnSubOrdinal) { burnSubOrdinal = ord; restartFromCurrent(); }
+    return;
+  }
   selectedSubOrdinal = v === '' ? null : Number(v);
+  if (burnSubOrdinal != null) {
+    // Leaving a burn (to Off or a text track): the burned-in stream must be
+    // replaced; the restart re-applies the text selection on load.
+    burnSubOrdinal = null;
+    restartFromCurrent();
+    return;
+  }
   if (casting()) {
     const ms = cast.framework.CastContext.getInstance().getCurrentSession()?.getMediaSession();
     if (ms) {
@@ -497,6 +577,41 @@ $('subs').onchange = () => {
   } else {
     applyLocalSubSelection();
   }
+};
+
+// ---------------------------------------------------------------------------
+// audio tracks (contract: media_info.audio_tracks; selection is forward-compat
+// only — sent as "audio_track" in /play, ignored by today's server)
+// ---------------------------------------------------------------------------
+function audioTracks(item) {
+  return (item?.media_info?.audio_tracks || []).filter(t => t && t.ordinal != null);
+}
+function audioLabel(t) {
+  const ch = t.channels === 6 ? '5.1' : t.channels === 8 ? '7.1' : t.channels ? t.channels + 'ch' : '';
+  return [t.language || t.title || 'Track ' + t.ordinal,
+          t.title && t.language ? t.title : null,
+          t.codec, ch].filter(Boolean).join(' · ');
+}
+function renderAudioSelector(item) {
+  const sel = $('audio');
+  const tracks = audioTracks(item);
+  if (tracks.length < 2) { sel.style.display = 'none'; selectedAudioOrdinal = null; return; }
+  sel.style.display = '';
+  sel.innerHTML = tracks.map(t =>
+    `<option value="${t.ordinal}">${esc(audioLabel(t))}</option>`).join('');
+  if (selectedAudioOrdinal == null || !tracks.some(t => t.ordinal === selectedAudioOrdinal)) {
+    selectedAudioOrdinal = (tracks.find(t => t.default) || tracks[0]).ordinal;
+  }
+  sel.value = String(selectedAudioOrdinal);
+}
+$('audio').onchange = () => {
+  const v = $('audio').value;
+  const ord = v === '' ? null : Number(v);
+  if (ord === selectedAudioOrdinal) return;
+  selectedAudioOrdinal = ord;
+  // The server maps the chosen stream into the transcode (audio_track in the
+  // /play body), so switching mid-play means a new stream: restart in place.
+  restartFromCurrent();
 };
 
 // ---------------------------------------------------------------------------
@@ -542,6 +657,34 @@ function makeCard({ posterId, title, sub, tech, onClick }) {
   return c;
 }
 
+// ---------------------------------------------------------------------------
+// genre chips: hidden entirely unless some item carries enrichment.genres
+// ---------------------------------------------------------------------------
+function itemGenres(it) {
+  const g = it?.enrichment?.genres;
+  return Array.isArray(g) ? g.filter(x => typeof x === 'string' && x) : [];
+}
+function renderGenreRow() {
+  const row = $('genre-row');
+  const freq = new Map();
+  for (const it of allItems) {
+    for (const g of itemGenres(it)) freq.set(g, (freq.get(g) || 0) + 1);
+  }
+  if (!freq.size) { row.hidden = true; row.innerHTML = ''; activeGenre = null; return; }
+  const top = [...freq.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .slice(0, 12).map(e => e[0]);
+  if (activeGenre && !top.includes(activeGenre)) activeGenre = null;
+  row.innerHTML = '';
+  for (const g of [null, ...top]) {
+    const b = document.createElement('button');
+    b.textContent = g || 'All';
+    if (g === activeGenre) b.className = 'active';
+    b.onclick = () => { activeGenre = g; renderGenreRow(); renderGrid(); };
+    row.appendChild(b);
+  }
+  row.hidden = false;
+}
+
 function renderGrid() {
   const q = $('search').value.trim().toLowerCase();
   const grid = $('grid');
@@ -555,6 +698,7 @@ function renderGrid() {
   let count = 0;
   for (const [name, eps] of [...shows.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
     if (q && !name.toLowerCase().includes(q)) continue;
+    if (activeGenre && !eps.some(e => itemGenres(e).includes(activeGenre))) continue;
     const seasons = new Set(eps.map(e => e.identity.season)).size;
     const first = eps[0];
     grid.appendChild(makeCard({
@@ -569,6 +713,7 @@ function renderGrid() {
   for (const it of movies.sort((a, b) => displayTitle(a).localeCompare(displayTitle(b)))) {
     const t = displayTitle(it);
     if (q && !t.toLowerCase().includes(q) && !baseName(it.object_key).toLowerCase().includes(q)) continue;
+    if (activeGenre && !itemGenres(it).includes(activeGenre)) continue;
     const year = it.enrichment?.year || it.identity?.year;
     grid.appendChild(makeCard({
       posterId: it.id,
@@ -586,7 +731,75 @@ $('search').oninput = renderGrid;
 
 async function loadItems() {
   allItems = await api('/api/items');
+  renderGenreRow();
   renderGrid();
+  renderContinueWatching();
+}
+
+// ---------------------------------------------------------------------------
+// continue watching (Task C): progress is only checked for items this profile
+// has TOUCHED (per-profile recently-played id list in localStorage, max 20) —
+// one GET /api/progress per touched item, never the whole library.
+// ---------------------------------------------------------------------------
+function recentKey() { return 'recent:' + (clientId || 'anonymous'); }
+function recentIds() {
+  try { const l = JSON.parse(localStorage.getItem(recentKey()) || '[]'); return Array.isArray(l) ? l : []; }
+  catch (e) { return []; }
+}
+function recordRecentlyPlayed(itemId) {
+  const l = recentIds().filter(id => id !== itemId);
+  l.unshift(itemId);
+  localStorage.setItem(recentKey(), JSON.stringify(l.slice(0, 20)));
+}
+
+let cwRenderSeq = 0;
+async function renderContinueWatching() {
+  const seq = ++cwRenderSeq;
+  const box = $('cw'), row = $('cw-row');
+  const byId = new Map(allItems.map(it => [it.id, it]));
+  const items = recentIds().map(id => byId.get(id)).filter(Boolean);
+  if (!items.length) { box.hidden = true; row.innerHTML = ''; return; }
+  const cid = encodeURIComponent(clientId || 'anonymous');
+  const entries = (await Promise.all(items.map(async it => {
+    try {
+      const { position_seconds } = await api(`/api/progress?item_id=${it.id}&client_id=${cid}`);
+      const dur = it.media_info?.duration_seconds;
+      if (position_seconds > 5 && (!dur || position_seconds < dur * 0.9)) {
+        return { it, pos: position_seconds, dur };
+      }
+    } catch (e) { /* no progress saved */ }
+    return null;
+  }))).filter(Boolean);
+  if (seq !== cwRenderSeq) return; // a newer render superseded this one
+  if (!entries.length) { box.hidden = true; row.innerHTML = ''; return; }
+  row.innerHTML = '';
+  for (const { it, pos, dur } of entries) {
+    const c = document.createElement('div');
+    c.className = 'cw-card';
+    const wrap = document.createElement('div');
+    wrap.className = 'poster-wrap';
+    const img = document.createElement('img');
+    img.loading = 'lazy';
+    img.alt = '';
+    img.src = `/api/items/${it.id}/poster`;
+    img.onerror = () => {
+      img.remove();
+      wrap.classList.add('text-tile');
+      wrap.innerHTML = `<div class="tile-title">${esc(itemTitle(it))}</div>`;
+    };
+    wrap.appendChild(img);
+    c.appendChild(wrap);
+    const pct = dur ? Math.min(100, pos / dur * 100) : 0;
+    c.insertAdjacentHTML('beforeend',
+      `<div class="cw-bar"><div style="width:${pct.toFixed(1)}%"></div></div>` +
+      `<div class="c-title">${esc(itemTitle(it))}</div>`);
+    c.onclick = () => { // resume: playItem picks up saved progress itself
+      openDetail(it, it.identity?.kind === 'episode' ? it.identity.title : null);
+      playItem(it, null);
+    };
+    row.appendChild(c);
+  }
+  box.hidden = false;
 }
 
 // ---------------------------------------------------------------------------
@@ -594,6 +807,7 @@ async function loadItems() {
 // ---------------------------------------------------------------------------
 function showView(id) {
   for (const v of ['view-library', 'view-show', 'view-detail']) $(v).hidden = v !== id;
+  if (id === 'view-library') renderContinueWatching(); // refresh resume points
 }
 
 function openShow(name) {
@@ -606,9 +820,32 @@ function openShow(name) {
   for (const ep of eps) {
     const div = document.createElement('div');
     div.className = 'item';
-    div.innerHTML = `<div class="title">S${ep.identity.season}E${ep.identity.episode}` +
-      (ep.enrichment?.title && ep.enrichment.title !== name ? ` · ${esc(ep.enrichment.title)}` : '') +
-      `</div><div class="meta">${esc(techLine(ep))}</div>`;
+    const en = ep.enrichment || {};
+    const enriched = !!(en.episode_title || en.episode_overview || en.has_still);
+    if (enriched) {
+      // polished row: still thumbnail + "S2E5 · Episode Title" + clamped overview
+      div.classList.add('enriched');
+      if (en.has_still) {
+        const img = document.createElement('img');
+        img.className = 'still';
+        img.loading = 'lazy';
+        img.alt = '';
+        img.src = `/api/items/${ep.id}/still`;
+        img.onerror = () => img.remove();
+        div.appendChild(img);
+      }
+      const body = document.createElement('div');
+      body.innerHTML = `<div class="title">S${ep.identity.season}E${ep.identity.episode}` +
+        (en.episode_title ? ` · ${esc(en.episode_title)}` : '') +
+        `</div><div class="meta">${esc(techLine(ep))}</div>` +
+        (en.episode_overview ? `<div class="overview">${esc(en.episode_overview)}</div>` : '');
+      div.appendChild(body);
+    } else {
+      // today's plain row
+      div.innerHTML = `<div class="title">S${ep.identity.season}E${ep.identity.episode}` +
+        (en.title && en.title !== name ? ` · ${esc(en.title)}` : '') +
+        `</div><div class="meta">${esc(techLine(ep))}</div>`;
+    }
     div.onclick = () => openDetail(ep, name);
     list.appendChild(div);
   }
@@ -691,6 +928,8 @@ async function playItem(item, startAt) {
     } catch (e) { /* no saved progress */ }
   }
   renderSubSelector(item);
+  renderAudioSelector(item);
+  recordRecentlyPlayed(item.id); // feeds the continue-watching row
   loadTrickplay(item); // lazy, in the background; feature hides itself on 404
   await startPlayback(item, resume);
   renderChapters();
@@ -789,7 +1028,13 @@ async function startPlayback(item, seekSeconds) {
   try {
     resp = await api(`/api/items/${item.id}/play`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ capabilities: caps, client_id: clientId || 'anonymous', seek_seconds: seekSeconds }),
+      body: JSON.stringify({
+        capabilities: caps, client_id: clientId || 'anonymous', seek_seconds: seekSeconds,
+        // playback selections: chosen audio stream, and an embedded bitmap
+        // subtitle track to burn into the picture (forces a video re-encode)
+        ...(selectedAudioOrdinal != null ? { audio_track: selectedAudioOrdinal } : {}),
+        ...(burnSubOrdinal != null ? { subtitle_burn: burnSubOrdinal } : {}),
+      }),
     });
   } catch (e) {
     $('status').textContent = 'Error: ' + e.message;
@@ -913,6 +1158,9 @@ $('scan').onclick = async () => {
 // ---------------------------------------------------------------------------
 // boot
 // ---------------------------------------------------------------------------
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/sw.js').catch(e => console.warn('SW registration failed', e));
+}
 window.addEventListener('beforeunload', stopSession);
 if (clientId) { $('profile-chip').textContent = '👤 ' + clientId; }
 else openGate();

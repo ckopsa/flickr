@@ -32,13 +32,39 @@ func SubtitleArgs(inputURL string, ordinal int, outPath string) []string {
 // destPath. Written via a temp file + rename so a killed extraction never
 // leaves a half-written file that would then be served from cache forever.
 func ExtractSubtitle(ctx context.Context, inputURL string, ordinal int, destPath string) error {
+	return runSubtitleFFmpeg(ctx, destPath, func(tmp string) []string {
+		return SubtitleArgs(inputURL, ordinal, tmp)
+	})
+}
+
+// ConvertSubtitleArgs is pure: standalone subtitle input (an .srt/.ass
+// sidecar URL — the whole input IS the subtitle, so no -map) -> ffmpeg argv
+// converting it to WebVTT.
+func ConvertSubtitleArgs(inputURL, outPath string) []string {
+	return []string{
+		"-nostdin", "-hide_banner", "-loglevel", "error", "-y",
+		"-i", inputURL,
+		"-f", "webvtt", outPath,
+	}
+}
+
+// ConvertSubtitle converts a standalone subtitle file (external sidecar) to
+// WebVTT at destPath, with the same temp-file + rename discipline as
+// ExtractSubtitle.
+func ConvertSubtitle(ctx context.Context, inputURL, destPath string) error {
+	return runSubtitleFFmpeg(ctx, destPath, func(tmp string) []string {
+		return ConvertSubtitleArgs(inputURL, tmp)
+	})
+}
+
+func runSubtitleFFmpeg(ctx context.Context, destPath string, args func(tmp string) []string) error {
 	ctx, cancel := context.WithTimeout(ctx, subtitleExtractTimeout)
 	defer cancel()
 	if err := os.MkdirAll(filepath.Dir(destPath), 0o755); err != nil {
 		return err
 	}
 	tmp := destPath + ".tmp"
-	cmd := exec.CommandContext(ctx, "ffmpeg", SubtitleArgs(inputURL, ordinal, tmp)...)
+	cmd := exec.CommandContext(ctx, "ffmpeg", args(tmp)...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		os.Remove(tmp)

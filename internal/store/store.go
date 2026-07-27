@@ -39,16 +39,21 @@ type Item struct {
 	ProbeError         string            `json:"probe_error,omitempty"`
 	ProbeVersion       int               `json:"-"`
 	IdentityVersion    int               `json:"-"`
+	// SidecarSig fingerprints the external-subtitle sidecar set (keys+etags)
+	// the media_info was built with; internal-only, the scanner diffs it.
+	SidecarSig string `json:"-"`
 }
 
 // KnownState is what an incremental scan needs to decide whether to
 // re-probe an object (etag + probe recency) or merely re-identify it
-// (identity recency, unless the user has pinned the identity).
+// (identity recency, unless the user has pinned the identity) or re-attach
+// its subtitle sidecars (sidecar signature).
 type KnownState struct {
 	ETag               string
 	ProbeVersion       int
 	IdentityVersion    int
 	IdentityOverridden bool
+	SidecarSig         string
 }
 
 type Library struct{ db *sql.DB }
@@ -72,6 +77,7 @@ func OpenLibrary(path string) (*Library, error) {
 			identity_version INTEGER NOT NULL DEFAULT 0,
 			enrichment TEXT,
 			enrichment_identity TEXT,
+			sidecar_sig TEXT NOT NULL DEFAULT '',
 			updated_at REAL NOT NULL
 		)`)
 	if err != nil {
@@ -83,12 +89,13 @@ func OpenLibrary(path string) (*Library, error) {
 	db.Exec(`ALTER TABLE items ADD COLUMN identity_version INTEGER NOT NULL DEFAULT 0`)
 	db.Exec(`ALTER TABLE items ADD COLUMN enrichment TEXT`)
 	db.Exec(`ALTER TABLE items ADD COLUMN enrichment_identity TEXT`)
+	db.Exec(`ALTER TABLE items ADD COLUMN sidecar_sig TEXT NOT NULL DEFAULT ''`)
 	return &Library{db: db}, nil
 }
 
 // Known returns object_key -> scan-relevant state for incremental scanning.
 func (l *Library) Known() (map[string]KnownState, error) {
-	rows, err := l.db.Query(`SELECT object_key, etag, probe_version, identity_version, identity_overridden FROM items`)
+	rows, err := l.db.Query(`SELECT object_key, etag, probe_version, identity_version, identity_overridden, sidecar_sig FROM items`)
 	if err != nil {
 		return nil, err
 	}
@@ -98,7 +105,7 @@ func (l *Library) Known() (map[string]KnownState, error) {
 		var k string
 		var s KnownState
 		var overridden int
-		if err := rows.Scan(&k, &s.ETag, &s.ProbeVersion, &s.IdentityVersion, &overridden); err != nil {
+		if err := rows.Scan(&k, &s.ETag, &s.ProbeVersion, &s.IdentityVersion, &overridden, &s.SidecarSig); err != nil {
 			return nil, err
 		}
 		s.IdentityOverridden = overridden == 1
@@ -117,8 +124,8 @@ func (l *Library) UpsertBatch(items []Item) error {
 	}
 	defer tx.Rollback()
 	stmt, err := tx.Prepare(`
-		INSERT INTO items (object_key, etag, size, media_info, identity, probe_error, probe_version, identity_version, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO items (object_key, etag, size, media_info, identity, probe_error, probe_version, identity_version, sidecar_sig, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(object_key) DO UPDATE SET
 			etag=excluded.etag,
 			size=excluded.size,
@@ -126,6 +133,7 @@ func (l *Library) UpsertBatch(items []Item) error {
 			probe_error=excluded.probe_error,
 			probe_version=excluded.probe_version,
 			identity_version=excluded.identity_version,
+			sidecar_sig=excluded.sidecar_sig,
 			identity=CASE WHEN items.identity_overridden=1
 			              THEN items.identity ELSE excluded.identity END,
 			updated_at=excluded.updated_at`)
@@ -137,7 +145,7 @@ func (l *Library) UpsertBatch(items []Item) error {
 	for _, it := range items {
 		mi, _ := marshalNullable(it.MediaInfo)
 		id, _ := marshalNullable(it.Identity)
-		if _, err := stmt.Exec(it.ObjectKey, it.ETag, it.Size, mi, id, it.ProbeError, it.ProbeVersion, it.IdentityVersion, now); err != nil {
+		if _, err := stmt.Exec(it.ObjectKey, it.ETag, it.Size, mi, id, it.ProbeError, it.ProbeVersion, it.IdentityVersion, it.SidecarSig, now); err != nil {
 			return err
 		}
 	}
@@ -173,6 +181,56 @@ func (l *Library) UpdateIdentities(ups []IdentityUpdate, version int) error {
 			return err
 		}
 		if _, err := stmt.Exec(string(b), version, u.ObjectKey); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// SidecarUpdate re-attaches external subtitle tracks to an unchanged item:
+// Attach rewrites the stored media_info in place (the scanner owns the
+// sidecar-matching logic; the store only owns the read-modify-write).
+type SidecarUpdate struct {
+	ObjectKey  string
+	SidecarSig string
+	Attach     func(*model.MediaInfo)
+}
+
+// UpdateSidecars applies sidecar re-attachments in one transaction. Rows
+// without media_info (probe errors) still get the new signature so the scan
+// stops re-flagging them; their subtitles will appear when the probe heals.
+func (l *Library) UpdateSidecars(ups []SidecarUpdate) error {
+	tx, err := l.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, u := range ups {
+		var mi sql.NullString
+		err := tx.QueryRow(`SELECT media_info FROM items WHERE object_key=?`, u.ObjectKey).Scan(&mi)
+		if err == sql.ErrNoRows {
+			continue // row vanished between listing and now
+		}
+		if err != nil {
+			return err
+		}
+		if !mi.Valid {
+			if _, err := tx.Exec(`UPDATE items SET sidecar_sig=? WHERE object_key=?`, u.SidecarSig, u.ObjectKey); err != nil {
+				return err
+			}
+			continue
+		}
+		var info model.MediaInfo
+		if err := json.Unmarshal([]byte(mi.String), &info); err != nil {
+			return err
+		}
+		u.Attach(&info)
+		b, err := json.Marshal(&info)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`UPDATE items SET media_info=?, sidecar_sig=? WHERE object_key=?`,
+			string(b), u.SidecarSig, u.ObjectKey); err != nil {
 			return err
 		}
 	}
@@ -301,14 +359,18 @@ func scanItem(rows *sql.Rows) (Item, error) {
 	return it, nil
 }
 
-// NeedingEnrichment returns identified items whose enrichment is missing or
-// was computed from a different (older) identity. The kind filter (only
+// NeedingEnrichment returns identified items whose enrichment is missing,
+// was computed from a different (older) identity, or predates enrichment
+// version minVersion (the "v" marker inside the enrichment JSON; rows from
+// before the marker existed read as 0). The kind filter (only
 // movies/episodes are enrichable) lives in the enricher, which owns that rule.
-func (l *Library) NeedingEnrichment() ([]Item, error) {
-	rows, err := l.db.Query(`SELECT ` + itemColumns + ` FROM items
+func (l *Library) NeedingEnrichment(minVersion int) ([]Item, error) {
+	rows, err := l.db.Query(`SELECT `+itemColumns+` FROM items
 		WHERE identity IS NOT NULL
-		  AND (enrichment IS NULL OR enrichment_identity IS NOT identity)
-		ORDER BY object_key`)
+		  AND (enrichment IS NULL
+		       OR enrichment_identity IS NOT identity
+		       OR COALESCE(json_extract(enrichment, '$.v'), 0) < ?)
+		ORDER BY object_key`, minVersion)
 	if err != nil {
 		return nil, err
 	}

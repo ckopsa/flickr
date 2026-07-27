@@ -24,9 +24,12 @@ a handful of architectural decisions (see design notes below):
    (`Shows/<name>/Season <n>/`, `Movies/<Name (Year)>/`) and versioned:
    bumping `IdentityVersion` makes the next scan recompute identities from
    keys alone — no re-probe, no bandwidth. TMDB enrichment (title, overview,
-   poster) is a separate post-scan stage keyed off identity; enrichment is
-   invalidated automatically when an item's identity changes, and disabled
-   entirely without a `TMDB_API_KEY`.
+   poster, genres) is a separate post-scan stage keyed off identity;
+   episodes additionally get per-episode title/overview/still from one
+   `/tv/{id}/season/{n}` call per show-season per run. Enrichment is
+   invalidated automatically when an item's identity changes, is versioned
+   (a `"v"` marker inside the stored JSON re-enriches rows that predate
+   newer fields), and is disabled entirely without a `TMDB_API_KEY`.
 7. **Verified hardware-accel detection** — at startup the pipeline probes
    nvenc/qsv/vaapi/v4l2m2m with real test encodes (compiled-in ≠ working)
    and keeps the full accept/reject trace (`GET /api/system`). The decision
@@ -36,9 +39,17 @@ a handful of architectural decisions (see design notes below):
    their HLS output was last fetched; a reaper stops sessions idle >5 minutes
    (vanished clients never say goodbye). Scans run on a schedule
    (`SCAN_INTERVAL`, default 12h; an empty library triggers one at startup),
-   and probing now extracts subtitle streams; text tracks are served as
-   WebVTT (`.vtt` endpoint, extracted on demand with ffmpeg, cached in
-   `data/subs/`), bitmap tracks are listed but marked unsupported.
+   and probing extracts subtitle streams and the full audio-track list
+   (`media_info.audio_tracks`, ordinal-mapped to `-map 0:a:N`; the scalar
+   first-stream fields remain the decision engine's input). Text subtitle
+   tracks are served as WebVTT (`.vtt` endpoint, extracted on demand with
+   ffmpeg, cached in `data/subs/`), bitmap tracks are listed but marked
+   unsupported. External subtitle sidecars (`Movie.en.srt` next to
+   `Movie.mkv`; `.srt`/`.ass`/`.ssa`/`.vtt` — `.sub` is skipped as
+   ambiguous MicroDVD/VobSub) are discovered during the scan's listing pass
+   and appended after the embedded tracks with `"external": true`; a
+   sidecar fingerprint in the skip decision means adding or removing an
+   `.srt` re-attaches tracks on the next scan without re-probing the video.
 9. **ABR only when decode is already being paid for** — a video re-encode
    carries an adaptive-bitrate ladder (primary rung + 720p/1.2–3 Mbps rungs
    below it, capped by the client's `max_height`): one decode, per-variant
@@ -76,10 +87,11 @@ locally except HLS segments in `data/streams/`.
 | `POST /api/items/{id}/decision` | dry-run: decision + trace, no side effects |
 | `POST /api/items/{id}/play` | decide and act: presigned URL (direct) or HLS session (transcode) |
 | `POST /api/items/{id}/identity` | user identity override (persists across scans) |
-| `POST /api/items/{id}/reprobe` | re-probe one item on demand |
+| `POST /api/items/{id}/reprobe` | re-probe one item on demand (also re-discovers subtitle sidecars in its directory) |
 | `POST /api/items/{id}/enrich` | TMDB-enrich one item on demand (503 if no API key) |
-| `GET /api/items/{id}/subtitles/{ordinal}.vtt` | subtitle track as WebVTT (415 for bitmap tracks, 404 for bad ordinal) |
+| `GET /api/items/{id}/subtitles/{ordinal}.vtt` | subtitle track as WebVTT — embedded or external sidecar (415 for bitmap tracks, 404 for bad ordinal) |
 | `GET /api/items/{id}/poster` | cached TMDB poster (image/jpeg, 404 if absent) |
+| `GET /api/items/{id}/still` | cached TMDB episode still (image/jpeg, 404 if absent) |
 | `GET /api/items/{id}/trickplay.json` | scrub-preview sprite index (404 if not generated) |
 | `GET /api/items/{id}/trickplay/{n}.jpg` | sprite sheet n |
 | `POST /api/items/{id}/trickplay` | force-generate sprites for one item (synchronous) |
@@ -88,7 +100,12 @@ locally except HLS segments in `data/streams/`.
 | `GET/POST /api/users` | list / idempotently create profile names (clients use the name as `client_id`) |
 | `POST /api/telemetry` | append any JSON object to `data/telemetry.jsonl`; always 200 |
 
-`decision`/`play` take `{"capabilities": {...}, "client_id": "...", "seek_seconds": 0}`.
+`decision`/`play` take `{"capabilities": {...}, "client_id": "...", "seek_seconds": 0}`,
+plus optional playback selections: `"audio_track": <ordinal>` (the decision
+engine evaluates the chosen track's codec/channels and the pipeline maps
+`-map 0:a:N`; direct play is untouched — the client negotiates natively) and
+`"subtitle_burn": <ordinal>` (burn an embedded bitmap subtitle track into the
+picture; forces a video re-encode, overlay applied before all other filters).
 The web UI includes capability presets (Chromecast v1, 4K HDR TV, cellular cap)
 to demonstrate how the same file direct-plays or transcodes per client.
 

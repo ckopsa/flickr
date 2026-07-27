@@ -88,8 +88,15 @@ func BuildArgs(j Job) []string {
 		return appendABRArgs(args, j)
 	}
 
+	// Explicit stream selection. Without -map, ffmpeg picks the "best"
+	// (highest-channel-count) audio stream — not necessarily the first, and
+	// never the client's choice. Direct play never reaches this package: the
+	// client gets the whole file over HTTP and negotiates tracks natively;
+	// AudioStreamOrdinal only steers transcode/remux jobs.
+	audioMap := fmt.Sprintf("0:a:%d", t.AudioStreamOrdinal)
+
 	if t.VideoCodec == "" {
-		args = append(args, "-c:v", "copy")
+		args = append(args, "-map", "0:v:0", "-c:v", "copy")
 	} else {
 		var filters []string
 		if t.Detelecine {
@@ -118,8 +125,24 @@ func BuildArgs(j Job) []string {
 				filters = append(filters, "format=nv12")
 			}
 		}
-		if len(filters) > 0 {
-			args = append(args, "-vf", joinFilters(filters))
+		if t.BurnSubtitleOrdinal != nil {
+			// Subtitle burn-in: composite the bitmap subtitle stream onto the
+			// video. Two inputs means a simple -vf filtergraph cannot express
+			// it — switch to -filter_complex (only when burning, so plain
+			// jobs keep the historical -vf argv). The overlay is the FIRST
+			// step: bitmap subs are positioned for the source resolution, so
+			// they must land before detelecine/tonemap/scale.
+			fc := fmt.Sprintf("[0:v][0:s:%d]overlay", *t.BurnSubtitleOrdinal)
+			if len(filters) > 0 {
+				fc += "," + joinFilters(filters)
+			}
+			fc += "[vout]"
+			args = append(args, "-filter_complex", fc, "-map", "[vout]")
+		} else {
+			if len(filters) > 0 {
+				args = append(args, "-vf", joinFilters(filters))
+			}
+			args = append(args, "-map", "0:v:0")
 		}
 		args = append(args, "-c:v", enc)
 		args = append(args, presetArgs(enc)...)
@@ -134,6 +157,7 @@ func BuildArgs(j Job) []string {
 		args = append(args, "-g", strconv.Itoa(gop), "-sc_threshold", "0")
 	}
 
+	args = append(args, "-map", audioMap)
 	if t.AudioCodec == "" {
 		args = append(args, "-c:a", "copy")
 	} else {
@@ -192,6 +216,13 @@ func appendABRArgs(args []string, j Job) []string {
 			"zscale=t=linear:npl=100,tonemap=hable,zscale=p=bt709:t=bt709:m=bt709,format=yuv420p")
 	}
 	fc := "[0:v]"
+	if t.BurnSubtitleOrdinal != nil {
+		// Burn-in is a shared step like detelecine/tonemap, and it must come
+		// FIRST: bitmap subtitles are positioned for the source resolution,
+		// so the overlay runs before any shared filter and before the
+		// per-variant scales below the split.
+		fc += fmt.Sprintf("[0:s:%d]overlay,", *t.BurnSubtitleOrdinal)
+	}
 	if len(pre) > 0 {
 		fc += joinFilters(pre) + ","
 	}
@@ -234,9 +265,10 @@ func appendABRArgs(args []string, j Job) []string {
 	}
 	args = append(args, "-g", strconv.Itoa(gop), "-sc_threshold", "0")
 
-	// One audio stream per variant (var_stream_map requires the pairing).
+	// One audio stream per variant (var_stream_map requires the pairing),
+	// each mapping the client-selected track (0 = first/default).
 	for range t.Renditions {
-		args = append(args, "-map", "0:a:0")
+		args = append(args, "-map", fmt.Sprintf("0:a:%d", t.AudioStreamOrdinal))
 	}
 	if t.AudioCodec == "" {
 		args = append(args, "-c:a", "copy")

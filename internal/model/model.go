@@ -26,6 +26,23 @@ type MediaInfo struct {
 	Telecine  bool            `json:"telecine,omitempty"`
 	Chapters  []Chapter       `json:"chapters,omitempty"`
 	Subtitles []SubtitleTrack `json:"subtitles,omitempty"`
+	// AudioTracks lists every audio stream (ordinal = index among audio
+	// streams, mapping to ffmpeg -map 0:a:<ordinal>). The scalar
+	// AudioCodec/AudioChannels fields above stay pinned to the first stream;
+	// when a client selects another track (decision.Options.AudioTrack) the
+	// decision engine evaluates that track's codec/channels instead.
+	AudioTracks []AudioTrack `json:"audio_tracks,omitempty"`
+}
+
+// AudioTrack is one audio stream. Default carries ffprobe's
+// disposition.default flag (the container's preferred track).
+type AudioTrack struct {
+	Ordinal  int    `json:"ordinal"`
+	Codec    string `json:"codec"`
+	Language string `json:"language,omitempty"`
+	Title    string `json:"title,omitempty"`
+	Channels int    `json:"channels"`
+	Default  bool   `json:"default"`
 }
 
 // SubtitleTrack is an embedded subtitle stream. Ordinal is the index among
@@ -38,17 +55,32 @@ type SubtitleTrack struct {
 	Language  string `json:"language"`
 	Title     string `json:"title"`
 	Supported bool   `json:"supported"`
+	// External marks a sidecar file (Movie.en.srt next to Movie.mkv) rather
+	// than an embedded stream; ObjectKey is the sidecar's bucket key, stored
+	// so the .vtt endpoint can fetch it without re-listing the bucket.
+	External  bool   `json:"external,omitempty"`
+	ObjectKey string `json:"object_key,omitempty"`
 }
 
 // Enrichment is external metadata (TMDB) layered on top of identity. It is
 // derived data: identity is the deterministic input, enrichment the cached
 // lookup result — never the other way around.
 type Enrichment struct {
-	TMDBID    int64  `json:"tmdb_id"`
-	Title     string `json:"title"`
-	Year      int    `json:"year,omitempty"`
-	Overview  string `json:"overview"`
-	HasPoster bool   `json:"has_poster"`
+	// Version marks which generation of enrichment fields this JSON carries;
+	// rows older than the current version (see tmdb.EnrichmentVersion) are
+	// re-enriched on the next pass even though their identity is unchanged.
+	Version   int      `json:"v,omitempty"`
+	TMDBID    int64    `json:"tmdb_id"`
+	Title     string   `json:"title"`
+	Year      int      `json:"year,omitempty"`
+	Overview  string   `json:"overview"`
+	HasPoster bool     `json:"has_poster"`
+	Genres    []string `json:"genres,omitempty"`
+	// Per-episode fields, populated for kind=episode items from the show's
+	// TMDB season payload (one call per show-season per run).
+	EpisodeTitle    string `json:"episode_title,omitempty"`
+	EpisodeOverview string `json:"episode_overview,omitempty"`
+	HasStill        bool   `json:"has_still,omitempty"`
 }
 
 // Chapter is an embedded chapter marker (scene selection target).
@@ -149,6 +181,15 @@ type TranscodeTarget struct {
 	SegmentFormat   string  `json:"segment_format,omitempty"` // "ts" (default) or "fmp4"
 	Detelecine      bool    `json:"detelecine,omitempty"`     // inverse-telecine before encoding
 	FPS             float64 `json:"fps,omitempty"`            // effective output fps (keyframe cadence)
+	// AudioStreamOrdinal is which audio stream to feed the transcode
+	// (ffmpeg -map 0:a:N). 0 = first stream, the historical behavior.
+	// Only meaningful for transcode/remux jobs — direct play hands the
+	// client the whole file and it negotiates tracks natively.
+	AudioStreamOrdinal int `json:"audio_stream_ordinal,omitempty"`
+	// BurnSubtitleOrdinal, when set, is the embedded subtitle stream
+	// (ffmpeg -map 0:s:M) to burn into the video. Burning always implies a
+	// video re-encode (VideoCodec is never "" when this is set).
+	BurnSubtitleOrdinal *int `json:"burn_subtitle_ordinal,omitempty"`
 	// Renditions is the adaptive-bitrate ladder, present only when video is
 	// being re-encoded anyway (decode cost already paid): the primary rung
 	// first, then lower quality rungs. Empty/single-entry = plain HLS.

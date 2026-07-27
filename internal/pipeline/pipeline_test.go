@@ -265,3 +265,106 @@ func TestNoSeekArgWhenStartingFromZero(t *testing.T) {
 		t.Errorf("no -ss expected at position 0: %v", args)
 	}
 }
+
+// --- explicit stream mapping + subtitle burn-in ---
+
+func intp(n int) *int { return &n }
+
+func TestExplicitStreamMapsDefault(t *testing.T) {
+	// Transcodes map streams explicitly: without -map, ffmpeg picks the
+	// HIGHEST-channel audio stream, not the first.
+	s := argString(Job{
+		InputURL:  "http://x/in.mkv",
+		Target:    model.TranscodeTarget{VideoCodec: "h264", AudioCodec: "aac"},
+		OutputDir: "/out",
+	})
+	for _, want := range []string{"-map 0:v:0", "-map 0:a:0"} {
+		if !strings.Contains(s, want) {
+			t.Errorf("missing %q in: %s", want, s)
+		}
+	}
+}
+
+func TestSelectedAudioStreamMapped(t *testing.T) {
+	s := argString(Job{
+		InputURL:  "http://x/in.mkv",
+		Target:    model.TranscodeTarget{AudioCodec: "aac", AudioStreamOrdinal: 2},
+		OutputDir: "/out",
+	})
+	if !strings.Contains(s, "-map 0:a:2") {
+		t.Errorf("selected audio stream must be mapped: %s", s)
+	}
+	if !strings.Contains(s, "-map 0:v:0") || !strings.Contains(s, "-c:v copy") {
+		t.Errorf("video stays an explicit copy of stream 0: %s", s)
+	}
+	if strings.Contains(s, "0:a:0") {
+		t.Errorf("default audio stream must not leak in: %s", s)
+	}
+}
+
+func TestBurnSwitchesToFilterComplex(t *testing.T) {
+	j := Job{
+		InputURL: "http://x/in.mkv",
+		Target: model.TranscodeTarget{
+			VideoCodec: "h264", AudioCodec: "aac", Height: 1080,
+			Tonemap: true, Detelecine: true, FPS: 23.976,
+			BurnSubtitleOrdinal: intp(1),
+		},
+		OutputDir: "/out",
+	}
+	args := BuildArgs(j)
+	s := strings.Join(args, " ")
+	if slices.Contains(args, "-vf") {
+		t.Fatalf("burn jobs need two filter inputs; -vf cannot express that: %s", s)
+	}
+	i := slices.Index(args, "-filter_complex")
+	if i == -1 {
+		t.Fatalf("expected -filter_complex: %s", s)
+	}
+	fc := args[i+1]
+	if !strings.HasPrefix(fc, "[0:v][0:s:1]overlay,") {
+		t.Errorf("overlay must be the FIRST filter step (bitmap subs are sized for the source): %s", fc)
+	}
+	// Overlay before detelecine before tonemap before scale, ending at the
+	// mapped label.
+	order := []string{"overlay", "fps=23.976", "tonemap", "scale=-2:1080"}
+	last := -1
+	for _, f := range order {
+		idx := strings.Index(fc, f)
+		if idx == -1 || idx < last {
+			t.Fatalf("filter order wrong (want %v): %s", order, fc)
+		}
+		last = idx
+	}
+	if !strings.HasSuffix(fc, "[vout]") || !strings.Contains(s, "-map [vout]") {
+		t.Errorf("video must be mapped from the filtered output label: %s", s)
+	}
+	if !strings.Contains(s, "-map 0:a:0") {
+		t.Errorf("audio still mapped from the input: %s", s)
+	}
+}
+
+func TestBurnSeekKeepsPrerollSplit(t *testing.T) {
+	// Input-side -ss seeks every stream of input 0 — video AND the subtitle
+	// stream feeding the overlay — so the preroll split works unchanged.
+	args := BuildArgs(Job{
+		InputURL: "http://x/in.mkv",
+		Target: model.TranscodeTarget{
+			VideoCodec: "h264", AudioCodec: "aac", BurnSubtitleOrdinal: intp(0),
+		},
+		SeekSeconds: 600,
+		OutputDir:   "/out",
+	})
+	in := slices.Index(args, "-i")
+	if args[slices.Index(args, "-ss")+1] != "590.000" {
+		t.Errorf("input seek should be target minus preroll: %v", args)
+	}
+	rest := args[in:]
+	out := slices.Index(rest, "-ss")
+	if out == -1 || rest[out+1] != "10.000" {
+		t.Errorf("expected 10s output-side trim after -i: %v", args)
+	}
+	if !strings.Contains(strings.Join(args, " "), "[0:v][0:s:0]overlay") {
+		t.Errorf("burn must survive seek jobs: %v", args)
+	}
+}
