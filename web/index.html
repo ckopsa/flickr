@@ -97,6 +97,10 @@
   #detail-play:hover { background: #33579e; }
   #detail-chapters { margin-top: 16px; display: flex; flex-wrap: wrap; gap: 6px; }
   #detail-chapters button { font-size: 12px; padding: 4px 10px; }
+  #detail-epnav { margin-top: 14px; display: flex; flex-wrap: wrap; gap: 8px; }
+  #detail-epnav a { background: #23252d; color: #c5c8d4; border: 1px solid #3a3d47;
+    border-radius: 6px; padding: 6px 12px; font-size: 13px; text-decoration: none; }
+  #detail-epnav a:hover { background: #2c2f38; }
   #now-playing { font-size: 15px; font-weight: 600; margin: 14px 0 10px; }
 
   #player-pane { margin-top: 6px; }
@@ -127,6 +131,8 @@
   #upnext-title { font-size: 14px; font-weight: 600; }
   #upnext-count { font-size: 12px; color: #9a9daa; margin-top: 4px; font-variant-numeric: tabular-nums; }
   #upnext-cancel { margin-top: 10px; }
+  #upnext-play { margin-top: 10px; margin-right: 8px; background: #2a4a8a; border-color: #3a5da8; }
+  #upnext-play:hover { background: #33579e; }
   .badge { display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 10px; margin-right: 6px; }
   .badge.direct { background: #14432a; color: #6ee7a0; }
   .badge.transcode { background: #4a3413; color: #f0b45c; }
@@ -207,6 +213,7 @@
         <div id="detail-tech"></div>
         <button id="detail-play">▶ Play</button>
         <div id="detail-chapters"></div>
+        <div id="detail-epnav" hidden></div>
       </div>
     </div>
     <div id="player-pane" hidden>
@@ -226,6 +233,7 @@
         <input type="range" id="vol" min="0" max="1" step="0.05" value="1">
         <select id="subs" title="Subtitles" style="display:none"></select>
         <select id="audio" title="Audio track" style="display:none"></select>
+        <button id="btn-autoplay"></button>
         <google-cast-launcher id="cast-btn"></google-cast-launcher>
       </div>
       <div id="status">Select an item to play.</div>
@@ -239,6 +247,7 @@
 <div id="upnext" hidden>
   <div id="upnext-title"></div>
   <div id="upnext-count"></div>
+  <button id="upnext-play" hidden>▶ Play next</button>
   <button id="upnext-cancel">Cancel</button>
 </div>
 
@@ -1019,6 +1028,21 @@ function renderDetail(item) {
     b.onclick = () => playItem(item, ch.start_seconds);
     chBox.appendChild(b);
   }
+  // prev/next episode links: plain #/item/<id> navigation (no autoplay — the
+  // user reads the detail pane, then hits Play). Same siblings as the player.
+  const nav = $('detail-epnav');
+  nav.innerHTML = '';
+  const sib = episodeSiblings(item);
+  for (const [ep, label] of [[sib?.prev, 'Previous'], [sib?.next, 'Next']]) {
+    if (!ep) continue; // first/last episode: omit that side
+    const a = document.createElement('a');
+    a.href = itemHash(ep.id);
+    const name = ep.enrichment?.episode_title;
+    a.title = `${label} episode · ${epCode(ep)}${name ? ' · ' + name : ''}`;
+    a.textContent = label === 'Previous' ? `⏮ Prev: ${epCode(ep)}` : `Next: ${epCode(ep)} ⏭`;
+    nav.appendChild(a);
+  }
+  nav.hidden = !nav.childElementCount;
   $('detail-info').hidden = false;
   $('player-pane').hidden = true;
   showView('view-detail');
@@ -1135,9 +1159,14 @@ function showUpNext(next) {
   upNextTarget = next;
   const name = next.enrichment?.episode_title || baseName(next.object_key);
   $('upnext-title').textContent = `Up next: ${epCode(next)} · ${name}`;
+  $('upnext').hidden = false;
+  $('upnext-play').hidden = autoplayNext;
+  if (!autoplayNext) { // no countdown, no auto-advance: stays until clicked/dismissed
+    $('upnext-count').textContent = '';
+    return;
+  }
   let left = 10;
   $('upnext-count').textContent = `Playing in ${left}s`;
-  $('upnext').hidden = false;
   upNextTimer = setInterval(() => {
     left--;
     if (left <= 0) { playUpNextNow(); return; }
@@ -1150,7 +1179,24 @@ function playUpNextNow() {
   goToEpisode(target, 'zero');
 }
 $('upnext').onclick = playUpNextNow;
+$('upnext-play').onclick = e => { e.stopPropagation(); playUpNextNow(); };
 $('upnext-cancel').onclick = e => { e.stopPropagation(); hideUpNext(); };
+
+// Autoplay-next toggle: global (not per-profile), persisted, default ON.
+// Flipping it mid-countdown takes effect immediately — the on-screen overlay
+// re-renders in the new mode (OFF cancels the countdown but keeps the overlay).
+let autoplayNext = localStorage.autoplayNext !== 'off';
+function setAutoplay(on) {
+  autoplayNext = on;
+  localStorage.autoplayNext = on ? 'on' : 'off';
+  const b = $('btn-autoplay');
+  b.textContent = 'Autoplay: ' + (on ? 'on' : 'off');
+  b.title = on ? 'Next episode starts automatically (10s countdown)'
+              : 'Playback stops at the end — you choose when to play the next episode';
+  if (upNextTarget && !$('upnext').hidden) showUpNext(upNextTarget);
+}
+$('btn-autoplay').onclick = () => setAutoplay(!autoplayNext);
+setAutoplay(autoplayNext); // paint the initial label
 
 // A natural end of playback (local 'ended', or cast IDLE/FINISHED). Episodes
 // with a next sibling: record the finish (position=duration → the server
@@ -1380,7 +1426,11 @@ setInterval(() => {
   if (currentItem && !casting() && method === 'transcode' && !endFired
       && !video.paused && !video.ended && isFinite(video.duration) && video.duration > 0
       && video.duration - video.currentTime < 0.5
-      && dur > 0 && position() >= dur - 3) {
+      // 10s margin, not 3: container metadata routinely claims a few
+      // seconds more than the stream actually carries (observed ~4s in
+      // this library), and the player-level stuck-at-final-fragment
+      // condition above is the real end signal.
+      && dur > 0 && position() >= dur - 10) {
     onPlaybackEnded();
   }
   // Seeked back after a natural end: re-arm so a later end counts again.
