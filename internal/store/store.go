@@ -39,6 +39,11 @@ type Item struct {
 	ProbeError         string            `json:"probe_error,omitempty"`
 	ProbeVersion       int               `json:"-"`
 	IdentityVersion    int               `json:"-"`
+	// Seq is the item's change sequence number: every write that touches the
+	// row (upsert, identity refresh, enrichment, sidecar re-attach) stamps it
+	// from a single monotonic counter (meta.feed_seq). The change feed uses it
+	// as a cursor; timestamps are never compared. Internal-only.
+	Seq int64 `json:"-"`
 	// SidecarSig fingerprints the external-subtitle sidecar set (keys+etags)
 	// the media_info was built with; internal-only, the scanner diffs it.
 	SidecarSig string `json:"-"`
@@ -90,8 +95,60 @@ func OpenLibrary(path string) (*Library, error) {
 	db.Exec(`ALTER TABLE items ADD COLUMN enrichment TEXT`)
 	db.Exec(`ALTER TABLE items ADD COLUMN enrichment_identity TEXT`)
 	db.Exec(`ALTER TABLE items ADD COLUMN sidecar_sig TEXT NOT NULL DEFAULT ''`)
+	// seq: change-feed sequence number. Pre-existing rows keep seq 0, which
+	// deliberately sorts before any real cursor — a first feed fetch without
+	// `since` sees the whole library, which is the correct initial sync.
+	db.Exec(`ALTER TABLE items ADD COLUMN seq INTEGER NOT NULL DEFAULT 0`)
+	if _, err := db.Exec(metaSchema); err != nil {
+		return nil, err
+	}
 	return &Library{db: db}, nil
 }
+
+// metaSchema holds named monotonic counters. feed_seq is the single change
+// counter (bumped once per written row, inside the writing transaction);
+// deletion_seq records the counter value at the most recent deletion so the
+// feed can demand a full resync instead of tracking per-row tombstones.
+const metaSchema = `
+	CREATE TABLE IF NOT EXISTS meta (
+		key TEXT PRIMARY KEY,
+		value INTEGER NOT NULL
+	)`
+
+// execQueryer is satisfied by both *sql.DB and *sql.Tx.
+type execQueryer interface {
+	Exec(query string, args ...any) (sql.Result, error)
+	QueryRow(query string, args ...any) *sql.Row
+}
+
+// nextSeq atomically bumps and returns the named counter.
+func nextSeq(q execQueryer, key string) (int64, error) {
+	var v int64
+	err := q.QueryRow(`
+		INSERT INTO meta (key, value) VALUES (?, 1)
+		ON CONFLICT(key) DO UPDATE SET value = value + 1
+		RETURNING value`, key).Scan(&v)
+	return v, err
+}
+
+func readSeq(q execQueryer, key string) (int64, error) {
+	var v int64
+	err := q.QueryRow(`SELECT value FROM meta WHERE key=?`, key).Scan(&v)
+	if err == sql.ErrNoRows {
+		return 0, nil
+	}
+	return v, err
+}
+
+// FeedSeq returns the current value of the library change counter — the
+// library half of a feed cursor. Every row written after this call will
+// carry a strictly greater seq.
+func (l *Library) FeedSeq() (int64, error) { return readSeq(l.db, "feed_seq") }
+
+// DeletionSeq returns the counter value stamped by the most recent
+// DeleteMissing that actually removed rows (0 if never). A feed cursor older
+// than this cannot know which works lost items, so the feed resyncs fully.
+func (l *Library) DeletionSeq() (int64, error) { return readSeq(l.db, "deletion_seq") }
 
 // Known returns object_key -> scan-relevant state for incremental scanning.
 func (l *Library) Known() (map[string]KnownState, error) {
@@ -124,8 +181,8 @@ func (l *Library) UpsertBatch(items []Item) error {
 	}
 	defer tx.Rollback()
 	stmt, err := tx.Prepare(`
-		INSERT INTO items (object_key, etag, size, media_info, identity, probe_error, probe_version, identity_version, sidecar_sig, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO items (object_key, etag, size, media_info, identity, probe_error, probe_version, identity_version, sidecar_sig, seq, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(object_key) DO UPDATE SET
 			etag=excluded.etag,
 			size=excluded.size,
@@ -136,6 +193,7 @@ func (l *Library) UpsertBatch(items []Item) error {
 			sidecar_sig=excluded.sidecar_sig,
 			identity=CASE WHEN items.identity_overridden=1
 			              THEN items.identity ELSE excluded.identity END,
+			seq=excluded.seq,
 			updated_at=excluded.updated_at`)
 	if err != nil {
 		return err
@@ -145,7 +203,11 @@ func (l *Library) UpsertBatch(items []Item) error {
 	for _, it := range items {
 		mi, _ := marshalNullable(it.MediaInfo)
 		id, _ := marshalNullable(it.Identity)
-		if _, err := stmt.Exec(it.ObjectKey, it.ETag, it.Size, mi, id, it.ProbeError, it.ProbeVersion, it.IdentityVersion, it.SidecarSig, now); err != nil {
+		seq, err := nextSeq(tx, "feed_seq")
+		if err != nil {
+			return err
+		}
+		if _, err := stmt.Exec(it.ObjectKey, it.ETag, it.Size, mi, id, it.ProbeError, it.ProbeVersion, it.IdentityVersion, it.SidecarSig, seq, now); err != nil {
 			return err
 		}
 	}
@@ -169,7 +231,7 @@ func (l *Library) UpdateIdentities(ups []IdentityUpdate, version int) error {
 	}
 	defer tx.Rollback()
 	stmt, err := tx.Prepare(`
-		UPDATE items SET identity=?, identity_version=?
+		UPDATE items SET identity=?, identity_version=?, seq=?
 		WHERE object_key=? AND identity_overridden=0`)
 	if err != nil {
 		return err
@@ -180,7 +242,11 @@ func (l *Library) UpdateIdentities(ups []IdentityUpdate, version int) error {
 		if err != nil {
 			return err
 		}
-		if _, err := stmt.Exec(string(b), version, u.ObjectKey); err != nil {
+		seq, err := nextSeq(tx, "feed_seq")
+		if err != nil {
+			return err
+		}
+		if _, err := stmt.Exec(string(b), version, seq, u.ObjectKey); err != nil {
 			return err
 		}
 	}
@@ -214,8 +280,12 @@ func (l *Library) UpdateSidecars(ups []SidecarUpdate) error {
 		if err != nil {
 			return err
 		}
+		seq, err := nextSeq(tx, "feed_seq")
+		if err != nil {
+			return err
+		}
 		if !mi.Valid {
-			if _, err := tx.Exec(`UPDATE items SET sidecar_sig=? WHERE object_key=?`, u.SidecarSig, u.ObjectKey); err != nil {
+			if _, err := tx.Exec(`UPDATE items SET sidecar_sig=?, seq=? WHERE object_key=?`, u.SidecarSig, seq, u.ObjectKey); err != nil {
 				return err
 			}
 			continue
@@ -229,8 +299,8 @@ func (l *Library) UpdateSidecars(ups []SidecarUpdate) error {
 		if err != nil {
 			return err
 		}
-		if _, err := tx.Exec(`UPDATE items SET media_info=?, sidecar_sig=? WHERE object_key=?`,
-			string(b), u.SidecarSig, u.ObjectKey); err != nil {
+		if _, err := tx.Exec(`UPDATE items SET media_info=?, sidecar_sig=?, seq=? WHERE object_key=?`,
+			string(b), u.SidecarSig, seq, u.ObjectKey); err != nil {
 			return err
 		}
 	}
@@ -284,10 +354,25 @@ func (l *Library) DeleteMissing(present map[string]bool) (int64, error) {
 			return 0, err
 		}
 	}
+	// Deletions don't leave a row to carry a seq, and per-row tombstones are
+	// more machinery than this feed needs. Instead: stamp the counter value at
+	// which the deletion happened; a feed cursor older than deletion_seq gets
+	// a full resync (every work), which is always correct, just not minimal.
+	if len(gone) > 0 {
+		seq, err := nextSeq(tx, "feed_seq")
+		if err != nil {
+			return 0, err
+		}
+		if _, err := tx.Exec(`
+			INSERT INTO meta (key, value) VALUES ('deletion_seq', ?)
+			ON CONFLICT(key) DO UPDATE SET value=excluded.value`, seq); err != nil {
+			return 0, err
+		}
+	}
 	return int64(len(gone)), tx.Commit()
 }
 
-const itemColumns = `id, object_key, etag, size, media_info, identity, identity_overridden, enrichment, probe_error`
+const itemColumns = `id, object_key, etag, size, media_info, identity, identity_overridden, enrichment, probe_error, seq`
 
 func (l *Library) ListItems() ([]Item, error) {
 	rows, err := l.db.Query(`SELECT ` + itemColumns + ` FROM items ORDER BY object_key`)
@@ -334,7 +419,7 @@ func scanItem(rows *sql.Rows) (Item, error) {
 	var it Item
 	var mi, ident, enr sql.NullString
 	var overridden int
-	if err := rows.Scan(&it.ID, &it.ObjectKey, &it.ETag, &it.Size, &mi, &ident, &overridden, &enr, &it.ProbeError); err != nil {
+	if err := rows.Scan(&it.ID, &it.ObjectKey, &it.ETag, &it.Size, &mi, &ident, &overridden, &enr, &it.ProbeError, &it.Seq); err != nil {
 		return it, err
 	}
 	it.IdentityOverridden = overridden == 1
@@ -397,19 +482,43 @@ func (l *Library) SetEnrichment(id int64, e *model.Enrichment, ident *model.Iden
 	if err != nil {
 		return err
 	}
-	_, err = l.db.Exec(`UPDATE items SET enrichment=?, enrichment_identity=? WHERE id=?`,
-		string(eb), string(ib), id)
-	return err
+	tx, err := l.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	seq, err := nextSeq(tx, "feed_seq")
+	if err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`UPDATE items SET enrichment=?, enrichment_identity=?, seq=? WHERE id=?`,
+		string(eb), string(ib), seq, id); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // OverrideIdentity persists a user correction; scans will never undo it.
+// It bumps the item's seq too — an identity change can regroup works, and
+// the change feed must see it.
 func (l *Library) OverrideIdentity(id int64, ident model.Identity) error {
 	b, err := json.Marshal(ident)
 	if err != nil {
 		return err
 	}
-	_, err = l.db.Exec(`UPDATE items SET identity=?, identity_overridden=1 WHERE id=?`, string(b), id)
-	return err
+	tx, err := l.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	seq, err := nextSeq(tx, "feed_seq")
+	if err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`UPDATE items SET identity=?, identity_overridden=1, seq=? WHERE id=?`, string(b), seq, id); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 type State struct{ db *sql.DB }
@@ -438,6 +547,12 @@ func OpenState(path string) (*State, error) {
 			created_at REAL NOT NULL
 		)`)
 	if err != nil {
+		return nil, err
+	}
+	// seq: change-feed sequence for playback rows, its own counter in this
+	// database's meta table (state.db and library.db never share a tx).
+	db.Exec(`ALTER TABLE playback_state ADD COLUMN seq INTEGER NOT NULL DEFAULT 0`)
+	if _, err := db.Exec(metaSchema); err != nil {
 		return nil, err
 	}
 	return &State{db: db}, nil
@@ -469,14 +584,26 @@ func (s *State) CreateUser(name string) error {
 }
 
 func (s *State) SetPosition(itemID int64, clientID string, pos float64) error {
-	_, err := s.db.Exec(`
-		INSERT INTO playback_state (item_id, client_id, position_seconds, updated_at)
-		VALUES (?, ?, ?, ?)
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	seq, err := nextSeq(tx, "feed_seq")
+	if err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`
+		INSERT INTO playback_state (item_id, client_id, position_seconds, seq, updated_at)
+		VALUES (?, ?, ?, ?, ?)
 		ON CONFLICT(item_id, client_id) DO UPDATE SET
 			position_seconds=excluded.position_seconds,
+			seq=excluded.seq,
 			updated_at=excluded.updated_at`,
-		itemID, clientID, pos, float64(time.Now().UnixMilli())/1000)
-	return err
+		itemID, clientID, pos, seq, float64(time.Now().UnixMilli())/1000); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *State) GetPosition(itemID int64, clientID string) (float64, error) {
@@ -488,3 +615,44 @@ func (s *State) GetPosition(itemID int64, clientID string) (float64, error) {
 	}
 	return pos, err
 }
+
+// Position is one playback-state row: where one profile (client_id) is in
+// one item, plus the change seq the feed cursors on.
+type Position struct {
+	ItemID          int64
+	ClientID        string
+	PositionSeconds float64
+	UpdatedAt       float64
+	Seq             int64
+}
+
+func (s *State) queryPositions(where string, args ...any) ([]Position, error) {
+	rows, err := s.db.Query(`SELECT item_id, client_id, position_seconds, updated_at, seq FROM playback_state`+where, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Position
+	for rows.Next() {
+		var p Position
+		if err := rows.Scan(&p.ItemID, &p.ClientID, &p.PositionSeconds, &p.UpdatedAt, &p.Seq); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+// PositionsFor returns every playback row for one profile.
+func (s *State) PositionsFor(clientID string) ([]Position, error) {
+	return s.queryPositions(` WHERE client_id=?`, clientID)
+}
+
+// AllPositions returns every playback row across all profiles.
+func (s *State) AllPositions() ([]Position, error) {
+	return s.queryPositions(``)
+}
+
+// FeedSeq returns the current value of the playback change counter — the
+// state half of a feed cursor.
+func (s *State) FeedSeq() (int64, error) { return readSeq(s.db, "feed_seq") }

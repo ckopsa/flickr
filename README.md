@@ -65,6 +65,24 @@ a handful of architectural decisions (see design notes below):
    `state.db` (`/api/users`); clients pass the profile name as `client_id` to
    the unchanged progress API. `POST /api/telemetry` appends any JSON object
    to `data/telemetry.jsonl` for client-side error forensics.
+12. **Self-description feed** — the library can describe itself as WORKS
+   rather than files: `internal/works` purely derives one work per movie and
+   one per show (episodes grouped by identity title, case-insensitively;
+   unidentifiable files stay visible as `file:<id>` works), keyed by TMDB id
+   (`tmdb:<id>`) with a deterministic slug fallback (`show:ninjago`,
+   `movie:frozen-2013`). Per-audience progress is recomputed on demand, never
+   stored, and always ships the machine-readable fraction beside the
+   authority's own human text (`0.31` + `"S02E05 · 12:30"`) — an episode
+   counts watched at ≥90% of its duration, the furthest partial episode adds
+   its fraction, a work finishes at ≥0.9. Change detection uses monotonic
+   sequence counters, not timestamps: every library/playback row write stamps
+   a per-database `seq`, and the feed cursor is the counter pair
+   `l<libSeq>.s<stateSeq>` — a work is "changed" when any member item or any
+   playback row on it outruns the cursor. Deletions don't leave tombstones;
+   they bump a deletion mark that forces the next fetch into a full resync
+   (always correct, just not minimal). Rows from before the migration carry
+   seq 0, so a first cursorless fetch returns everything — the correct
+   initial sync.
 
 ## Run
 
@@ -84,6 +102,10 @@ locally except HLS segments in `data/streams/`.
 |---|---|
 | `POST /api/scan`, `GET /api/scan` | trigger / observe incremental scan (enrichment runs after) |
 | `GET /api/items` | library listing (incl. `media_info.subtitles` and `enrichment`) |
+| `GET /api/works` | library as works: movies + whole shows (+ stray files), title-sorted, with `work_key`, counts, and a `representative_item_id` for artwork |
+| `GET /api/works/{key}/items` | one work's member items (episodes in season/episode order); 404 for unknown keys |
+| `GET /api/continue?client_id=NAME` | a profile's resume list: most-recent first, max 20, finished (≥90%) and <5 s positions excluded, one entry per work |
+| `GET /api/feed/media?since=CURSOR` | change feed: works changed since the cursor with per-audience progress; response carries the next cursor (`l<n>.s<n>`); no `since` = everything |
 | `POST /api/items/{id}/decision` | dry-run: decision + trace, no side effects |
 | `POST /api/items/{id}/play` | decide and act: presigned URL (direct) or HLS session (transcode) |
 | `POST /api/items/{id}/identity` | user identity override (persists across scans) |

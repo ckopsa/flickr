@@ -31,6 +31,7 @@ import (
 	"flickr/internal/scanner"
 	"flickr/internal/store"
 	"flickr/internal/tmdb"
+	"flickr/internal/works"
 )
 
 // sessionIdleTimeout is how long a transcode session may go without any
@@ -128,6 +129,10 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/items", srv.handleListItems)
+	mux.HandleFunc("GET /api/works", srv.handleWorks)
+	mux.HandleFunc("GET /api/works/{key}/items", srv.handleWorkItems)
+	mux.HandleFunc("GET /api/continue", srv.handleContinue)
+	mux.HandleFunc("GET /api/feed/media", srv.handleFeed)
 	mux.HandleFunc("POST /api/items/{id}/decision", srv.handleDecision)
 	mux.HandleFunc("POST /api/items/{id}/play", srv.handlePlay)
 	mux.HandleFunc("POST /api/items/{id}/identity", srv.handleOverrideIdentity)
@@ -233,6 +238,122 @@ func (s *server) handleListItems(w http.ResponseWriter, r *http.Request) {
 		items = []store.Item{}
 	}
 	writeJSON(w, items)
+}
+
+// buildWorks derives the works projection fresh from the library on every
+// request — pure derivation, nothing cached, nothing stored.
+func (s *server) buildWorks() ([]works.Work, error) {
+	items, err := s.library.ListItems()
+	if err != nil {
+		return nil, err
+	}
+	return works.Build(items), nil
+}
+
+// handleWorks lists the library as works (movies, whole shows, stray files).
+func (s *server) handleWorks(w http.ResponseWriter, r *http.Request) {
+	ws, err := s.buildWorks()
+	if err != nil {
+		httpErr(w, 500, err)
+		return
+	}
+	if ws == nil {
+		ws = []works.Work{}
+	}
+	writeJSON(w, ws)
+}
+
+// handleWorkItems lists one work's member items (episodes in season/episode
+// order), in the same JSON shape as /api/items.
+func (s *server) handleWorkItems(w http.ResponseWriter, r *http.Request) {
+	ws, err := s.buildWorks()
+	if err != nil {
+		httpErr(w, 500, err)
+		return
+	}
+	wk := works.ByKey(ws)[r.PathValue("key")]
+	if wk == nil {
+		httpErr(w, 404, fmt.Errorf("no such work"))
+		return
+	}
+	writeJSON(w, wk.Items)
+}
+
+// handleContinue is a profile's resume list: most-recent first, capped,
+// finished and sub-5s positions dropped, one entry per work.
+func (s *server) handleContinue(w http.ResponseWriter, r *http.Request) {
+	clientID := r.URL.Query().Get("client_id")
+	if clientID == "" {
+		httpErr(w, 400, fmt.Errorf("client_id is required"))
+		return
+	}
+	ws, err := s.buildWorks()
+	if err != nil {
+		httpErr(w, 500, err)
+		return
+	}
+	positions, err := s.state.PositionsFor(clientID)
+	if err != nil {
+		httpErr(w, 500, err)
+		return
+	}
+	entries := works.ContinueList(ws, positions, 20)
+	if entries == nil {
+		entries = []works.ContinueEntry{}
+	}
+	writeJSON(w, entries)
+}
+
+// handleFeed is the change feed: works changed since the `since` cursor
+// (absent = everything), each with per-audience progress, plus the cursor to
+// pass next time. Cursors are monotonic sequence pairs ("l<lib>.s<state>"),
+// never timestamps.
+func (s *server) handleFeed(w http.ResponseWriter, r *http.Request) {
+	var since *works.Cursor
+	if raw := r.URL.Query().Get("since"); raw != "" {
+		c, err := works.ParseCursor(raw)
+		if err != nil {
+			httpErr(w, 400, err)
+			return
+		}
+		since = &c
+	}
+	// Read both counters BEFORE the item/position reads: writes that land
+	// mid-derivation then reappear after the next cursor (duplicates are
+	// harmless, gaps would not be).
+	libSeq, err := s.library.FeedSeq()
+	if err != nil {
+		httpErr(w, 500, err)
+		return
+	}
+	stateSeq, err := s.state.FeedSeq()
+	if err != nil {
+		httpErr(w, 500, err)
+		return
+	}
+	deletionSeq, err := s.library.DeletionSeq()
+	if err != nil {
+		httpErr(w, 500, err)
+		return
+	}
+	ws, err := s.buildWorks()
+	if err != nil {
+		httpErr(w, 500, err)
+		return
+	}
+	positions, err := s.state.AllPositions()
+	if err != nil {
+		httpErr(w, 500, err)
+		return
+	}
+	changed := works.Feed(ws, positions, since, deletionSeq)
+	if changed == nil {
+		changed = []works.FeedWork{}
+	}
+	writeJSON(w, map[string]any{
+		"cursor": works.Cursor{Lib: libSeq, State: stateSeq}.String(),
+		"works":  changed,
+	})
 }
 
 // decisionInput is the request body for decision/play: the client's

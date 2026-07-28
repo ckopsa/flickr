@@ -50,6 +50,7 @@
   .card .c-sub { font-size: 11px; color: #9a9daa; margin-top: 2px; }
   .card .c-tech { font-size: 10px; color: #6f7280; margin-top: 2px; font-family: ui-monospace, monospace; }
   #empty { padding: 40px; color: #9a9daa; font-size: 14px; }
+  #view-loading { padding: 40px; color: #9a9daa; font-size: 14px; }
 
   /* genre chip row */
   #genre-row { display: flex; gap: 8px; padding: 12px 20px 0; overflow-x: auto; scrollbar-width: thin; }
@@ -66,6 +67,7 @@
   .cw-card .cw-bar { height: 3px; background: #2a2c33; border-radius: 2px; margin-top: 4px; overflow: hidden; }
   .cw-card .cw-bar > div { height: 100%; background: #5b8def; }
   .cw-card .c-title { font-size: 12px; margin-top: 5px; font-weight: 600; line-height: 1.3; }
+  .cw-card .c-sub { font-size: 11px; color: #9a9daa; margin-top: 2px; }
 
   /* enriched episode rows */
   .item.enriched { display: flex; gap: 12px; align-items: flex-start; }
@@ -163,6 +165,9 @@
 </div>
 
 <main>
+  <!-- route loading (deep link waiting on /api/items) -->
+  <div id="view-loading" hidden>Loading…</div>
+
   <!-- library: poster grid -->
   <div id="view-library">
     <div id="genre-row" hidden></div>
@@ -230,6 +235,7 @@ let usersApiLive = true;   // false => /api/users 404'd, localStorage-only profi
 let hls = null, sessionId = null, currentItem = null, seekOffset = 0, method = null;
 let baseUrl = location.origin, remotePlayer = null, remoteController = null;
 let allItems = [], currentShow = null, detailItem = null;
+let itemsLoaded = false, itemsReady = null; // deep links await the /api/items fetch
 let selectedSubOrdinal = null; // per-session TEXT subtitle choice, default Off
 let burnSubOrdinal = null;     // embedded bitmap track burned in server-side (subtitle_burn)
 let selectedAudioOrdinal = null; // per-session audio-track choice, sent as audio_track in /play
@@ -706,7 +712,7 @@ function renderGrid() {
       title: first.enrichment?.title || name,
       sub: `${seasons} season${seasons > 1 ? 's' : ''} · ${eps.length} episode${eps.length > 1 ? 's' : ''}`,
       tech: fmtRes(first.media_info),
-      onClick: () => openShow(name),
+      onClick: () => navigate(showHash(name)),
     }));
     count++;
   }
@@ -720,7 +726,7 @@ function renderGrid() {
       title: t,
       sub: year ? String(year) : '',
       tech: techLine(it),
-      onClick: () => openDetail(it, null),
+      onClick: () => navigate(itemHash(it.id)),
     }));
     count++;
   }
@@ -731,15 +737,17 @@ $('search').oninput = renderGrid;
 
 async function loadItems() {
   allItems = await api('/api/items');
+  itemsLoaded = true;
   renderGenreRow();
   renderGrid();
   renderContinueWatching();
 }
 
 // ---------------------------------------------------------------------------
-// continue watching (Task C): progress is only checked for items this profile
-// has TOUCHED (per-profile recently-played id list in localStorage, max 20) —
-// one GET /api/progress per touched item, never the whole library.
+// continue watching: one GET /api/continue?client_id=… (server-derived, max 20,
+// most-recent first, excludes finished/<5s). If that endpoint 404s (older
+// server), fall back to the original mechanism: per-profile recently-played id
+// list in localStorage + one GET /api/progress per touched item.
 // ---------------------------------------------------------------------------
 function recentKey() { return 'recent:' + (clientId || 'anonymous'); }
 function recentIds() {
@@ -753,27 +761,15 @@ function recordRecentlyPlayed(itemId) {
 }
 
 let cwRenderSeq = 0;
-async function renderContinueWatching() {
-  const seq = ++cwRenderSeq;
+let continueApiDead = false; // /api/continue 404'd => older server, use localStorage path
+
+// entries: [{ id, title, label, pct }] — click navigates to the item route and
+// auto-resumes (playItem picks up saved progress itself).
+function renderCwCards(entries) {
   const box = $('cw'), row = $('cw-row');
-  const byId = new Map(allItems.map(it => [it.id, it]));
-  const items = recentIds().map(id => byId.get(id)).filter(Boolean);
-  if (!items.length) { box.hidden = true; row.innerHTML = ''; return; }
-  const cid = encodeURIComponent(clientId || 'anonymous');
-  const entries = (await Promise.all(items.map(async it => {
-    try {
-      const { position_seconds } = await api(`/api/progress?item_id=${it.id}&client_id=${cid}`);
-      const dur = it.media_info?.duration_seconds;
-      if (position_seconds > 5 && (!dur || position_seconds < dur * 0.9)) {
-        return { it, pos: position_seconds, dur };
-      }
-    } catch (e) { /* no progress saved */ }
-    return null;
-  }))).filter(Boolean);
-  if (seq !== cwRenderSeq) return; // a newer render superseded this one
   if (!entries.length) { box.hidden = true; row.innerHTML = ''; return; }
   row.innerHTML = '';
-  for (const { it, pos, dur } of entries) {
+  for (const en of entries) {
     const c = document.createElement('div');
     c.className = 'cw-card';
     const wrap = document.createElement('div');
@@ -781,36 +777,127 @@ async function renderContinueWatching() {
     const img = document.createElement('img');
     img.loading = 'lazy';
     img.alt = '';
-    img.src = `/api/items/${it.id}/poster`;
+    img.src = `/api/items/${en.id}/poster`;
     img.onerror = () => {
       img.remove();
       wrap.classList.add('text-tile');
-      wrap.innerHTML = `<div class="tile-title">${esc(itemTitle(it))}</div>`;
+      wrap.innerHTML = `<div class="tile-title">${esc(en.title)}</div>` +
+        (en.label ? `<div class="tile-sub">${esc(en.label)}</div>` : '');
     };
     wrap.appendChild(img);
     c.appendChild(wrap);
-    const pct = dur ? Math.min(100, pos / dur * 100) : 0;
     c.insertAdjacentHTML('beforeend',
-      `<div class="cw-bar"><div style="width:${pct.toFixed(1)}%"></div></div>` +
-      `<div class="c-title">${esc(itemTitle(it))}</div>`);
-    c.onclick = () => { // resume: playItem picks up saved progress itself
-      openDetail(it, it.identity?.kind === 'episode' ? it.identity.title : null);
-      playItem(it, null);
-    };
+      `<div class="cw-bar"><div style="width:${en.pct.toFixed(1)}%"></div></div>` +
+      `<div class="c-title">${esc(en.title)}</div>` +
+      (en.label ? `<div class="c-sub">${esc(en.label)}</div>` : ''));
+    c.onclick = () => { pendingAutoplay = en.id; navigate(itemHash(en.id)); };
     row.appendChild(c);
   }
   box.hidden = false;
 }
 
+async function renderContinueWatching() {
+  const seq = ++cwRenderSeq;
+  const cid = encodeURIComponent(clientId || 'anonymous');
+  // preferred: one server call, already sorted/filtered (max 20, unfinished)
+  if (!continueApiDead) {
+    try {
+      const list = await api(`/api/continue?client_id=${cid}`);
+      if (seq !== cwRenderSeq) return; // a newer render superseded this one
+      renderCwCards((Array.isArray(list) ? list : []).map(e => ({
+        id: e.item_id,
+        title: e.title || '',
+        label: e.label && e.label !== e.title ? e.label : '', // movies: label duplicates title
+        pct: e.duration_seconds > 0 ? Math.min(100, e.position_seconds / e.duration_seconds * 100) : 0,
+      })));
+      return;
+    } catch (e) {
+      if (e.status !== 404) { if (seq === cwRenderSeq) renderCwCards([]); return; }
+      continueApiDead = true; // older server — fall through to the localStorage path
+    }
+  }
+  // fallback (older server): per-profile recent id list + one /api/progress each
+  const byId = new Map(allItems.map(it => [it.id, it]));
+  const items = recentIds().map(id => byId.get(id)).filter(Boolean);
+  if (!items.length) { if (seq === cwRenderSeq) renderCwCards([]); return; }
+  const entries = (await Promise.all(items.map(async it => {
+    try {
+      const { position_seconds } = await api(`/api/progress?item_id=${it.id}&client_id=${cid}`);
+      const dur = it.media_info?.duration_seconds;
+      if (position_seconds > 5 && (!dur || position_seconds < dur * 0.9)) {
+        return { id: it.id, title: itemTitle(it), label: '',
+                 pct: dur ? Math.min(100, position_seconds / dur * 100) : 0 };
+      }
+    } catch (e) { /* no progress saved */ }
+    return null;
+  }))).filter(Boolean);
+  if (seq !== cwRenderSeq) return; // a newer render superseded this one
+  renderCwCards(entries);
+}
+
 // ---------------------------------------------------------------------------
-// navigation
+// navigation — location.hash is the single source of truth:
+//   #/                 library grid
+//   #/show/<title>     episode list (title encodeURIComponent'd)
+//   #/item/<id>        detail pane (back target: its show for episodes, else grid)
+// Every navigation action just sets the hash; the hashchange listener renders.
 // ---------------------------------------------------------------------------
+let pendingAutoplay = null; // item id to auto-resume once its route renders
+let routeSeq = 0;
+
+function showHash(name) { return '#/show/' + encodeURIComponent(name); }
+function itemHash(id) { return '#/item/' + id; }
+function navigate(hash) {
+  if (location.hash === hash) applyRoute(); // same hash: no hashchange event fires
+  else location.hash = hash;
+}
+function parseRoute() {
+  const h = location.hash || '#/';
+  if (h.startsWith('#/show/')) {
+    try { return { view: 'show', name: decodeURIComponent(h.slice(7)) }; }
+    catch (e) { return { view: 'library' }; }
+  }
+  const m = h.match(/^#\/item\/(\d+)$/);
+  if (m) return { view: 'item', id: Number(m[1]) };
+  return { view: 'library' };
+}
+
+async function applyRoute() {
+  const seq = ++routeSeq;
+  const r = parseRoute();
+  if (r.view !== 'library' && !itemsLoaded) {
+    showView('view-loading'); // deep link: brief loading state while items fetch
+    await itemsReady;
+    if (seq !== routeSeq) return; // superseded by a newer navigation
+  }
+  // leaving the item that's playing (browser back/forward included): stop it
+  if (currentItem && !(r.view === 'item' && r.id === currentItem.id)) closePlayer();
+  if (r.view === 'show') {
+    const { shows } = buildLibrary(allItems);
+    if (!shows.has(r.name)) { pendingAutoplay = null; location.replace('#/'); return; }
+    renderShow(r.name);
+  } else if (r.view === 'item') {
+    const it = allItems.find(i => i.id === r.id);
+    if (!it) { pendingAutoplay = null; location.replace('#/'); return; }
+    if (currentItem && currentItem.id === it.id && !$('player-pane').hidden) {
+      showView('view-detail'); // already playing this item: keep the player as-is
+    } else {
+      renderDetail(it);
+      if (pendingAutoplay === it.id) playItem(it, null);
+    }
+  } else {
+    showView('view-library');
+  }
+  pendingAutoplay = null;
+}
+window.addEventListener('hashchange', applyRoute);
+
 function showView(id) {
-  for (const v of ['view-library', 'view-show', 'view-detail']) $(v).hidden = v !== id;
+  for (const v of ['view-loading', 'view-library', 'view-show', 'view-detail']) $(v).hidden = v !== id;
   if (id === 'view-library') renderContinueWatching(); // refresh resume points
 }
 
-function openShow(name) {
+function renderShow(name) {
   currentShow = name;
   const { shows } = buildLibrary(allItems);
   const eps = shows.get(name) || [];
@@ -846,19 +933,20 @@ function openShow(name) {
         (en.title && en.title !== name ? ` · ${esc(en.title)}` : '') +
         `</div><div class="meta">${esc(techLine(ep))}</div>`;
     }
-    div.onclick = () => openDetail(ep, name);
+    div.onclick = () => navigate(itemHash(ep.id));
     list.appendChild(div);
   }
   showView('view-show');
 }
-$('show-back').onclick = () => showView('view-library');
+$('show-back').onclick = () => navigate('#/');
 
 // ---------------------------------------------------------------------------
 // detail + playback pane (Task C)
 // ---------------------------------------------------------------------------
-function openDetail(item, fromShow) {
+function renderDetail(item) {
   detailItem = item;
-  currentShow = fromShow;
+  // back target: an episode's show view, else the grid
+  currentShow = item.identity?.kind === 'episode' ? item.identity.title : null;
   const poster = $('detail-poster');
   poster.hidden = false;
   poster.onerror = () => { poster.hidden = true; };
@@ -893,20 +981,21 @@ function openDetail(item, fromShow) {
 
 $('detail-play').onclick = () => playItem(detailItem, null);
 
+// leave the player: stop playback and reveal detail info again (also invoked
+// by applyRoute when browser back/forward navigates away from a playing item)
+function closePlayer() {
+  if (casting()) remoteController.stop();
+  else { video.pause(); video.removeAttribute('src'); video.load(); }
+  stopSession();
+  currentItem = null;
+  $('player-pane').hidden = true;
+  $('detail-info').hidden = false;
+  renderContinueWatching(); // playback session ended: refresh resume points
+}
+
 $('detail-back').onclick = () => {
-  if (!$('player-pane').hidden) {
-    // leave the player: stop and reveal detail info again
-    if (casting()) remoteController.stop();
-    else { video.pause(); video.removeAttribute('src'); video.load(); }
-    stopSession();
-    currentItem = null;
-    $('player-pane').hidden = true;
-    $('detail-info').hidden = false;
-  } else if (currentShow) {
-    showView('view-show');
-  } else {
-    showView('view-library');
-  }
+  if (!$('player-pane').hidden) closePlayer(); // no route change: still on the item
+  else navigate(currentShow ? showHash(currentShow) : '#/');
 };
 
 // Play with resume: fetch saved progress (keyed by profile name) unless an
@@ -1056,18 +1145,20 @@ async function startPlayback(item, seekSeconds) {
     }
     return;
   }
+  // play() rejects with AbortError if a newer load/stop interrupts it
+  // (seek-restart, route change) — that interruption is intentional here.
   if (!isHls) {
     video.src = resp.url;
     if (seekSeconds) video.currentTime = seekSeconds;
-    video.play();
+    video.play().catch(() => {});
   } else if (Hls.isSupported()) {
     hls = new Hls();
     hls.loadSource(resp.url);
     hls.attachMedia(video);
-    video.play();
+    video.play().catch(() => {});
   } else {
     video.src = resp.url;
-    video.play();
+    video.play().catch(() => {});
   }
   // subtitles must be re-attached after every (re)load, incl. seek-restarts
   attachLocalTracks(item);
@@ -1100,7 +1191,7 @@ function syncPlayButton() {
 }
 $('btn-play').onclick = () => {
   if (casting()) remoteController.playOrPause();
-  else video.paused ? video.play() : video.pause();
+  else video.paused ? video.play().catch(() => {}) : video.pause();
 };
 $('btn-back').onclick = () => seekTo(position() - 10);
 $('btn-fwd').onclick = () => seekTo(position() + 30);
@@ -1108,6 +1199,7 @@ $('btn-stop').onclick = () => {
   if (casting()) remoteController.stop();
   else { video.pause(); video.removeAttribute('src'); video.load(); }
   stopSession();
+  renderContinueWatching(); // playback session ended: refresh resume points
 };
 $('vol').oninput = (e) => {
   const v = parseFloat(e.target.value);
@@ -1164,7 +1256,9 @@ if ('serviceWorker' in navigator) {
 window.addEventListener('beforeunload', stopSession);
 if (clientId) { $('profile-chip').textContent = '👤 ' + clientId; }
 else openGate();
-loadItems();
+if (!location.hash) history.replaceState(null, '', '#/'); // canonical library route
+itemsReady = loadItems().catch(e => console.warn('items load failed', e));
+applyRoute(); // honor the current hash (deep links included) on first load
 api('/api/system').then(sys => {
   baseUrl = sys.base_url || location.origin;
   const el = $('hw');
