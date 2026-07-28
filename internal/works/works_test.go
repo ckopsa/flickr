@@ -248,6 +248,65 @@ func TestContinueList(t *testing.T) {
 	}
 }
 
+// A finished episode (≥90%) advances the show's entry to the next episode
+// ("up next") instead of dropping the show from the list.
+func TestContinueListUpNext(t *testing.T) {
+	e1 := withDuration(episode(1, "s/n/e1.mkv", "Ninjago", 1, 1), 1000)
+	e2 := withEnrichment(withDuration(episode(2, "s/n/e2.mkv", "Ninjago", 1, 2), 1000),
+		model.Enrichment{TMDBID: 40075, Title: "Ninjago", EpisodeTitle: "Home"})
+	e3 := withDuration(episode(3, "s/n/e3.mkv", "Ninjago", 1, 3), 1000)
+	done := withDuration(movie(4, "m/Done.mkv", "Done", 0), 1000)
+	ws := Build([]store.Item{e1, e2, e3, done})
+
+	for _, tc := range []struct {
+		name      string
+		positions []store.Position
+		wantLen   int
+		wantItem  int64
+		wantPos   float64
+		wantLabel string
+	}{
+		{"mid-episode unchanged",
+			[]store.Position{pos(1, 300, 10)}, 1, 1, 300, "S01E01 · e1.mkv"},
+		{"finished mid-season advances to next at 0",
+			[]store.Position{pos(1, 950, 10)}, 1, 2, 0, "S01E02 · Home"},
+		{"finished finale excluded",
+			[]store.Position{pos(3, 950, 10)}, 0, 0, 0, ""},
+		{"finished movie still excluded",
+			[]store.Position{pos(4, 950, 10)}, 0, 0, 0, ""},
+		{"next's own existing progress wins",
+			[]store.Position{pos(1, 950, 20), pos(2, 300, 5)}, 1, 2, 300, "S01E02 · Home"},
+		{"next's finished progress does not resurrect: start at 0",
+			[]store.Position{pos(1, 950, 20), pos(2, 950, 5)}, 1, 2, 0, "S01E02 · Home"},
+	} {
+		got := ContinueList(ws, tc.positions, 20)
+		if len(got) != tc.wantLen {
+			t.Errorf("%s: got %d entries: %+v", tc.name, len(got), got)
+			continue
+		}
+		if tc.wantLen == 0 {
+			continue
+		}
+		e := got[0]
+		if e.ItemID != tc.wantItem || e.PositionSeconds != tc.wantPos || e.Label != tc.wantLabel {
+			t.Errorf("%s: entry %+v, want item %d pos %v label %q", tc.name, e, tc.wantItem, tc.wantPos, tc.wantLabel)
+		}
+		// The advanced entry keeps the show's work key and duration of the entry item.
+		if e.WorkKey != "tmdb:40075" || e.DurationSeconds != 1000 {
+			t.Errorf("%s: work key/duration: %+v", tc.name, e)
+		}
+	}
+
+	// Recency anchor: the finished episode's UpdatedAt sorts the advanced
+	// entry, so a just-finished show outranks an older mid-movie position.
+	frozen := withDuration(movie(5, "m/Frozen.mkv", "Frozen", 2013), 6000)
+	ws2 := Build([]store.Item{e1, e2, e3, frozen})
+	got := ContinueList(ws2, []store.Position{pos(5, 2000, 50), pos(1, 950, 100)}, 20)
+	if len(got) != 2 || got[0].ItemID != 2 || got[0].UpdatedAt != 100 || got[1].ItemID != 5 {
+		t.Errorf("recency: %+v", got)
+	}
+}
+
 func TestCursorRoundtrip(t *testing.T) {
 	c := Cursor{Lib: 1042, State: 388}
 	if c.String() != "l1042.s388" {

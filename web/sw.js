@@ -1,7 +1,7 @@
 // flickr PWA service worker — app-shell cache only.
 // HARD RULE: /api and /streams are NEVER cached (staleness would be poison);
 // cross-origin (CDN hls.js / cast_sender) is never touched either.
-const CACHE = 'flickr-shell-v2';
+const CACHE = 'flickr-shell-v3';
 const SHELL = ['/', '/index.html', '/manifest.json', '/icon-192.png', '/icon-512.png'];
 
 self.addEventListener('install', (e) => {

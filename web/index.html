@@ -120,6 +120,13 @@
   #chapters { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
   #chapters button { font-size: 12px; padding: 4px 10px; }
   #status { font-size: 13px; color: #9a9daa; margin: 10px 0; }
+  /* up-next auto-advance overlay */
+  #upnext { position: fixed; right: 24px; bottom: 24px; z-index: 60; background: #1b1d24; border: 1px solid #3a3d47;
+    border-radius: 10px; padding: 14px 18px; max-width: 340px; cursor: pointer; box-shadow: 0 8px 30px rgba(0,0,0,0.6); }
+  #upnext:hover { border-color: #5b8def; }
+  #upnext-title { font-size: 14px; font-weight: 600; }
+  #upnext-count { font-size: 12px; color: #9a9daa; margin-top: 4px; font-variant-numeric: tabular-nums; }
+  #upnext-cancel { margin-top: 10px; }
   .badge { display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 10px; margin-right: 6px; }
   .badge.direct { background: #14432a; color: #6ee7a0; }
   .badge.transcode { background: #4a3413; color: #f0b45c; }
@@ -209,10 +216,12 @@
       <div id="scrub"><div class="rail"></div><div class="avail"></div><div class="fill"></div><div id="thumb" hidden><div id="thumb-img"></div><div id="thumb-time"></div></div></div>
       <div id="timebar"><span id="t-now">0:00</span><span id="t-total">0:00</span></div>
       <div id="controls">
+        <button id="btn-prev-ep" hidden>⏮ Prev</button>
         <button id="btn-play" title="Play/Pause">⏵</button>
         <button id="btn-back" title="Back 10s">⏪</button>
         <button id="btn-fwd" title="Forward 30s">⏩</button>
         <button id="btn-stop" title="Stop">⏹</button>
+        <button id="btn-next-ep" hidden>Next ⏭</button>
         <span style="font-size:12px;color:#9a9daa">vol</span>
         <input type="range" id="vol" min="0" max="1" step="0.05" value="1">
         <select id="subs" title="Subtitles" style="display:none"></select>
@@ -225,6 +234,13 @@
     </div>
   </div>
 </main>
+
+<!-- up-next auto-advance overlay (click = play now, Cancel = stay) -->
+<div id="upnext" hidden>
+  <div id="upnext-title"></div>
+  <div id="upnext-count"></div>
+  <button id="upnext-cancel">Cancel</button>
+</div>
 
 <script>
 // ---------------------------------------------------------------------------
@@ -240,6 +256,12 @@ let selectedSubOrdinal = null; // per-session TEXT subtitle choice, default Off
 let burnSubOrdinal = null;     // embedded bitmap track burned in server-side (subtitle_burn)
 let selectedAudioOrdinal = null; // per-session audio-track choice, sent as audio_track in /play
 let activeGenre = null; // genre chip filter, null = All
+// episode navigation / auto-advance state
+let pendingPlay = null;         // { id, mode: 'nav' | 'zero' } — consumed by applyRoute after a prev/next/auto-advance route replace
+let upNextTimer = null, upNextTarget = null; // auto-advance countdown
+let castLastState = null;       // last seen RemotePlayer.playerState (fire end-detection on transitions only)
+let castEndSuppressed = false;  // our own stop/load in flight: IDLE isn't a natural end
+let endFired = false;           // one natural-end per stream load (re-armed on seeking back)
 const video = document.getElementById('video');
 const scrub = document.getElementById('scrub');
 const $ = id => document.getElementById(id);
@@ -406,7 +428,22 @@ function initCast() {
   remoteController.addEventListener(
     cast.framework.RemotePlayerEventType.IS_CONNECTED_CHANGED, onCastConnectionChanged);
   remoteController.addEventListener(
-    cast.framework.RemotePlayerEventType.PLAYER_STATE_CHANGED, syncPlayButton);
+    cast.framework.RemotePlayerEventType.PLAYER_STATE_CHANGED, onCastPlayerState);
+}
+
+// Cast end-detection: a natural end is a transition to IDLE whose media
+// session reports idleReason FINISHED. Our own stop/load-next also lands in
+// IDLE (CANCELLED/INTERRUPTED) — castEndSuppressed guards the window where
+// we caused it ourselves, and clears once playback is demonstrably running.
+function onCastPlayerState() {
+  syncPlayButton();
+  const st = remotePlayer.playerState;
+  if (st === castLastState) return;
+  castLastState = st;
+  if (st === 'PLAYING' || st === 'BUFFERING' || st === 'PAUSED') { castEndSuppressed = false; return; }
+  if (st !== 'IDLE' || castEndSuppressed || !currentItem) return;
+  const ms = cast.framework.CastContext.getInstance().getCurrentSession()?.getMediaSession();
+  if (ms && ms.idleReason === 'FINISHED') onPlaybackEnded();
 }
 
 function onCastConnectionChanged() {
@@ -424,6 +461,7 @@ function onCastConnectionChanged() {
 }
 
 async function castLoad(url, isHls, title, resumeForDirect, segFormat, item) {
+  castEndSuppressed = true; // loading interrupts the old media session: not a natural end
   const abs = url.startsWith('/') ? baseUrl + url : url;
   const media = new chrome.cast.media.MediaInfo(abs, isHls ? 'application/x-mpegurl' : 'video/mp4');
   if (isHls) {
@@ -874,21 +912,28 @@ async function applyRoute() {
   if (currentItem && !(r.view === 'item' && r.id === currentItem.id)) closePlayer();
   if (r.view === 'show') {
     const { shows } = buildLibrary(allItems);
-    if (!shows.has(r.name)) { pendingAutoplay = null; location.replace('#/'); return; }
+    if (!shows.has(r.name)) { pendingAutoplay = null; pendingPlay = null; location.replace('#/'); return; }
     renderShow(r.name);
   } else if (r.view === 'item') {
     const it = allItems.find(i => i.id === r.id);
-    if (!it) { pendingAutoplay = null; location.replace('#/'); return; }
+    if (!it) { pendingAutoplay = null; pendingPlay = null; location.replace('#/'); return; }
     if (currentItem && currentItem.id === it.id && !$('player-pane').hidden) {
       showView('view-detail'); // already playing this item: keep the player as-is
     } else {
       renderDetail(it);
       if (pendingAutoplay === it.id) playItem(it, null);
+      else if (pendingPlay && pendingPlay.id === it.id) {
+        // prev/next click ('nav'): restart unless mid-episode progress exists;
+        // auto-advance ('zero'): always from the top.
+        if (pendingPlay.mode === 'zero') playItem(it, 0);
+        else playEpisodeFromNav(it);
+      }
     }
   } else {
     showView('view-library');
   }
   pendingAutoplay = null;
+  pendingPlay = null;
 }
 window.addEventListener('hashchange', applyRoute);
 
@@ -984,7 +1029,8 @@ $('detail-play').onclick = () => playItem(detailItem, null);
 // leave the player: stop playback and reveal detail info again (also invoked
 // by applyRoute when browser back/forward navigates away from a playing item)
 function closePlayer() {
-  if (casting()) remoteController.stop();
+  hideUpNext();
+  if (casting()) { castEndSuppressed = true; remoteController.stop(); }
   else { video.pause(); video.removeAttribute('src'); video.load(); }
   stopSession();
   currentItem = null;
@@ -1001,11 +1047,13 @@ $('detail-back').onclick = () => {
 // Play with resume: fetch saved progress (keyed by profile name) unless an
 // explicit start time (e.g. a chapter) was requested.
 async function playItem(item, startAt) {
+  hideUpNext();
   currentItem = item;
   seekOffset = 0;
   $('detail-info').hidden = true;
   $('player-pane').hidden = false;
   $('now-playing').textContent = itemTitle(item);
+  updateEpisodeNav(item);
   let resume = startAt;
   if (resume == null) {
     resume = 0;
@@ -1024,6 +1072,108 @@ async function playItem(item, startAt) {
   renderChapters();
   $('t-total').textContent = fmtTime(duration());
 }
+
+// ---------------------------------------------------------------------------
+// episode navigation (prev/next) + auto-advance on natural end
+// ---------------------------------------------------------------------------
+function episodeSiblings(item) {
+  if (item?.identity?.kind !== 'episode' || !item.identity.title) return null;
+  const { shows } = buildLibrary(allItems); // already sorted by season, then episode
+  const eps = shows.get(item.identity.title);
+  if (!eps) return null;
+  const i = eps.findIndex(e => e.id === item.id);
+  if (i < 0) return null;
+  return { prev: eps[i - 1] || null, next: eps[i + 1] || null };
+}
+function epCode(it) {
+  return `S${String(it.identity.season).padStart(2, '0')}E${String(it.identity.episode).padStart(2, '0')}`;
+}
+function updateEpisodeNav(item) {
+  const sib = episodeSiblings(item);
+  const bp = $('btn-prev-ep'), bn = $('btn-next-ep');
+  bp.hidden = !sib?.prev;
+  bn.hidden = !sib?.next;
+  if (sib?.prev) bp.title = `Previous episode · ${epCode(sib.prev)}`;
+  if (sib?.next) bn.title = `Next episode · ${epCode(sib.next)}`;
+}
+
+// Navigate to a sibling episode. mode 'nav' (prev/next buttons) restarts from
+// 0 unless the episode has meaningful progress (>5s, <90%) — then it resumes;
+// mode 'zero' (auto-advance) always starts from the top. The route is
+// REPLACED, not pushed: binging a season must not build a mile of history.
+function goToEpisode(target, mode) {
+  if (!target) return;
+  hideUpNext();
+  // different file: subtitle/audio/burn selections reset to defaults
+  selectedSubOrdinal = null; burnSubOrdinal = null; selectedAudioOrdinal = null;
+  pendingPlay = { id: target.id, mode };
+  if (location.hash === itemHash(target.id)) applyRoute();
+  else location.replace(itemHash(target.id));
+}
+$('btn-prev-ep').onclick = () => goToEpisode(episodeSiblings(currentItem)?.prev, 'nav');
+$('btn-next-ep').onclick = () => goToEpisode(episodeSiblings(currentItem)?.next, 'nav');
+
+// Explicit navigation play: restart at 0 unless meaningful progress exists.
+async function playEpisodeFromNav(it) {
+  let startAt = 0;
+  try {
+    const { position_seconds } = await api(
+      `/api/progress?item_id=${it.id}&client_id=${encodeURIComponent(clientId || 'anonymous')}`);
+    const dur = it.media_info?.duration_seconds || 0;
+    if (position_seconds > 5 && (!dur || position_seconds < dur * 0.9)) startAt = position_seconds;
+  } catch (e) { /* no saved progress */ }
+  playItem(it, startAt);
+}
+
+function hideUpNext() {
+  if (upNextTimer) { clearInterval(upNextTimer); upNextTimer = null; }
+  upNextTarget = null;
+  $('upnext').hidden = true;
+}
+function showUpNext(next) {
+  hideUpNext();
+  upNextTarget = next;
+  const name = next.enrichment?.episode_title || baseName(next.object_key);
+  $('upnext-title').textContent = `Up next: ${epCode(next)} · ${name}`;
+  let left = 10;
+  $('upnext-count').textContent = `Playing in ${left}s`;
+  $('upnext').hidden = false;
+  upNextTimer = setInterval(() => {
+    left--;
+    if (left <= 0) { playUpNextNow(); return; }
+    $('upnext-count').textContent = `Playing in ${left}s`;
+  }, 1000);
+}
+function playUpNextNow() {
+  const target = upNextTarget;
+  hideUpNext();
+  goToEpisode(target, 'zero');
+}
+$('upnext').onclick = playUpNextNow;
+$('upnext-cancel').onclick = e => { e.stopPropagation(); hideUpNext(); };
+
+// A natural end of playback (local 'ended', or cast IDLE/FINISHED). Episodes
+// with a next sibling: record the finish (position=duration → the server
+// counts it watched and /api/continue advances) and offer auto-advance.
+// Movies and finales: nothing — playback just ends as before.
+function onPlaybackEnded() {
+  if (!currentItem || endFired) return;
+  endFired = true;
+  const next = episodeSiblings(currentItem)?.next;
+  if (!next) return;
+  const dur = currentItem.media_info?.duration_seconds;
+  if (dur > 0) {
+    fetch('/api/progress', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        item_id: currentItem.id, client_id: clientId || 'anonymous',
+        position_seconds: dur,
+      }),
+    });
+  }
+  showUpNext(next);
+}
+video.addEventListener('ended', onPlaybackEnded); // covers direct play AND hls.js
 
 // ---------------------------------------------------------------------------
 // trickplay scrub previews (mouse only; touch devices skip this)
@@ -1111,6 +1261,7 @@ async function stopSession() {
 // matter what the simulation dropdown says.
 async function startPlayback(item, seekSeconds) {
   await stopSession();
+  endFired = false; // fresh stream: re-arm natural-end detection
   const caps = casting() ? profiles.chromecastUltra
                          : profiles[$('profile').value];
   let resp;
@@ -1196,7 +1347,8 @@ $('btn-play').onclick = () => {
 $('btn-back').onclick = () => seekTo(position() - 10);
 $('btn-fwd').onclick = () => seekTo(position() + 30);
 $('btn-stop').onclick = () => {
-  if (casting()) remoteController.stop();
+  hideUpNext();
+  if (casting()) { castEndSuppressed = true; remoteController.stop(); }
   else { video.pause(); video.removeAttribute('src'); video.load(); }
   stopSession();
   renderContinueWatching(); // playback session ended: refresh resume points
@@ -1220,6 +1372,19 @@ setInterval(() => {
     $('t-now').textContent = fmtTime(position());
   }
   syncPlayButton();
+  // Transcode tail: the final HLS fragment can end a hair short of the media
+  // element's duration (audio/video buffers finish unevenly), so 'ended'
+  // never fires — catch the stall at the very end of the stream, but only
+  // within the ITEM's last seconds so catching up with a still-encoding
+  // playlist mid-episode can never register as an end.
+  if (currentItem && !casting() && method === 'transcode' && !endFired
+      && !video.paused && !video.ended && isFinite(video.duration) && video.duration > 0
+      && video.duration - video.currentTime < 0.5
+      && dur > 0 && position() >= dur - 3) {
+    onPlaybackEnded();
+  }
+  // Seeked back after a natural end: re-arm so a later end counts again.
+  if (endFired && isPlaying() && dur > 0 && position() < dur - 10) endFired = false;
 }, 250);
 
 setInterval(() => {

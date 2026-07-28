@@ -151,8 +151,12 @@ type ContinueEntry struct {
 }
 
 // ContinueList derives one profile's resume list: most-recent first, at most
-// max entries, excluding finished items (≥90% of duration) and sub-5-second
-// positions, and collapsing each work to its single most-recent item.
+// max entries, excluding sub-5-second positions and collapsing each work to
+// its single most-recent item. A finished item (≥90% of duration) normally
+// drops out — but a finished show episode with a following episode advances
+// the entry to that NEXT episode ("up next"): position 0 unless the profile
+// already has its own unfinished progress there, which wins. A finished
+// finale (no next episode) and a finished movie are excluded as before.
 func ContinueList(works []Work, positions []store.Position, max int) []ContinueEntry {
 	itemWork := map[int64]*Work{}
 	items := map[int64]*store.Item{}
@@ -164,36 +168,58 @@ func ContinueList(works []Work, positions []store.Position, max int) []ContinueE
 		}
 	}
 
-	best := map[string]ContinueEntry{} // work key → most recent surviving entry
+	// Most-recent position per work (finished or not — finishing an episode
+	// IS the profile's latest activity in the show), and per item (so an
+	// advanced entry can pick up the next episode's own progress).
+	latest := map[string]store.Position{} // work key → most recent position
+	byItem := map[int64]store.Position{}  // item id → most recent position
 	for _, p := range positions {
 		if p.PositionSeconds < minResumeSeconds {
-			continue
+			continue // noise (a misclick, a codec probe)
 		}
-		w, it := itemWork[p.ItemID], items[p.ItemID]
+		w := itemWork[p.ItemID]
 		if w == nil {
 			continue // stale position for a deleted item
 		}
-		dur := itemDuration(*it)
-		if dur > 0 && p.PositionSeconds >= watchedAt*dur {
-			continue // finished
+		if prev, ok := byItem[p.ItemID]; !ok || p.UpdatedAt > prev.UpdatedAt {
+			byItem[p.ItemID] = p
 		}
-		if prev, ok := best[w.Key]; ok && prev.UpdatedAt >= p.UpdatedAt {
+		if prev, ok := latest[w.Key]; ok && prev.UpdatedAt >= p.UpdatedAt {
 			continue
 		}
-		best[w.Key] = ContinueEntry{
-			ItemID:          p.ItemID,
-			WorkKey:         w.Key,
+		latest[w.Key] = p
+	}
+
+	out := make([]ContinueEntry, 0, len(latest))
+	for key, p := range latest {
+		w, it := itemWork[p.ItemID], items[p.ItemID]
+		dur := itemDuration(*it)
+		if dur > 0 && p.PositionSeconds >= watchedAt*dur { // finished
+			if w.Kind != "show" {
+				continue // finished movie/file: nothing to resume
+			}
+			next := nextEpisode(w, p.ItemID)
+			if next == nil {
+				continue // finished the finale: the show is done
+			}
+			// Advance to the next episode. Its own unfinished progress wins;
+			// otherwise it starts at 0. The finished watch remains the entry's
+			// recency (UpdatedAt) — it IS the latest activity.
+			it, dur = next, itemDuration(*next)
+			p.PositionSeconds = 0
+			if np, ok := byItem[next.ID]; ok && !(dur > 0 && np.PositionSeconds >= watchedAt*dur) {
+				p.PositionSeconds = np.PositionSeconds
+			}
+		}
+		out = append(out, ContinueEntry{
+			ItemID:          it.ID,
+			WorkKey:         key,
 			Title:           w.Title,
 			Label:           itemLabel(*it),
 			PositionSeconds: p.PositionSeconds,
 			DurationSeconds: dur,
 			UpdatedAt:       p.UpdatedAt,
-		}
-	}
-
-	out := make([]ContinueEntry, 0, len(best))
-	for _, e := range best {
-		out = append(out, e)
+		})
 	}
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].UpdatedAt != out[j].UpdatedAt {
@@ -205,6 +231,17 @@ func ContinueList(works []Work, positions []store.Position, max int) []ContinueE
 		out = out[:max]
 	}
 	return out
+}
+
+// nextEpisode is the member after itemID in the show's (season, episode)
+// ordering — w.Items is already sorted that way — or nil at the finale.
+func nextEpisode(w *Work, itemID int64) *store.Item {
+	for i := range w.Items {
+		if w.Items[i].ID == itemID && i+1 < len(w.Items) {
+			return &w.Items[i+1]
+		}
+	}
+	return nil
 }
 
 // itemLabel names one item inside its work: episodes get "S02E05 · <title>"
