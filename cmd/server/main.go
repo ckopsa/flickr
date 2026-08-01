@@ -21,6 +21,7 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
+	_ "time/tzdata" // honor TZ for TRICKPLAY_WINDOW even without host zoneinfo
 
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
@@ -53,6 +54,10 @@ type server struct {
 	// trickplayBusy guards the background trickplay stage: full-file decodes
 	// are expensive, so at most one stage pass runs at a time.
 	trickplayBusy atomic.Bool
+	// trickplayWindow, when non-nil, confines trickplay generation to a
+	// daily clock window (TRICKPLAY_WINDOW) so library-wide backfills don't
+	// saturate the node during the day.
+	trickplayWindow *clockWindow
 }
 
 // trickplayDir is where per-item sprite-sheet sets live (data/trickplay/<id>/).
@@ -115,6 +120,10 @@ func main() {
 		policy:   model.DefaultPolicy(),
 		hw:       hw,
 		baseURL:  envOr("ADVERTISE_URL", lanBaseURL(endpoint, addr)),
+	}
+	srv.trickplayWindow, err = parseClockWindow(os.Getenv("TRICKPLAY_WINDOW"))
+	if err != nil {
+		log.Fatalf("bad TRICKPLAY_WINDOW: %v", err)
 	}
 	log.Printf("advertising as %s (cast devices fetch streams here)", srv.baseURL)
 
@@ -211,6 +220,22 @@ func main() {
 		}()
 	} else {
 		log.Printf("scheduled scans disabled (SCAN_INTERVAL=0)")
+	}
+
+	// With a trickplay window, scan-triggered passes outside it no-op, so
+	// run a pass at each window opening to work through the backlog.
+	if w := srv.trickplayWindow; w != nil {
+		log.Printf("trickplay generation confined to %02d:%02d-%02d:%02d (%s) (TRICKPLAY_WINDOW)",
+			w.start/60, w.start%60, w.end/60, w.end%60, time.Now().Format("MST"))
+		go func() {
+			for {
+				if d := w.untilOpen(time.Now()); d > 0 {
+					time.Sleep(d + time.Minute) // +1m: land inside the edge minute
+				}
+				srv.runTrickplay(context.Background())
+				time.Sleep(time.Minute) // retry gap while open (pass may have yielded)
+			}
+		}()
 	}
 
 	httpSrv := &http.Server{Addr: addr, Handler: handler}
@@ -562,6 +587,63 @@ func (s *server) runScan(ctx context.Context) {
 	s.runTrickplay(ctx)
 }
 
+// clockWindow is a daily wall-clock interval, possibly wrapping midnight
+// (start == end would mean the empty window and is rejected at parse).
+type clockWindow struct {
+	start, end int // minutes since local midnight
+}
+
+// parseClockWindow parses "HH:MM-HH:MM" (e.g. "22:00-06:00"). Empty input
+// means no window: nil, nil.
+func parseClockWindow(s string) (*clockWindow, error) {
+	if s == "" {
+		return nil, nil
+	}
+	parse := func(hhmm string) (int, error) {
+		t, err := time.Parse("15:04", hhmm)
+		if err != nil {
+			return 0, fmt.Errorf("bad time %q (want HH:MM): %w", hhmm, err)
+		}
+		return t.Hour()*60 + t.Minute(), nil
+	}
+	from, to, ok := strings.Cut(s, "-")
+	if !ok {
+		return nil, fmt.Errorf("bad window %q (want HH:MM-HH:MM)", s)
+	}
+	start, err := parse(from)
+	if err != nil {
+		return nil, err
+	}
+	end, err := parse(to)
+	if err != nil {
+		return nil, err
+	}
+	if start == end {
+		return nil, fmt.Errorf("bad window %q: start equals end", s)
+	}
+	return &clockWindow{start: start, end: end}, nil
+}
+
+func (w *clockWindow) open(t time.Time) bool {
+	m := t.Hour()*60 + t.Minute()
+	if w.start < w.end {
+		return m >= w.start && m < w.end
+	}
+	return m >= w.start || m < w.end // wraps midnight
+}
+
+// untilOpen is the duration from t to the next window start (zero if open).
+func (w *clockWindow) untilOpen(t time.Time) time.Duration {
+	if w.open(t) {
+		return 0
+	}
+	next := time.Date(t.Year(), t.Month(), t.Day(), w.start/60, w.start%60, 0, 0, t.Location())
+	if !next.After(t) {
+		next = next.AddDate(0, 0, 1)
+	}
+	return next.Sub(t)
+}
+
 // runTrickplay is the post-enrichment trickplay stage: for every item with
 // media info and a meaningful duration that lacks sprite sheets, generate
 // them — strictly one item at a time (a full-file decode each), yielding to
@@ -569,6 +651,9 @@ func (s *server) runScan(ctx context.Context) {
 func (s *server) runTrickplay(ctx context.Context) {
 	if os.Getenv("TRICKPLAY") == "0" {
 		return
+	}
+	if s.trickplayWindow != nil && !s.trickplayWindow.open(time.Now()) {
+		return // outside the window; the window scheduler will run the pass
 	}
 	if !s.trickplayBusy.CompareAndSwap(false, true) {
 		return // a previous pass is still running
@@ -591,6 +676,13 @@ func (s *server) runTrickplay(ctx context.Context) {
 		dest := filepath.Join(trickplayDir, strconv.FormatInt(it.ID, 10))
 		if pipeline.HasTrickplay(dest) {
 			continue
+		}
+		// Stop (not sleep) when the window closes mid-pass: the daily
+		// window scheduler starts a fresh pass at the next opening, and
+		// holding trickplayBusy for hours would block manual runs.
+		if s.trickplayWindow != nil && !s.trickplayWindow.open(time.Now()) {
+			log.Printf("trickplay: window closed, pausing pass (%d generated, resumes at next window)", done)
+			return
 		}
 		// Same yield condition as scans: active playback sessions own the
 		// storage bandwidth and the decode budget.
