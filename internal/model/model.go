@@ -109,6 +109,12 @@ type ClientCapabilities struct {
 	// while its streaming player rejects the same codec in segments — so
 	// direct-play codecs and in-stream codecs are negotiated separately.
 	HLSAudioCodecs []string `json:"hls_audio_codecs,omitempty"`
+	// VideoCodecs has the same split, for the same reason: a Chromecast
+	// Ultra decodes HEVC happily when handed the whole file, and its HLS
+	// player will not touch HEVC in a segment. Empty means "whatever the
+	// device decodes, its streaming player accepts too" — the assumption
+	// every client made before this field existed.
+	HLSVideoCodecs []string `json:"hls_video_codecs,omitempty"`
 }
 
 // Normalize fills defaults so a sparse manifest from an old or minimal
@@ -131,6 +137,12 @@ func (c *ClientCapabilities) Normalize() {
 	}
 	if len(c.HLSAudioCodecs) == 0 {
 		c.HLSAudioCodecs = []string{"aac"} // the one universally safe HLS audio
+	}
+	if len(c.HLSVideoCodecs) == 0 {
+		// Unstated: assume the streaming player takes whatever the device
+		// decodes. That is what every client got before this field existed,
+		// so an old or minimal manifest keeps its exact behavior.
+		c.HLSVideoCodecs = c.VideoCodecs
 	}
 }
 

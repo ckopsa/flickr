@@ -208,6 +208,85 @@ func TestDirectPlayCodecNotCopiedIntoHLS(t *testing.T) {
 	}
 }
 
+func TestDirectPlayVideoCodecNotCopiedIntoHLS(t *testing.T) {
+	// The Chromecast Ultra case, measured on the real device: it direct-plays
+	// an HEVC file, and its HLS player never starts on the same HEVC in fMP4
+	// segments. Video gets the same direct-play/in-stream split as audio.
+	m := model.MediaInfo{
+		Container: "mp4", VideoCodec: "hevc", AudioCodec: "aac",
+		Width: 1920, Height: 1080, DurationSeconds: 5686,
+		BitrateBps: 18_293_347, AudioChannels: 2, FPS: 23.976,
+	}
+	caps := model.ClientCapabilities{
+		SchemaVersion:     1,
+		Containers:        []string{"mp4", "webm"},
+		VideoCodecs:       []string{"h264", "hevc", "vp9"}, // direct play: yes
+		AudioCodecs:       []string{"aac"},
+		MaxWidth:          3840,
+		MaxHeight:         2160,
+		MaxAudioChannels:  6,
+		HLSSegmentFormats: []string{"ts", "fmp4"},
+		HLSAudioCodecs:    []string{"aac"},
+		HLSVideoCodecs:    []string{"h264"}, // in-stream: h264 only
+	}
+	caps.Normalize()
+
+	// Handed the whole file, the device is happy: still direct play.
+	if d := Decide(m, caps, model.DefaultPolicy()); d.Method != model.DirectPlay {
+		t.Fatalf("direct play must survive the in-stream restriction, got %s: %+v", d.Method, d.Trace)
+	}
+
+	// Force a transcode (burn-in would do it too; here the audio track the
+	// client picked is DTS) and the video can no longer be copied.
+	m.AudioCodec = "dts"
+	m.AudioChannels = 6
+	d := Decide(m, caps, model.DefaultPolicy())
+	if d.Method != model.Transcode {
+		t.Fatalf("expected transcode, got %s", d.Method)
+	}
+	if d.Target.VideoCodec != "h264" {
+		t.Errorf("hevc must be re-encoded for an h264-only HLS player, got copy (%q)", d.Target.VideoCodec)
+	}
+	found := false
+	for _, s := range d.Trace {
+		if s.Check == "hls_video" && !s.Passed {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("trace must explain the in-stream video re-encode: %+v", d.Trace)
+	}
+}
+
+// An unstated HLSVideoCodecs must not silently start re-encoding for every
+// client that predates the field.
+func TestUnstatedHLSVideoCodecsKeepsCopyBehavior(t *testing.T) {
+	m := model.MediaInfo{
+		Container: "mp4", VideoCodec: "hevc", AudioCodec: "dts",
+		Width: 1920, Height: 1080, DurationSeconds: 5686,
+		BitrateBps: 18_293_347, AudioChannels: 6, FPS: 23.976,
+	}
+	caps := model.ClientCapabilities{
+		SchemaVersion:     1,
+		Containers:        []string{"mp4"},
+		VideoCodecs:       []string{"h264", "hevc"},
+		AudioCodecs:       []string{"aac"},
+		MaxAudioChannels:  6,
+		HLSSegmentFormats: []string{"fmp4"},
+		HLSAudioCodecs:    []string{"aac"},
+		// HLSVideoCodecs deliberately unset.
+	}
+	caps.Normalize()
+	d := Decide(m, caps, model.DefaultPolicy())
+	if d.Method != model.Transcode {
+		t.Fatalf("expected transcode (dts audio), got %s", d.Method)
+	}
+	if d.Target.VideoCodec != "" {
+		t.Errorf("video must still be COPIED when the client says nothing about in-stream video, got %q",
+			d.Target.VideoCodec)
+	}
+}
+
 func TestTelecineSourceGetsInverseTelecineOnReencode(t *testing.T) {
 	m := model.MediaInfo{
 		Container: "mkv", VideoCodec: "mpeg2video", AudioCodec: "ac3",

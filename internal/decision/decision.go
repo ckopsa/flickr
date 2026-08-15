@@ -144,6 +144,16 @@ func DecideWith(media model.MediaInfo, caps model.ClientCapabilities, policy mod
 		needsAudio = true
 	}
 
+	// Video carries the same split. A Chromecast Ultra direct-plays this
+	// very file's HEVC and its HLS player never starts on the same stream in
+	// fMP4 segments, so "can decode" is not "can stream".
+	if !needsVideo && !slices.Contains(caps.HLSVideoCodecs, media.VideoCodec) {
+		trace = append(trace, model.TraceStep{Check: "hls_video", Passed: false,
+			Detail: fmt.Sprintf("client plays %s directly but not inside HLS (accepts %s in-stream) — re-encoding",
+				media.VideoCodec, strings.Join(caps.HLSVideoCodecs, ", "))})
+		needsVideo = true
+	}
+
 	target := &model.TranscodeTarget{FPS: media.FPS, AudioStreamOrdinal: selectedAudio}
 	var parts []string
 	if needsVideo {

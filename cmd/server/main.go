@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"path"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -173,6 +174,14 @@ func main() {
 			srv.sessions.Touch(id)
 		}
 		log.Printf("stream %s %s range=%q ua=%.40q", r.RemoteAddr, r.URL.Path, r.Header.Get("Range"), r.UserAgent())
+		// Go's sniffer has no idea what .m3u8/.m4s are and labels a playlist
+		// "text/plain", which players are entitled to reject. Name them.
+		switch path.Ext(r.URL.Path) {
+		case ".m3u8":
+			w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
+		case ".m4s":
+			w.Header().Set("Content-Type", "video/iso.segment")
+		}
 		streamFiles.ServeHTTP(w, r)
 	}))
 	mux.Handle("GET /", http.FileServer(http.Dir("web")))

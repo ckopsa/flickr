@@ -319,7 +319,10 @@ const profiles = {
     audio_codecs: ['aac', 'mp3', 'opus', 'flac', 'vorbis', 'ac3', 'eac3'],
     max_width: 3840, max_height: 2160,
     supports_hdr: ['hdr10', 'dolbyvision'], max_audio_channels: 6,
+    // Measured, not from the spec sheet: the Ultra direct-plays an HEVC
+    // file fine, and its HLS player never starts on HEVC in fMP4 segments.
     hls_segment_formats: ['ts', 'fmp4'], hls_audio_codecs: ['aac'],
+    hls_video_codecs: ['h264'],
   },
   tv4k: {
     schema_version: 1, containers: ['mp4', 'mkv'], video_codecs: ['h264', 'hevc', 'av1'],
