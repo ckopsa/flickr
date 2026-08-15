@@ -27,8 +27,10 @@ type Work struct {
 	Genres   []string `json:"genres"`
 	Overview string   `json:"overview"`
 	// EpisodeCount is the number of episode files (0 for movies/files);
+	// ExtraCount is the number of bonus-material files attached to the work;
 	// ItemCount is the total member files.
 	EpisodeCount int `json:"episode_count"`
+	ExtraCount   int `json:"extra_count"`
 	ItemCount    int `json:"item_count"`
 	// RepresentativeItemID is the member to fetch artwork for
 	// (/api/items/{id}/poster): first member with a poster, else the lowest
@@ -47,6 +49,9 @@ type Work struct {
 //     (duplicate copies of one film) merge into a single work.
 //   - kind "episode" → grouped into one show work by identity title,
 //     case-insensitively.
+//   - kind "extra" → bonus material, attached to the show (or movie) of the
+//     same title as a member that is NOT an episode: it never earns a work,
+//     and so never a tile, of its own.
 //   - anything else (kind "unknown", missing identity) → a per-item
 //     "file:<id>" work, so no file is ever invisible in the projection.
 //
@@ -59,12 +64,19 @@ func Build(items []store.Item) []Work {
 	var works []Work
 	shows := map[string]*Work{} // lower(identity title) → work under construction
 	var showOrder []string
+	movieAt := map[string]int{} // lower(identity title) → index in works
+	var extras []store.Item
 
 	for i := range items {
 		it := items[i]
 		switch kind(it) {
 		case "movie":
 			works = append(works, Work{Kind: "movie", Items: []store.Item{it}})
+			if k := strings.ToLower(it.Identity.Title); k != "" {
+				if _, dup := movieAt[k]; !dup {
+					movieAt[k] = len(works) - 1
+				}
+			}
 		case "episode":
 			k := strings.ToLower(it.Identity.Title)
 			w := shows[k]
@@ -74,6 +86,8 @@ func Build(items []store.Item) []Work {
 				showOrder = append(showOrder, k)
 			}
 			w.Items = append(w.Items, it)
+		case "extra":
+			extras = append(extras, it) // attached below, once every work exists
 		default:
 			works = append(works, Work{
 				Kind:  "file",
@@ -83,6 +97,26 @@ func Build(items []store.Item) []Work {
 			})
 		}
 	}
+
+	// Bonus material joins the work it belongs to — the show first (a show's
+	// featurette is far more common than a film's), then a movie of the same
+	// title. Extras whose work isn't in the library at all still group
+	// together under their title rather than scattering one tile per file.
+	for _, it := range extras {
+		k := strings.ToLower(it.Identity.Title)
+		if w := shows[k]; w != nil {
+			w.Items = append(w.Items, it)
+			continue
+		}
+		if i, ok := movieAt[k]; ok {
+			works[i].Items = append(works[i].Items, it)
+			continue
+		}
+		w := &Work{Kind: "show", Items: []store.Item{it}}
+		shows[k] = w
+		showOrder = append(showOrder, k)
+	}
+
 	for _, k := range showOrder {
 		works = append(works, *shows[k])
 	}
@@ -109,24 +143,46 @@ func kind(it store.Item) string {
 	return it.Identity.Kind
 }
 
+func isExtra(it store.Item) bool { return kind(it) == "extra" }
+
 // finish sorts a work's members, fills title/year/metadata (enrichment wins
 // over identity), computes counts, key, and representative.
 func finish(w *Work) {
 	sort.SliceStable(w.Items, func(i, j int) bool {
 		a, b := w.Items[i], w.Items[j]
+		// Bonus material sorts after the work's real content, whatever its
+		// numbering: an episode's deleted scenes are not that episode.
+		if ax, bx := isExtra(a), isExtra(b); ax != bx {
+			return bx
+		}
 		as, ae := seasonEpisode(a)
 		bs, be := seasonEpisode(b)
 		if as != bs {
 			return as < bs
 		}
 		if ae != be {
+			// Unnumbered members (episode 0) sit after the season's numbered
+			// episodes, ordered by key so a disc-ripped block stays contiguous
+			// and in its own order.
+			if ae == 0 || be == 0 {
+				return be == 0
+			}
 			return ae < be
+		}
+		if a.ObjectKey != b.ObjectKey {
+			return a.ObjectKey < b.ObjectKey
 		}
 		return a.ID < b.ID
 	})
 	w.ItemCount = len(w.Items)
-	if w.Kind == "show" {
-		w.EpisodeCount = len(w.Items)
+	w.EpisodeCount, w.ExtraCount = 0, 0
+	for _, it := range w.Items {
+		switch kind(it) {
+		case "episode":
+			w.EpisodeCount++
+		case "extra":
+			w.ExtraCount++
+		}
 	}
 
 	// Identity-derived title/year: from the first member that has them.

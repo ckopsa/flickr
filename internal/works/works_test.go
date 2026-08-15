@@ -19,6 +19,11 @@ func episode(id int64, key, show string, season, ep int) store.Item {
 		Identity: &model.Identity{Kind: "episode", Title: show, Season: season, Episode: ep}}
 }
 
+func extra(id int64, key, title string, season, ep int) store.Item {
+	return store.Item{ID: id, ObjectKey: key,
+		Identity: &model.Identity{Kind: "extra", Title: title, Season: season, Episode: ep}}
+}
+
 func withDuration(it store.Item, dur float64) store.Item {
 	it.MediaInfo = &model.MediaInfo{DurationSeconds: dur}
 	return it
@@ -77,6 +82,64 @@ func TestBuildGrouping(t *testing.T) {
 	file := ws[1]
 	if file.Kind != "file" || file.Title != "holiday_clip.mp4" || file.ItemCount != 1 {
 		t.Errorf("file work: %+v", file)
+	}
+}
+
+// Bonus material must never earn a work — and so never a tile — of its own:
+// it joins the show or film it belongs to, sorted last, counted separately.
+func TestBuildAttachesExtras(t *testing.T) {
+	items := []store.Item{
+		movie(1, "Movies/Frozen (2013)/Frozen.mkv", "Frozen", 2013),
+		extra(2, "Movies/Frozen (2013)/Extras/Sing-Along.mkv", "Frozen", 0, 0),
+		episode(3, "Shows/The Office/Season 1/S01E01.mkv", "The Office", 1, 1),
+		// Carries S01E01 in its name, but it is NOT the pilot.
+		extra(4, "Shows/The Office/Featurettes/S01E01 Deleted Scenes.mkv", "the office", 1, 1),
+		// Bonus material for a work that isn't in the library: still one work.
+		extra(5, "Shows/Lost/Extras/a.mkv", "Lost", 0, 0),
+		extra(6, "Shows/Lost/Extras/b.mkv", "Lost", 0, 0),
+	}
+	ws := Build(items)
+	if got, want := keys(ws), []string{"movie:frozen-2013", "show:lost", "show:the-office"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("keys = %v, want %v", got, want)
+	}
+
+	frozen := ws[0]
+	if frozen.ItemCount != 2 || frozen.ExtraCount != 1 || frozen.EpisodeCount != 0 {
+		t.Errorf("movie work: %+v", frozen)
+	}
+	if frozen.Items[0].ID != 1 || frozen.RepresentativeItemID != 1 {
+		t.Errorf("the film itself must lead its work: %+v", frozen.Items)
+	}
+
+	office := ws[2]
+	if office.EpisodeCount != 1 || office.ExtraCount != 1 || office.ItemCount != 2 {
+		t.Errorf("show work: %+v", office)
+	}
+	if office.Items[0].ID != 3 || office.Items[1].ID != 4 {
+		t.Errorf("extras sort after episodes, whatever their numbering: %+v", office.Items)
+	}
+
+	lost := ws[1]
+	if lost.ExtraCount != 2 || lost.EpisodeCount != 0 || lost.ItemCount != 2 {
+		t.Errorf("orphan extras group into one work: %+v", lost)
+	}
+}
+
+// Unnumbered episodes (episode 0 — disc rips, title-named files) sort after
+// their season's numbered episodes, by key, so a ripped block stays in order.
+func TestBuildOrdersUnnumberedEpisodesLast(t *testing.T) {
+	items := []store.Item{
+		episode(1, "Shows/MASH/Season 6/B9_t02.mkv", "MASH", 6, 0),
+		episode(2, "Shows/MASH/Season 6/S06E01.mkv", "MASH", 6, 1),
+		episode(3, "Shows/MASH/Season 6/B9_t01.mkv", "MASH", 6, 0),
+		episode(4, "Shows/MASH/Season 7/S07E01.mkv", "MASH", 7, 1),
+	}
+	got := []int64{}
+	for _, it := range Build(items)[0].Items {
+		got = append(got, it.ID)
+	}
+	if want := []int64{2, 3, 1, 4}; !reflect.DeepEqual(got, want) {
+		t.Errorf("order = %v, want %v (S06E01, then unnumbered by key, then S07E01)", got, want)
 	}
 }
 
@@ -208,6 +271,44 @@ func TestWorkProgressShow(t *testing.T) {
 	})
 	if p.Fraction != 1 || p.Status != "finished" {
 		t.Errorf("all watched: %+v", p)
+	}
+}
+
+// Bonus material is not part of a show's arc: it counts toward no fraction,
+// anchors no "furthest episode", and finishing the finale never advances into
+// a featurette.
+func TestExtrasStayOutOfShowProgress(t *testing.T) {
+	ws := Build([]store.Item{
+		withDuration(episode(1, "s/o/e1.mkv", "O", 1, 1), 1000),
+		withDuration(episode(2, "s/o/e2.mkv", "O", 1, 2), 1000),
+		withDuration(extra(3, "s/o/Extras/x.mkv", "O", 1, 2), 1000),
+	})
+	w := &ws[0]
+
+	// Both episodes watched: finished, even though the featurette is untouched.
+	p, ok := WorkProgress(w, map[int64]store.Position{1: pos(1, 950, 1), 2: pos(2, 950, 2)})
+	if !ok || p.Fraction != 1 || p.Status != "finished" {
+		t.Errorf("episodes only: %+v", p)
+	}
+
+	// A watched episode plus a watched extra must not exceed 1 or re-anchor
+	// the progress text on the extra.
+	p, _ = WorkProgress(w, map[int64]store.Position{2: pos(2, 950, 2), 3: pos(3, 950, 9)})
+	if p.Fraction != 0.5 || p.ProgressText != "S01E02 · 15:50" {
+		t.Errorf("with extra watched: %+v", p)
+	}
+
+	// Only the extra has a position: reported as a plain in-progress item,
+	// not as a place in the show.
+	p, ok = WorkProgress(w, map[int64]store.Position{3: pos(3, 500, 9)})
+	if !ok || p.Status != "active" || p.Fraction != 0.5 || p.ProgressText != "8:20" {
+		t.Errorf("extra only: %+v", p)
+	}
+
+	// Finishing the finale does not advance into the featurette.
+	entries := ContinueList(ws, []store.Position{pos(2, 990, 3)}, 20)
+	if len(entries) != 0 {
+		t.Errorf("finale finished: %+v, want no resume entry", entries)
 	}
 }
 

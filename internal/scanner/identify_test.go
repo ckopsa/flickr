@@ -46,11 +46,11 @@ func TestIdentifyDirectoryAware(t *testing.T) {
 			"tv/Shows/Foo/Season 1/Foo.S02E09.mkv",
 			model.Identity{Kind: "episode", Title: "Foo", Season: 2, Episode: 9},
 		},
-		// Show directory but no episode marker anywhere: unknown, not a
-		// fabricated episode.
+		// Show directory but no episode marker anywhere: still an episode of
+		// that show (episode 0 = unnumbered), never a top-level tile of its own.
 		{
 			"Shows/Making Of/behind the scenes.mkv",
-			model.Identity{Kind: "unknown", Title: "behind the scenes"},
+			model.Identity{Kind: "episode", Title: "Making Of"},
 		},
 		// Loose markers must NOT fire outside a show directory.
 		{
@@ -61,6 +61,85 @@ func TestIdentifyDirectoryAware(t *testing.T) {
 		{
 			"random/file.mkv",
 			model.Identity{Kind: "unknown", Title: "file"},
+		},
+	}
+	for _, c := range cases {
+		if got := Identify(c.key); got != c.want {
+			t.Errorf("Identify(%q) = %+v, want %+v", c.key, got, c.want)
+		}
+	}
+}
+
+// TestIdentifyV3Grouping covers the v3 rule that nothing under a category
+// directory stays unidentified — the noise on the main grid was files the
+// path could place all along.
+func TestIdentifyV3Grouping(t *testing.T) {
+	cases := []struct {
+		key  string
+		want model.Identity
+	}{
+		// Bonus material belongs to its show, and must NOT masquerade as the
+		// real episode whose number it carries.
+		{
+			"csi-fs/Shows/The Office/Featurettes/Featurettes/Season 1/Deleted Scenes/S01E01 Pilot Deleted Scenes.mkv",
+			model.Identity{Kind: "extra", Title: "The Office", Season: 1, Episode: 1},
+		},
+		{
+			"csi-fs/Shows/Gravity Falls/Extras/Featurettes/Between the Pines/Between the Pines.mkv",
+			model.Identity{Kind: "extra", Title: "Gravity Falls"},
+		},
+		// A film's extras attach to the film, year included.
+		{
+			"csi-fs/Movies/Frozen (2013)/Extras/Sing-Along.mkv",
+			model.Identity{Kind: "extra", Title: "Frozen", Year: 2013},
+		},
+		// Title-named episodes in a flat show directory: unnumbered episodes.
+		{
+			"csi-fs/Shows/Animated Hero Classics/Abraham Lincoln.mp4",
+			model.Identity{Kind: "episode", Title: "Animated Hero Classics"},
+		},
+		// Disc rips under a season directory: the season still places them.
+		{
+			"csi-fs/Shows/MASH/Season 6/B9_t01.mkv",
+			model.Identity{Kind: "episode", Title: "MASH", Season: 6},
+		},
+		// Disc-order prefix inside a show directory is an episode number.
+		{
+			"csi-fs/Shows/Ninjago/Season 3/01 - The Surge.mkv",
+			model.Identity{Kind: "episode", Title: "Ninjago", Season: 3, Episode: 1},
+		},
+		// A DECIMAL season directory is a fan-numbered interstitial block, not
+		// season 4: folding it into season 4 would collide with the real
+		// episodes 1-5 there. With no season to place them, the block's disc
+		// ordinals are not episode numbers either — several such blocks would
+		// all claim S00E01, S00E02 and interleave.
+		{
+			"csi-fs/Shows/Ninjago/Season 04.2 - Chen Mini-Movies (2015)/01 - Chen's New Chair.mkv",
+			model.Identity{Kind: "episode", Title: "Ninjago"},
+		},
+		// A year-less file under Movies/ is still that movie — with a title
+		// directory, or sitting loose in the category directory.
+		{
+			"csi-fs/Movies/Avalon/Avalon.mp4",
+			model.Identity{Kind: "movie", Title: "Avalon"},
+		},
+		{
+			"csi-fs/Movies/Cars.mkv",
+			model.Identity{Kind: "movie", Title: "Cars"},
+		},
+		{
+			"csi-fs/Documentaries/The Yule Log/The Yule Log.mp4",
+			model.Identity{Kind: "movie", Title: "The Yule Log"},
+		},
+		// A leading YEAR is not an episode number.
+		{
+			"csi-fs/Shows/Some Show/2001 A Space Odyssey.mkv",
+			model.Identity{Kind: "episode", Title: "Some Show"},
+		},
+		// "Specials" is season 0 of a show by convention, not bonus material.
+		{
+			"csi-fs/Shows/Foo/Specials/S00E02 Christmas.mkv",
+			model.Identity{Kind: "episode", Title: "Foo", Season: 0, Episode: 2},
 		},
 	}
 	for _, c := range cases {

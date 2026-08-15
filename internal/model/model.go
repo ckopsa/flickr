@@ -212,8 +212,11 @@ type PlayDecision struct {
 
 // Identity is the file-to-media identification result — a deterministic,
 // user-overridable step kept separate from metadata enrichment.
+// Kind "extra" is bonus material (featurettes, deleted scenes) that belongs
+// to the work named by Title but is not one of its episodes: Season/Episode,
+// when present, say which episode it accompanies.
 type Identity struct {
-	Kind    string `json:"kind"` // "movie", "episode", "unknown"
+	Kind    string `json:"kind"` // "movie", "episode", "extra", "unknown"
 	Title   string `json:"title"`
 	Year    int    `json:"year,omitempty"`
 	Season  int    `json:"season,omitempty"`

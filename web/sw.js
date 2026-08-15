@@ -1,7 +1,12 @@
 // flickr PWA service worker — app-shell cache only.
 // HARD RULE: /api and /streams are NEVER cached (staleness would be poison);
 // cross-origin (CDN hls.js / cast_sender) is never touched either.
-const CACHE = 'flickr-shell-v4';
+// Bump on EVERY index.html change: the shell is served cache-first, so an
+// unbumped cache keeps running old JS against new API data — which is not a
+// cosmetic staleness. v5's grouping reads identity kind "extra"; v4's code
+// treats those files as untitled movies and puts one tile on the grid per
+// featurette.
+const CACHE = 'flickr-shell-v6';
 const SHELL = ['/', '/index.html', '/manifest.json', '/icon-192.png', '/icon-512.png'];
 
 self.addEventListener('install', (e) => {

@@ -23,7 +23,15 @@ a handful of architectural decisions (see design notes below):
    never clobbered by a rescan. Identification is directory-aware
    (`Shows/<name>/Season <n>/`, `Movies/<Name (Year)>/`) and versioned:
    bumping `IdentityVersion` makes the next scan recompute identities from
-   keys alone — no re-probe, no bandwidth. TMDB enrichment (title, overview,
+   keys alone — no re-probe, no bandwidth. Nothing under a category directory
+   stays unidentified (v3): bonus material (`Extras/`, `Featurettes/`,
+   `Deleted Scenes/`) becomes kind `extra` attached to its show or film —
+   deleted scenes named `S01E01 ...` must not masquerade as the real S01E01 —
+   an unnumbered file under `Shows/<name>/` is an episode of that show
+   (episode 0 = nobody numbered it), and a year-less file under `Movies/` is
+   still that movie. The result is a library where every file hangs off a
+   movie or a show, and only a movie or a show is ever a tile.
+   TMDB enrichment (title, overview,
    poster, genres) is a separate post-scan stage keyed off identity;
    episodes additionally get per-episode title/overview/still from one
    `/tv/{id}/season/{n}` call per show-season per run. Enrichment is
@@ -68,13 +76,16 @@ a handful of architectural decisions (see design notes below):
 12. **Self-description feed** — the library can describe itself as WORKS
    rather than files: `internal/works` purely derives one work per movie and
    one per show (episodes grouped by identity title, case-insensitively;
-   unidentifiable files stay visible as `file:<id>` works), keyed by TMDB id
+   bonus material joins the work it belongs to as a non-episode member, so it
+   is reachable but never a work of its own; unidentifiable files stay visible
+   as `file:<id>` works), keyed by TMDB id
    (`tmdb:<id>`) with a deterministic slug fallback (`show:ninjago`,
    `movie:frozen-2013`). Per-audience progress is recomputed on demand, never
    stored, and always ships the machine-readable fraction beside the
    authority's own human text (`0.31` + `"S02E05 · 12:30"`) — an episode
    counts watched at ≥90% of its duration, the furthest partial episode adds
-   its fraction, a work finishes at ≥0.9. Change detection uses monotonic
+   its fraction, a work finishes at ≥0.9; extras count toward none of it, and
+   finishing an episode never advances into a featurette. Change detection uses monotonic
    sequence counters, not timestamps: every library/playback row write stamps
    a per-database `seq`, and the feed cursor is the counter pair
    `l<libSeq>.s<stateSeq>` — a work is "changed" when any member item or any

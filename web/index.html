@@ -77,7 +77,8 @@
 
   /* show (episode list) view */
   #view-show h2 { margin: 14px 20px 6px; font-size: 18px; }
-  #episode-list { margin: 8px 20px 30px; border: 1px solid #2a2c33; border-radius: 8px; overflow: hidden; }
+  #episode-list, #extras-list { margin: 8px 20px 30px; border: 1px solid #2a2c33; border-radius: 8px; overflow: hidden; }
+  #extras-head { margin: 18px 20px 0; font-size: 13px; color: #9a9daa; text-transform: uppercase; letter-spacing: .06em; }
   .item { padding: 10px 16px; border-bottom: 1px solid #1e2026; cursor: pointer; }
   .item:last-child { border-bottom: 0; }
   .item:hover { background: #1e222c; }
@@ -101,6 +102,11 @@
   #detail-epnav a { background: #23252d; color: #c5c8d4; border: 1px solid #3a3d47;
     border-radius: 6px; padding: 6px 12px; font-size: 13px; text-decoration: none; }
   #detail-epnav a:hover { background: #2c2f38; }
+  #detail-extras { margin-top: 14px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  #detail-extras .label { font-size: 11px; color: #9a9daa; text-transform: uppercase; letter-spacing: .06em; }
+  #detail-extras a { background: #23252d; color: #c5c8d4; border: 1px solid #3a3d47;
+    border-radius: 6px; padding: 6px 12px; font-size: 13px; text-decoration: none; }
+  #detail-extras a:hover { background: #2c2f38; }
   #now-playing { font-size: 15px; font-weight: 600; margin: 14px 0 10px; }
 
   #player-pane { margin-top: 6px; }
@@ -200,6 +206,8 @@
     <button class="back" id="show-back">← Library</button>
     <h2 id="show-title"></h2>
     <div id="episode-list"></div>
+    <div id="extras-head" hidden>Extras</div>
+    <div id="extras-list" hidden></div>
   </div>
 
   <!-- detail + player -->
@@ -214,6 +222,7 @@
         <button id="detail-play">▶ Play</button>
         <div id="detail-chapters"></div>
         <div id="detail-epnav" hidden></div>
+        <div id="detail-extras" hidden></div>
       </div>
     </div>
     <div id="player-pane" hidden>
@@ -343,8 +352,12 @@ function fmtTime(s) {
 function baseName(key) { return String(key || '').split('/').pop(); }
 function itemTitle(it) {
   const t = it.enrichment?.title || it.identity?.title || baseName(it.object_key);
-  return it.identity?.kind === 'episode' ? `${t} S${it.identity.season}E${it.identity.episode}` :
-         it.enrichment?.year ? `${t} (${it.enrichment.year})` :
+  if (it.identity?.kind === 'episode') {
+    return it.identity.episode > 0
+      ? `${t} S${seasonOf(it)}E${it.identity.episode}` : `${t} — ${baseName(it.object_key)}`;
+  }
+  if (it.identity?.kind === 'extra') return `${t} — ${baseName(it.object_key)}`;
+  return it.enrichment?.year ? `${t} (${it.enrichment.year})` :
          it.identity?.year ? `${t} (${it.identity.year})` : t;
 }
 function displayTitle(it) {
@@ -670,20 +683,62 @@ $('audio').onchange = () => {
 // ---------------------------------------------------------------------------
 // library (Task B)
 // ---------------------------------------------------------------------------
+// Mirrors internal/works.Build: every file lands under a show or a movie.
+// shows: title -> { eps, extras }; movies: one entry per non-episode title,
+// with its bonus material in movieExtras (item id -> extras). Bonus material
+// (kind "extra") never becomes a tile of its own — that is the whole point.
 function buildLibrary(items) {
-  const movies = [], shows = new Map();
+  const movies = [], shows = new Map(), pending = [];
+  const group = name => {
+    if (!shows.has(name)) shows.set(name, { eps: [], extras: [] });
+    return shows.get(name);
+  };
   for (const it of items) {
-    if (it.identity?.kind === 'episode' && it.identity.title) {
-      if (!shows.has(it.identity.title)) shows.set(it.identity.title, []);
-      shows.get(it.identity.title).push(it);
-    } else {
-      movies.push(it);
+    const kind = it.identity?.kind, title = it.identity?.title;
+    if (kind === 'episode' && title) group(title).eps.push(it);
+    else if (kind === 'extra' && title) pending.push(it);
+    else movies.push(it);
+  }
+  const movieByTitle = new Map();
+  for (const m of movies) {
+    const t = (m.identity?.title || '').toLowerCase();
+    if (t && !movieByTitle.has(t)) movieByTitle.set(t, m);
+  }
+  const movieExtras = new Map();
+  for (const it of pending) {
+    const title = it.identity.title, lower = title.toLowerCase();
+    const showName = showNameFor(shows, title);
+    if (showName) { shows.get(showName).extras.push(it); continue; }
+    const movie = movieByTitle.get(lower);
+    if (movie) {
+      if (!movieExtras.has(movie.id)) movieExtras.set(movie.id, []);
+      movieExtras.get(movie.id).push(it);
+      continue;
     }
+    group(title).extras.push(it); // orphan bonus material: one tile, not many
   }
-  for (const eps of shows.values()) {
-    eps.sort((a, b) => (a.identity.season - b.identity.season) || (a.identity.episode - b.identity.episode));
+  const byKey = (a, b) => a.object_key.localeCompare(b.object_key);
+  // Unnumbered episodes sit after their season's numbered ones, ordered by
+  // key so a ripped block stays contiguous. Matches internal/works.finish.
+  // (Season/episode 0 arrive as undefined — the server omits zero values.)
+  const seasonNo = it => it.identity.season || 0;
+  const epNo = it => it.identity.episode || Infinity;
+  for (const g of shows.values()) {
+    g.eps.sort((a, b) => (seasonNo(a) - seasonNo(b)) ||
+                         (epNo(a) - epNo(b)) || byKey(a, b));
+    g.extras.sort(byKey);
   }
-  return { movies, shows };
+  for (const list of movieExtras.values()) list.sort(byKey);
+  return { movies, shows, movieExtras };
+}
+function isExtra(it) { return it?.identity?.kind === 'extra'; }
+// Show groups are keyed by the title as the show's own files spell it; an
+// item's title may differ in case, so look it up case-insensitively.
+function showNameFor(shows, title) {
+  if (!title) return null;
+  if (shows.has(title)) return title;
+  const lower = title.toLowerCase();
+  return [...shows.keys()].find(k => k.toLowerCase() === lower) || null;
 }
 
 function makeCard({ posterId, title, sub, tech, onClick }) {
@@ -749,15 +804,22 @@ function renderGrid() {
   }
   const { movies, shows } = buildLibrary(allItems);
   let count = 0;
-  for (const [name, eps] of [...shows.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
+  for (const [name, g] of [...shows.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
     if (q && !name.toLowerCase().includes(q)) continue;
-    if (activeGenre && !eps.some(e => itemGenres(e).includes(activeGenre))) continue;
-    const seasons = new Set(eps.map(e => e.identity.season)).size;
-    const first = eps[0];
+    const members = g.eps.concat(g.extras);
+    if (activeGenre && !members.some(e => itemGenres(e).includes(activeGenre))) continue;
+    // Only NUMBERED seasons are counted: a show of unnumbered files knows how
+    // many episodes it has, not how many seasons.
+    const seasons = new Set(g.eps.map(e => e.identity.season).filter(Boolean)).size;
+    const first = g.eps[0] || g.extras[0];
+    const parts = [];
+    if (seasons) parts.push(`${seasons} season${seasons > 1 ? 's' : ''}`);
+    if (g.eps.length) parts.push(`${g.eps.length} episode${g.eps.length > 1 ? 's' : ''}`);
+    if (g.extras.length) parts.push(`${g.extras.length} extra${g.extras.length > 1 ? 's' : ''}`);
     grid.appendChild(makeCard({
       posterId: first.id,
       title: first.enrichment?.title || name,
-      sub: `${seasons} season${seasons > 1 ? 's' : ''} · ${eps.length} episode${eps.length > 1 ? 's' : ''}`,
+      sub: parts.join(' · '),
       tech: fmtRes(first.media_info),
       onClick: () => navigate(showHash(name)),
     }));
@@ -954,10 +1016,12 @@ function showView(id) {
 function renderShow(name) {
   currentShow = name;
   const { shows } = buildLibrary(allItems);
-  const eps = shows.get(name) || [];
+  const g = shows.get(name) || { eps: [], extras: [] };
+  const eps = g.eps;
   $('show-title').textContent = (eps[0]?.enrichment?.title) || name;
   const list = $('episode-list');
   list.innerHTML = '';
+  list.hidden = !eps.length;
   for (const ep of eps) {
     const div = document.createElement('div');
     div.className = 'item';
@@ -976,21 +1040,51 @@ function renderShow(name) {
         div.appendChild(img);
       }
       const body = document.createElement('div');
-      body.innerHTML = `<div class="title">S${ep.identity.season}E${ep.identity.episode}` +
+      body.innerHTML = `<div class="title">${esc(epLabel(ep))}` +
         (en.episode_title ? ` · ${esc(en.episode_title)}` : '') +
         `</div><div class="meta">${esc(techLine(ep))}</div>` +
         (en.episode_overview ? `<div class="overview">${esc(en.episode_overview)}</div>` : '');
       div.appendChild(body);
     } else {
       // today's plain row
-      div.innerHTML = `<div class="title">S${ep.identity.season}E${ep.identity.episode}` +
+      div.innerHTML = `<div class="title">${esc(epLabel(ep))}` +
         (en.title && en.title !== name ? ` · ${esc(en.title)}` : '') +
         `</div><div class="meta">${esc(techLine(ep))}</div>`;
     }
     div.onclick = () => navigate(itemHash(ep.id));
     list.appendChild(div);
   }
+
+  // Bonus material lives here, below the episodes — off the main grid, but
+  // still one click from the show it belongs to.
+  const extras = $('extras-list');
+  extras.innerHTML = '';
+  $('extras-head').hidden = extras.hidden = !g.extras.length;
+  for (const ex of g.extras) {
+    const div = document.createElement('div');
+    div.className = 'item';
+    div.innerHTML = `<div class="title">${esc(extraLabel(ex))}</div>` +
+      `<div class="meta">${esc(techLine(ex))}</div>`;
+    div.onclick = () => navigate(itemHash(ex.id));
+    extras.appendChild(div);
+  }
   showView('view-show');
+}
+
+// Season 0 (specials) arrives as undefined — the server omits zero values.
+function seasonOf(it) { return it?.identity?.season || 0; }
+// An episode nobody numbered (disc rip, title-named file) is labelled by its
+// filename — "S06E00" would be a number we invented.
+function epLabel(ep) {
+  return ep.identity?.episode > 0
+    ? `S${seasonOf(ep)}E${ep.identity.episode}` : baseName(ep.object_key);
+}
+// Bonus material: the filename, prefixed with the episode it accompanies when
+// the path said which one.
+function extraLabel(ex) {
+  const name = baseName(ex.object_key);
+  return ex.identity?.episode > 0
+    ? `S${seasonOf(ex)}E${ex.identity.episode} · ${name}` : name;
 }
 $('show-back').onclick = () => navigate('#/');
 
@@ -999,18 +1093,22 @@ $('show-back').onclick = () => navigate('#/');
 // ---------------------------------------------------------------------------
 function renderDetail(item) {
   detailItem = item;
-  // back target: an episode's show view, else the grid
-  currentShow = item.identity?.kind === 'episode' ? item.identity.title : null;
+  const lib = buildLibrary(allItems);
+  // back target: the show view for anything that belongs to a show (bonus
+  // material included), else the grid
+  const belongsToShow = item.identity?.kind === 'episode' || isExtra(item);
+  currentShow = belongsToShow ? showNameFor(lib.shows, item.identity.title) : null;
   const poster = $('detail-poster');
   poster.hidden = false;
   poster.onerror = () => { poster.hidden = true; };
   poster.src = `/api/items/${item.id}/poster`;
   const isEp = item.identity?.kind === 'episode';
   $('detail-title').textContent = isEp
-    ? `${displayTitle(item)} — S${item.identity.season}E${item.identity.episode}`
+    ? `${displayTitle(item)} — ${epLabel(item)}`
+    : isExtra(item) ? `${displayTitle(item)} — ${baseName(item.object_key)}`
     : displayTitle(item);
   const year = item.enrichment?.year || item.identity?.year;
-  $('detail-year').textContent = year && !isEp ? `(${year})` : '';
+  $('detail-year').textContent = year && !isEp && !isExtra(item) ? `(${year})` : '';
   $('detail-overview').textContent = item.enrichment?.overview || '';
   $('detail-overview').hidden = !item.enrichment?.overview;
   const mi = item.media_info;
@@ -1043,6 +1141,18 @@ function renderDetail(item) {
     nav.appendChild(a);
   }
   nav.hidden = !nav.childElementCount;
+  // a movie's bonus material: reachable from the film, never from the grid
+  const exBox = $('detail-extras');
+  exBox.innerHTML = '';
+  const mExtras = lib.movieExtras.get(item.id) || [];
+  if (mExtras.length) exBox.innerHTML = '<span class="label">Extras</span>';
+  for (const ex of mExtras) {
+    const a = document.createElement('a');
+    a.href = itemHash(ex.id);
+    a.textContent = baseName(ex.object_key);
+    exBox.appendChild(a);
+  }
+  exBox.hidden = !mExtras.length;
   $('detail-info').hidden = false;
   $('player-pane').hidden = true;
   showView('view-detail');
@@ -1103,14 +1213,15 @@ async function playItem(item, startAt) {
 function episodeSiblings(item) {
   if (item?.identity?.kind !== 'episode' || !item.identity.title) return null;
   const { shows } = buildLibrary(allItems); // already sorted by season, then episode
-  const eps = shows.get(item.identity.title);
+  const eps = shows.get(item.identity.title)?.eps; // extras are never siblings
   if (!eps) return null;
   const i = eps.findIndex(e => e.id === item.id);
   if (i < 0) return null;
   return { prev: eps[i - 1] || null, next: eps[i + 1] || null };
 }
 function epCode(it) {
-  return `S${String(it.identity.season).padStart(2, '0')}E${String(it.identity.episode).padStart(2, '0')}`;
+  if (!(it.identity?.episode > 0)) return baseName(it.object_key); // unnumbered
+  return `S${String(seasonOf(it)).padStart(2, '0')}E${String(it.identity.episode).padStart(2, '0')}`;
 }
 function updateEpisodeNav(item) {
   const sib = episodeSiblings(item);

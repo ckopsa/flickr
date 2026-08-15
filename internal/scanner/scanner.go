@@ -41,7 +41,10 @@ const ProbeVersion = 5
 // the scan recomputes it from the object key alone for items whose stored
 // identity_version is older (and that the user hasn't overridden).
 // v2: directory-aware identification (Shows/<name>/Season <n>, Movies/<name (year)>).
-const IdentityVersion = 2
+// v3: nothing under a category directory stays unidentified — bonus material
+// becomes kind "extra" under its work, unnumbered files under a show stay
+// episodes of that show, and a year-less file under Movies/ is still a movie.
+const IdentityVersion = 3
 
 var videoExts = map[string]bool{
 	".mkv": true, ".mp4": true, ".m4v": true, ".avi": true,
@@ -517,19 +520,57 @@ var (
 	// Directory-aware patterns. Loose episode markers (3x07, a lone E05) are
 	// only trusted when the path already says we're inside a show directory —
 	// applied to arbitrary filenames they misfire ("day2", "1080p").
-	sxxeyyRe    = regexp.MustCompile(`(?i)(?:^|[ ._(-])S(\d{1,2})[ ._-]?E(\d{1,3})`)
-	nxmRe       = regexp.MustCompile(`(?i)(?:^|[ ._(-])(\d{1,2})x(\d{2,3})(?:[ ._)-]|$)`)
-	loneEpRe    = regexp.MustCompile(`(?i)(?:^|[ ._(-])(?:Episode|Ep|E)[ ._]?(\d{1,3})(?:[ ._)-]|$)`)
-	seasonDirRe = regexp.MustCompile(`(?i)^(?:Season|Series)[ ._-]*(\d{1,3})$`)
+	sxxeyyRe = regexp.MustCompile(`(?i)(?:^|[ ._(-])S(\d{1,2})[ ._-]?E(\d{1,3})`)
+	nxmRe    = regexp.MustCompile(`(?i)(?:^|[ ._(-])(\d{1,2})x(\d{2,3})(?:[ ._)-]|$)`)
+	loneEpRe = regexp.MustCompile(`(?i)(?:^|[ ._(-])(?:Episode|Ep|E)[ ._]?(\d{1,3})(?:[ ._)-]|$)`)
+	// Leading ordinal ("01 - Chen's New Chair.mkv"): a disc-order number, only
+	// ever trusted inside a show directory. Bounded to 3 digits so a
+	// year-titled file ("2001 A Space Odyssey") can't match.
+	leadingNumRe = regexp.MustCompile(`^(\d{1,3})[ ._-]`)
+	// Season directories are matched by PREFIX, because real libraries
+	// decorate them ("Season 04 - Rise of the Snakes"). A DECIMAL season
+	// ("Season 04.2 - Chen Mini-Movies") deliberately fails to match: it is a
+	// fan-numbered interstitial block, not season 4, and folding it into
+	// season 4 would collide with the real episodes 1-5 there. Unmatched, it
+	// lands in season 0 — where specials belong.
+	seasonDirRe = regexp.MustCompile(`(?i)^(?:Season|Series)[ ._-]*(\d{1,3})(?:[^.\d]|$)`)
 )
 
 // showCategoryDirs are directory names that mark "everything below is TV".
 var showCategoryDirs = map[string]bool{"shows": true, "tv shows": true, "tv": true, "series": true}
 
+// movieCategoryDirs mark "everything below is a standalone title". A file
+// under one of these belongs to a movie even when neither the filename nor
+// its parent directory carries a year.
+var movieCategoryDirs = map[string]bool{
+	"movies": true, "movie": true, "films": true, "film": true, "documentaries": true,
+}
+
+// extrasDirs mark bonus material: featurettes, deleted scenes, bloopers. They
+// belong to the work above them, never to its episode list — and never to the
+// main grid. "Specials" is deliberately absent: by convention that is season 0
+// of the show, i.e. real episodes.
+var extrasDirs = map[string]bool{
+	"extras": true, "extra": true, "featurettes": true, "featurette": true,
+	"behind the scenes": true, "deleted scenes": true, "bonus": true,
+	"bonus features": true, "interviews": true, "trailers": true,
+	"shorts": true, "tv shorts": true, "bloopers": true,
+}
+
 // Identify deterministically maps an object key to a media identity, using
 // the FULL path: a Shows/<name>/Season <n>/ layout names the show even when
 // the filename alone doesn't, and Movies/<Name (Year)>/ rescues files like
 // "movie.mp4". It never does I/O — same input, same answer, every scan.
+//
+// Everything below a category directory resolves to that category's work, so
+// a file is only "unknown" when the path says nothing at all:
+//   - a bonus-material directory (Extras/, Featurettes/, Deleted Scenes/)
+//     yields kind "extra" belonging to the work above it — deleted scenes
+//     named "S01E01 ..." must not masquerade as the real S01E01;
+//   - an unnumbered file under Shows/<name>/ is still an episode of that show
+//     (episode 0 = "no number in the path"), because a title-named or
+//     disc-ripped file is an episode nobody numbered, not a mystery;
+//   - a file under Movies/ with no year anywhere is still that movie.
 func Identify(objectKey string) model.Identity {
 	segs := strings.Split(objectKey, "/")
 	base := strings.TrimSuffix(segs[len(segs)-1], path.Ext(segs[len(segs)-1]))
@@ -538,34 +579,76 @@ func Identify(objectKey string) model.Identity {
 	// Show-directory context: title comes from the directory, numbers from
 	// wherever they are (filename first, season directory as fallback).
 	if show, dirSeason, ok := showContext(dirs); ok {
-		if season, episode, ok := episodeNumbers(base, dirSeason); ok {
-			title, year := splitTrailingYear(show)
+		title, year := splitTrailingYear(show)
+		if hasExtrasDir(dirs) {
+			// Numbers are kept when present: they say WHICH episode the bonus
+			// material belongs to, which is what the UI labels it with.
+			season, episode, _ := episodeNumbers(base, dirSeason)
 			return model.Identity{
-				Kind: "episode", Title: title, Year: year, Season: season, Episode: episode,
+				Kind: "extra", Title: title, Year: year, Season: season, Episode: episode,
 			}
+		}
+		season, episode, ok := episodeNumbers(base, dirSeason)
+		if !ok {
+			// Unnumbered: an episode of this show all the same, ordered by
+			// whatever the season directory said (0 = unplaced).
+			season, episode = dirSeason, 0
+		}
+		return model.Identity{
+			Kind: "episode", Title: title, Year: year, Season: season, Episode: episode,
 		}
 	}
 	// Filename-only episode pattern (title prefix + SxxEyy) works anywhere.
 	if m := episodeRe.FindStringSubmatch(base); m != nil {
 		season, _ := strconv.Atoi(m[2])
 		episode, _ := strconv.Atoi(m[3])
+		kind := "episode"
+		if hasExtrasDir(dirs) {
+			kind = "extra"
+		}
 		return model.Identity{
-			Kind: "episode", Title: cleanTitle(m[1]), Season: season, Episode: episode,
+			Kind: kind, Title: cleanTitle(m[1]), Season: season, Episode: episode,
 		}
 	}
+	// Movie context: the title comes from the filename, else the title
+	// directory; a year is taken wherever it appears but is never required.
 	if m := yearRe.FindStringSubmatch(base); m != nil {
 		year, _ := strconv.Atoi(m[2])
-		return model.Identity{Kind: "movie", Title: cleanTitle(m[1]), Year: year}
+		return movieIdentity(cleanTitle(m[1]), year, dirs)
 	}
-	// Movies/<Name (Year)>/<uninformative file>: the parent directory is the
-	// better source when the filename itself yielded nothing.
-	if parent, ok := moviesParent(dirs); ok {
-		if m := yearRe.FindStringSubmatch(parent); m != nil {
-			year, _ := strconv.Atoi(m[2])
-			return model.Identity{Kind: "movie", Title: cleanTitle(m[1]), Year: year}
+	if titleDir, ok := movieContext(dirs); ok {
+		// Movies/<Name (Year)>/<uninformative file>: the title directory is
+		// the better source when the filename itself yielded nothing.
+		if titleDir == "" { // the file sits directly in the category directory
+			return movieIdentity(cleanTitle(base), 0, dirs)
 		}
+		if m := yearRe.FindStringSubmatch(titleDir); m != nil {
+			year, _ := strconv.Atoi(m[2])
+			return movieIdentity(cleanTitle(m[1]), year, dirs)
+		}
+		return movieIdentity(cleanTitle(titleDir), 0, dirs)
 	}
 	return model.Identity{Kind: "unknown", Title: cleanTitle(base)}
+}
+
+// movieIdentity tags a resolved movie title, downgrading it to bonus material
+// when the path runs through an extras directory.
+func movieIdentity(title string, year int, dirs []string) model.Identity {
+	kind := "movie"
+	if hasExtrasDir(dirs) {
+		kind = "extra"
+	}
+	return model.Identity{Kind: kind, Title: title, Year: year}
+}
+
+// hasExtrasDir reports whether any directory on the path marks bonus material.
+func hasExtrasDir(dirs []string) bool {
+	for _, d := range dirs {
+		if extrasDirs[strings.ToLower(d)] {
+			return true
+		}
+	}
+	return false
 }
 
 // showContext scans the directory path for a Shows-category segment followed
@@ -609,16 +692,40 @@ func episodeNumbers(base string, dirSeason int) (season, episode int, ok bool) {
 		episode, _ = strconv.Atoi(m[1])
 		return dirSeason, episode, true
 	}
+	// Disc-order prefix ("01 - The Surge.mkv"): the weakest signal, so it is
+	// tried last, only inside a show directory, and only when a numbered
+	// season directory says which season these ordinals belong to. Without
+	// that, several unrelated blocks of "01, 02, 03..." (a show's mini-movie
+	// folders) would all claim season 0's episodes 1, 2, 3 and interleave;
+	// unnumbered, they stay contiguous and in order under their own folder.
+	if dirSeason > 0 {
+		if m := leadingNumRe.FindStringSubmatch(base); m != nil {
+			episode, _ = strconv.Atoi(m[1])
+			return dirSeason, episode, true
+		}
+	}
 	return 0, 0, false
 }
 
-// moviesParent returns the file's parent directory when the path contains a
-// Movies-category segment above it.
-func moviesParent(dirs []string) (string, bool) {
+// movieContext reports whether the path runs through a movie-category
+// directory, and names the title directory below it: the deepest directory
+// that is neither the category itself nor bonus material, so
+// "Movies/Frozen (2013)/Extras/x.mkv" still resolves to "Frozen (2013)". An
+// empty title directory means the file sits directly in the category
+// directory ("Movies/Cars.mkv") and the filename is the only title there is.
+func movieContext(dirs []string) (titleDir string, ok bool) {
 	for i, d := range dirs {
-		if strings.EqualFold(d, "movies") && i < len(dirs)-1 {
-			return dirs[len(dirs)-1], true
+		if !movieCategoryDirs[strings.ToLower(d)] {
+			continue
 		}
+		for _, rest := range dirs[i+1:] {
+			l := strings.ToLower(rest)
+			if movieCategoryDirs[l] || extrasDirs[l] {
+				continue
+			}
+			titleDir = rest
+		}
+		return titleDir, true
 	}
 	return "", false
 }

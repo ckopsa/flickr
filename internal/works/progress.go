@@ -67,12 +67,17 @@ func WorkProgress(w *Work, positions map[int64]store.Position) (Progress, bool) 
 		return Progress{Status: status, Fraction: frac, ProgressText: clock(best.PositionSeconds), UpdatedAt: updated}, true
 	}
 
-	// Show: walk members in (season, episode) order.
+	// Show: walk EPISODE members in (season, episode) order. Bonus material is
+	// not part of the show's arc — watching every featurette must not report
+	// the show as finished — so it anchors no progress here.
 	watched := 0
 	var furthest *store.Item
 	var furthestPos store.Position
 	for i := range w.Items {
 		it := w.Items[i]
+		if isExtra(it) {
+			continue
+		}
 		p, ok := positions[it.ID]
 		if !ok {
 			continue
@@ -82,6 +87,21 @@ func WorkProgress(w *Work, positions map[int64]store.Position) (Progress, bool) 
 			watched++
 		}
 	}
+	if furthest == nil || w.EpisodeCount == 0 {
+		// Positions exist, but only on bonus material: report the most recent
+		// one as a plain in-progress item rather than a place in the show.
+		best := have[0]
+		for _, p := range have[1:] {
+			if p.UpdatedAt > best.UpdatedAt {
+				best = p
+			}
+		}
+		dur := durationOf(w, best.ItemID)
+		return Progress{
+			Status: "active", Fraction: fraction(best.PositionSeconds, dur),
+			ProgressText: clock(best.PositionSeconds), UpdatedAt: updated,
+		}, true
+	}
 	frac := float64(watched) / float64(w.EpisodeCount)
 	if dur := itemDuration(*furthest); !(dur > 0 && furthestPos.PositionSeconds >= watchedAt*dur) {
 		frac += fraction(furthestPos.PositionSeconds, dur) / float64(w.EpisodeCount)
@@ -90,8 +110,10 @@ func WorkProgress(w *Work, positions map[int64]store.Position) (Progress, bool) 
 	if frac >= watchedAt {
 		status = "finished"
 	}
-	s, e := seasonEpisode(*furthest)
-	text := fmt.Sprintf("S%02dE%02d · %s", s, e, clock(furthestPos.PositionSeconds))
+	text := clock(furthestPos.PositionSeconds)
+	if s, e := seasonEpisode(*furthest); e > 0 {
+		text = fmt.Sprintf("S%02dE%02d · %s", s, e, text)
+	}
 	return Progress{Status: status, Fraction: frac, ProgressText: text, UpdatedAt: updated}, true
 }
 
@@ -233,23 +255,32 @@ func ContinueList(works []Work, positions []store.Position, max int) []ContinueE
 	return out
 }
 
-// nextEpisode is the member after itemID in the show's (season, episode)
-// ordering — w.Items is already sorted that way — or nil at the finale.
+// nextEpisode is the next EPISODE member after itemID in the show's
+// (season, episode) ordering — w.Items is already sorted that way, with bonus
+// material last — or nil at the finale. Finishing an episode never advances
+// into a featurette.
 func nextEpisode(w *Work, itemID int64) *store.Item {
 	for i := range w.Items {
-		if w.Items[i].ID == itemID && i+1 < len(w.Items) {
-			return &w.Items[i+1]
+		if w.Items[i].ID != itemID {
+			continue
 		}
+		for j := i + 1; j < len(w.Items); j++ {
+			if !isExtra(w.Items[j]) {
+				return &w.Items[j]
+			}
+		}
+		return nil
 	}
 	return nil
 }
 
-// itemLabel names one item inside its work: episodes get "S02E05 · <title>"
-// (enrichment episode title when known, else the file basename); everything
-// else is just the basename.
+// itemLabel names one item inside its work: numbered episodes get
+// "S02E05 · <title>" (enrichment episode title when known, else the file
+// basename); everything else — bonus material, and episodes nobody numbered —
+// is just the basename, since a made-up "S00E00" names nothing.
 func itemLabel(it store.Item) string {
 	name := path.Base(it.ObjectKey)
-	if it.Identity == nil || it.Identity.Kind != "episode" {
+	if it.Identity == nil || it.Identity.Kind != "episode" || it.Identity.Episode == 0 {
 		return name
 	}
 	if it.Enrichment != nil && it.Enrichment.EpisodeTitle != "" {
