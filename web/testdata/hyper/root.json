@@ -38,6 +38,10 @@
       "href": "/api/library",
       "title": "Library"
     },
+    "list": {
+      "href": "/api/list?client_id=chris",
+      "title": "My List"
+    },
     "profiles": {
       "href": "/api/users",
       "title": "Profiles"

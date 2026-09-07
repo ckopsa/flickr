@@ -275,6 +275,11 @@
         "seek_seconds": "number?"
       },
       "label": "▶ Resume"
+    },
+    "save": {
+      "method": "POST",
+      "href": "/api/list/tmdb%3A2316",
+      "label": "Add to My List"
     }
   },
   "unavailable": {

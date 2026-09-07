@@ -1130,7 +1130,11 @@
     // show's Next up are all drawn from. So the answer is followed by
     // forgetting every cached document and re-reading the view, rather than
     // by patching the screen where it stands.
-    if (name === 'watched' || name === 'forget') { await write(req); return; }
+    // Putting a title on My List, and taking it off again, move a shelf the
+    // same way: the row on the home and the bookmark on every tile are drawn
+    // from one answer, so the write is followed by the same forget-and-reread.
+    if (name === 'watched' || name === 'forget' ||
+        name === 'save' || name === 'unsave') { await write(req); return; }
     // `read` is the kernel's: a book's sitting is the reader pane, not the
     // device. Everything else is the device's, and it takes the action as it
     // was written on the button.

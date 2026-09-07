@@ -69,13 +69,14 @@ writing bare maps.
 
 | Document | Address | Carries | Actions |
 |---|---|---|---|
-| root | `GET /api/` | profile, links to library, search, continue, artists, scan, system | `scan` |
-| library | `GET /api/library` | tiles in server order — shows, films, artist shelves, audio works, books; genre facets; each tile a link + artwork | — |
-| work | `GET /api/works/{key}` | the work's fields, `members` in order (each an item envelope, with its chapters or sections), `places` (chapter/episode/section tokens **with labels**), the profile's progress | `play` (representative or next unfinished), `read` (a book), `passage` (mint a link from `from`/`to`) |
+| root | `GET /api/` | profile, links to library, search, continue, list, artists, scan, system | `scan` |
+| library | `GET /api/library` | tiles in server order — shows, films, artist shelves, audio works, books; genre facets; each tile a link + artwork; `list` (this profile's My List, so the home draws the row without a second fetch) | per tile: `save` / `unsave` |
+| work | `GET /api/works/{key}` | the work's fields, `members` in order (each an item envelope, with its chapters or sections), `places` (chapter/episode/section tokens **with labels**), the profile's progress | `play` (representative or next unfinished), `read` (a book), `passage` (mint a link from `from`/`to`), `save` / `unsave` (put it on this profile's list, or take it off) |
 | item | `GET /api/items/{id}` | `media_info`, chapters, subtitles, artwork links, `links.work`/`prev`/`next` | `play`, `read`, `progress`, `watched` (mark it seen or unseen — refused while a passage is on, like every other place write), `identity`, `reprobe`, `enrich` |
 | session | `GET /api/sessions/{id}` | `url`, `method`, the decision trace, `passage` (`t`, `end`, `until`, resolved item ids), `ends_at` | `progress` (refused while a passage is on), `keep_watching`, `stop`, `next` (the up-next document), `mark_in`, `mark_out`, `link` |
 | artist | `GET /api/artists/{name}` | albums in year order, cover | — |
 | search | `GET /api/search?q=…` | `groups` (works, artists, episodes, tracks, parts, books), each a headed list of hits — a work's own tile, an artist's shelf tile, or a member with its label, its work and its artwork | — |
+| list | `GET /api/list` | one profile's My List — the works they put by, newest first, as the tiles the grid draws | per tile: `unsave` |
 | continue | `GET /api/continue` | entries as item envelopes with the resume position and the work link | per entry: `resume`, `forget` (drop the row: every member of its work loses this profile’s place) |
 | route | `GET /api/-/route?hash=…` | `view` (`library` \| `work` \| `artist` \| `item` \| `search`), the `document` to render, `passage` (resolved, or null), `autoplay` | — |
 | passage | `GET /api/-/passage?…` | a minted link and its sentence (`S03E22 2:22 – 14:14 of Beach Games`) | — |

@@ -160,6 +160,27 @@ test('the resume shelf carries its own pictures and one action per row', () => {
   }
 });
 
+// My List: the one shelf a person writes rather than one the library
+// derives. Every half of it is the document's — the root names it, the home
+// carries it, and a tile says which way the next press goes.
+test('my list is a shelf of tiles, and the bookmark says which way it goes', () => {
+  const doc = golden('list');
+  assert.equal(doc.kind, 'list');
+  assert.equal(doc.count, doc.items.length);
+  for (const t of doc.items) {
+    assert.equal(t.actions.unsave.method, 'DELETE', `${t.title}: no way off the list`);
+    assert.ok(!t.actions.save, `${t.title}: on the list and offered a save as well`);
+  }
+  assert.ok(golden('root').links.list, 'the root does not name the shelf');
+  // The library carries the same shelf, so the home draws the row without a
+  // second fetch.
+  assert.deepEqual(golden('library').list.map(t => t.self), doc.items.map(t => t.self));
+  // A press against it moves a shelf, so the kernel re-reads the view rather
+  // than patching the tile where it stands.
+  assert.match(read('kernel.js'), /name === 'save' \|\| name === 'unsave'/,
+    'the bookmark is not one of the writes the kernel re-reads after');
+});
+
 // The household dashboard behind the gear: a list of live sittings, each
 // drawable from its own words, and not one action anywhere — the panel shows
 // who is playing what, it does not reach across the room.

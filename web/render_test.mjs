@@ -213,7 +213,7 @@ test('the library draws a headed section per band, in the document order', () =>
   const html = R.library(doc, {});
 
   const headings = [...html.matchAll(/<section class="band"[^>]*>\s*<h3>([^<]*)</g)].map(m => unesc(m[1]));
-  assert.deepEqual(headings, ['Recently added'].concat(doc.bands.map(b => b.title)));
+  assert.deepEqual(headings, ['My List', 'Recently added'].concat(doc.bands.map(b => b.title)));
 
   // Every tile is drawn once per section it belongs to, and the bands
   // together draw the document's items in the document's own order.
@@ -240,6 +240,61 @@ test('recently added is the first row, above the bands', () => {
   // A document with nothing new in it draws no row at all.
   const bare = Object.assign({}, doc, { recently_added: [] });
   assert.ok(!R.library(bare, {}).includes('id="recent-row"'));
+});
+
+// My List leads the rows: the one shelf the person wrote, carried on the
+// library document itself so the home draws it without a second fetch.
+test('my list is the row above what arrived lately', () => {
+  const doc = golden('library');
+  const html = R.library(doc, {});
+
+  assert.ok(html.indexOf('id="list-row"') < html.indexOf('id="recent-row"'));
+  const row = html.split('id="list-row"')[1].split('</section>')[0];
+  assert.match(row, /<h3>My List<\/h3>/);
+  assert.deepEqual(cardTitles(row), doc.list.map(t => unesc(R.esc(t.title))));
+
+  // Nothing put by is no row and no heading.
+  assert.ok(!R.library(Object.assign({}, doc, { list: [] }), {}).includes('id="list-row"'));
+});
+
+// The bookmark, on every tile: whichever of the two the document offers, and
+// nothing at all when it offers neither.
+test('every tile carries the bookmark its document offers', () => {
+  const doc = golden('library');
+  const html = R.library(doc, {});
+  for (const t of doc.items) {
+    const act = (t.actions || {}).save || (t.actions || {}).unsave;
+    if (!act) continue;
+    assert.ok(html.includes('data-href="' + R.esc(act.href) + '"'), t.title + ': no bookmark href');
+    assert.ok(html.includes('data-method="' + act.method + '"'), t.title + ': no bookmark method');
+    assert.ok(html.includes('title="' + R.esc(act.label) + '"'), t.title + ': no bookmark label');
+  }
+  // A saved title says so with a tick, an unsaved one offers a +, and which
+  // way the press goes was the server's to say.
+  const saved = doc.list[0];
+  const card = R.card(saved);
+  assert.match(card, /data-act="unsave"/);
+  assert.ok(card.includes('>✓<'));
+  const bare = JSON.parse(JSON.stringify(saved));
+  delete bare.actions;
+  assert.ok(!R.card(bare).includes('tile-save'));
+
+  // The bookmark is a control INSIDE the control the tile is, and it is drawn
+  // before the picture so a tap on it never lands on the tile underneath.
+  assert.ok(card.indexOf('data-act="unsave"') < card.indexOf('<img'));
+});
+
+// The work's own page carries the same bookmark, in the server's own words.
+test('the work pane carries the bookmark beside Play', () => {
+  const doc = golden('work-show');
+  const act = doc.actions.save || doc.actions.unsave;
+  assert.ok(act, 'the work document offers no bookmark to draw');
+  const html = R.work(doc);
+  const actions = html.split('id="work-actions"')[1].split('</div>')[0];
+  assert.ok(actions.includes('data-href="' + R.esc(act.href) + '"'), 'the bookmark is not beside Play');
+  assert.ok(actions.includes(R.esc(act.label)), 'the bookmark does not say what it does');
+  // It is drawn once: restControls must not draw it a second time.
+  assert.equal(html.split('data-href="' + R.esc(act.href) + '"').length - 1, 1);
 });
 
 // What just landed comes next, and the count rides the tile: the fixture

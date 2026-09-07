@@ -194,6 +194,11 @@
         "seek_seconds": "number?"
       },
       "label": "▶ Resume"
+    },
+    "save": {
+      "method": "POST",
+      "href": "/api/list/audiobook%3Afrank-herbert-dune-1965",
+      "label": "Add to My List"
     }
   },
   "unavailable": {

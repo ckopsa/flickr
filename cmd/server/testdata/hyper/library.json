@@ -53,6 +53,13 @@
           "href": "/api/works/tmdb%3A2316",
           "title": "The Office"
         }
+      },
+      "actions": {
+        "save": {
+          "method": "POST",
+          "href": "/api/list/tmdb%3A2316",
+          "label": "Add to My List"
+        }
       }
     },
     {
@@ -82,6 +89,13 @@
         "self": {
           "href": "/api/works/tmdb%3A109445",
           "title": "Frozen"
+        }
+      },
+      "actions": {
+        "unsave": {
+          "method": "DELETE",
+          "href": "/api/list/tmdb%3A109445",
+          "label": "Remove from My List"
         }
       }
     },
@@ -126,6 +140,13 @@
           "href": "/api/works/audiobook%3Afrank-herbert-dune-1965",
           "title": "Dune"
         }
+      },
+      "actions": {
+        "save": {
+          "method": "POST",
+          "href": "/api/list/audiobook%3Afrank-herbert-dune-1965",
+          "label": "Add to My List"
+        }
       }
     },
     {
@@ -149,6 +170,13 @@
           "href": "/api/works/book%3Aedwin-a-abbott-flatland-1884",
           "title": "Flatland"
         }
+      },
+      "actions": {
+        "save": {
+          "method": "POST",
+          "href": "/api/list/book%3Aedwin-a-abbott-flatland-1884",
+          "label": "Add to My List"
+        }
       }
     },
     {
@@ -171,6 +199,13 @@
         "self": {
           "href": "/api/works/book%3Ashirley-jackson-the-haunting-of-hill-house-1959",
           "title": "The Haunting of Hill House"
+        }
+      },
+      "actions": {
+        "unsave": {
+          "method": "DELETE",
+          "href": "/api/list/book%3Ashirley-jackson-the-haunting-of-hill-house-1959",
+          "label": "Remove from My List"
         }
       }
     }
@@ -224,6 +259,13 @@
           "href": "/api/works/tmdb%3A109445",
           "title": "Frozen"
         }
+      },
+      "actions": {
+        "unsave": {
+          "method": "DELETE",
+          "href": "/api/list/tmdb%3A109445",
+          "label": "Remove from My List"
+        }
       }
     },
     {
@@ -252,6 +294,13 @@
           "href": "/api/works/tmdb%3A2316",
           "title": "The Office"
         }
+      },
+      "actions": {
+        "save": {
+          "method": "POST",
+          "href": "/api/list/tmdb%3A2316",
+          "label": "Add to My List"
+        }
       }
     },
     {
@@ -274,6 +323,13 @@
         "self": {
           "href": "/api/works/audiobook%3Afrank-herbert-dune-1965",
           "title": "Dune"
+        }
+      },
+      "actions": {
+        "save": {
+          "method": "POST",
+          "href": "/api/list/audiobook%3Afrank-herbert-dune-1965",
+          "label": "Add to My List"
         }
       }
     },
@@ -298,6 +354,13 @@
           "href": "/api/works/book%3Ashirley-jackson-the-haunting-of-hill-house-1959",
           "title": "The Haunting of Hill House"
         }
+      },
+      "actions": {
+        "unsave": {
+          "method": "DELETE",
+          "href": "/api/list/book%3Ashirley-jackson-the-haunting-of-hill-house-1959",
+          "label": "Remove from My List"
+        }
       }
     },
     {
@@ -321,10 +384,84 @@
           "href": "/api/works/book%3Aedwin-a-abbott-flatland-1884",
           "title": "Flatland"
         }
+      },
+      "actions": {
+        "save": {
+          "method": "POST",
+          "href": "/api/list/book%3Aedwin-a-abbott-flatland-1884",
+          "label": "Add to My List"
+        }
       }
     }
   ],
   "new_episodes": [],
+  "list": [
+    {
+      "self": "/api/works/book%3Ashirley-jackson-the-haunting-of-hill-house-1959",
+      "kind": "work",
+      "title": "The Haunting of Hill House",
+      "work_kind": "book",
+      "medium": "text",
+      "author": "Shirley Jackson",
+      "year": 1959,
+      "subtitle": "Shirley Jackson · 1959",
+      "tech": "text · 1 MB · 8 ch",
+      "item_id": 3,
+      "search": "the haunting of hill house shirley jackson the haunting of hill house.epub",
+      "links": {
+        "artwork": {
+          "href": "/api/items/3/cover"
+        },
+        "self": {
+          "href": "/api/works/book%3Ashirley-jackson-the-haunting-of-hill-house-1959",
+          "title": "The Haunting of Hill House"
+        }
+      },
+      "actions": {
+        "unsave": {
+          "method": "DELETE",
+          "href": "/api/list/book%3Ashirley-jackson-the-haunting-of-hill-house-1959",
+          "label": "Remove from My List"
+        }
+      }
+    },
+    {
+      "self": "/api/works/tmdb%3A109445",
+      "kind": "work",
+      "title": "Frozen",
+      "work_kind": "movie",
+      "medium": "video",
+      "year": 2013,
+      "subtitle": "2013",
+      "tech": "1920x816 h264/ac3 · 8.40 GB · 3 ch",
+      "genres": [
+        "Animation",
+        "Family",
+        "Adventure"
+      ],
+      "item_id": 4,
+      "search": "frozen frozen.mkv",
+      "links": {
+        "artwork": {
+          "href": "/api/items/4/poster"
+        },
+        "backdrop": {
+          "href": "/api/items/4/backdrop"
+        },
+        "self": {
+          "href": "/api/works/tmdb%3A109445",
+          "title": "Frozen"
+        }
+      },
+      "actions": {
+        "unsave": {
+          "method": "DELETE",
+          "href": "/api/list/tmdb%3A109445",
+          "label": "Remove from My List"
+        }
+      }
+    }
+  ],
   "facets": {
     "genre": [
       {
@@ -353,6 +490,10 @@
     "continue": {
       "href": "/api/continue?client_id=chris",
       "title": "Continue watching"
+    },
+    "list": {
+      "href": "/api/list?client_id=chris",
+      "title": "My List"
     },
     "root": {
       "href": "/api/",

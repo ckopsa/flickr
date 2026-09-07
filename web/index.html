@@ -129,6 +129,19 @@
   .new-badge { position: absolute; top: 6px; right: 6px; z-index: 1;
     background: #d1584a; color: #fff; font-size: 11px; font-weight: 700;
     padding: 2px 7px; border-radius: 999px; letter-spacing: .02em; }
+  /* the bookmark in the other corner of the poster: My List, from wherever
+     the title is seen. Quiet until the tile is under the pointer or the ring,
+     and always there where there is no pointer to hover with — the same
+     manners as the × on a resume row. */
+  .tile-save { position: absolute; top: 6px; left: 6px; z-index: 1; margin: 0;
+    min-width: 0; padding: 1px 8px 3px; font-size: 14px; line-height: 1.1; border-radius: 50%;
+    background: rgba(10,11,14,.78); color: #c5c8d4; opacity: 0; transition: opacity .12s ease; }
+  .card:hover .tile-save, .card:focus-within .tile-save { opacity: 1; }
+  .card .tile-save:hover { color: #dbe6fa; background: rgba(10,11,14,.92); }
+  @media (hover: none) { .card .tile-save { opacity: 1; } }
+  /* a title already on the list wears its tick without being hovered: that
+     one is a fact about the tile, not a control being offered */
+  .card .tile-save[data-act="unsave"] { opacity: 1; color: var(--ok); }
   .text-tile .tile-title { font-size: 14px; font-weight: 600; color: #c5c8d4; word-break: break-word; }
   .text-tile .tile-sub { font-size: 11px; color: var(--muted); }
   .card .c-title { font-size: 13px; margin-top: 8px; font-weight: 600; line-height: 1.3; }

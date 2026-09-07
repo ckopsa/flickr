@@ -611,10 +611,69 @@ func OpenState(path string) (*State, error) {
 		)`); err != nil {
 		return nil, err
 	}
+	// saved: one profile's My List — the things they put by for later. The
+	// row keys on a WORK, not an item: a list is a list of titles, and a show
+	// whose episodes come and go is one entry either way. It lives beside the
+	// playback rows because it is the same kind of state — one profile's, and
+	// written while somebody is browsing.
+	if _, err := db.Exec(`
+		CREATE TABLE IF NOT EXISTS saved (
+			client_id TEXT NOT NULL,
+			work_key TEXT NOT NULL,
+			saved_at REAL NOT NULL,
+			PRIMARY KEY (client_id, work_key)
+		)`); err != nil {
+		return nil, err
+	}
 	if _, err := db.Exec(metaSchema); err != nil {
 		return nil, err
 	}
 	return &State{db: db}, nil
+}
+
+// Saved is one entry on a profile's list: which work, and when it was put
+// there — the order the shelf is read in.
+type Saved struct {
+	WorkKey string
+	SavedAt float64
+}
+
+// Save puts one work on a profile's list. Saving a work already on it is a
+// no-op that keeps the time it was first put there: a list is a set, and
+// pressing the bookmark twice is not a way to shuffle it to the front.
+func (s *State) Save(clientID, workKey string) error {
+	_, err := s.db.Exec(`INSERT OR IGNORE INTO saved (client_id, work_key, saved_at) VALUES (?, ?, ?)`,
+		clientID, workKey, unixSecs(time.Now()))
+	return err
+}
+
+// Unsave takes it off again, and takes nothing off when it was never on:
+// removing what is not there is what a person pressing the tick twice means.
+func (s *State) Unsave(clientID, workKey string) error {
+	_, err := s.db.Exec(`DELETE FROM saved WHERE client_id=? AND work_key=?`, clientID, workKey)
+	return err
+}
+
+// SavedFor is one profile's list, newest first. saved_at is a millisecond
+// clock, so two things put by in the same instant would otherwise come back
+// in whatever order SQLite felt like: the key breaks the tie, and the shelf
+// reads the same twice.
+func (s *State) SavedFor(clientID string) ([]Saved, error) {
+	rows, err := s.db.Query(`SELECT work_key, saved_at FROM saved
+		WHERE client_id=? ORDER BY saved_at DESC, work_key`, clientID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Saved
+	for rows.Next() {
+		var sv Saved
+		if err := rows.Scan(&sv.WorkKey, &sv.SavedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, sv)
+	}
+	return out, rows.Err()
 }
 
 // BookDisplay is how a book's pictures are shown on a dark page:

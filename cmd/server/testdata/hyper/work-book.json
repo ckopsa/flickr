@@ -185,6 +185,11 @@
         "passage": "passage?"
       },
       "label": "Read"
+    },
+    "unsave": {
+      "method": "DELETE",
+      "href": "/api/list/book%3Ashirley-jackson-the-haunting-of-hill-house-1959",
+      "label": "Remove from My List"
     }
   },
   "unavailable": {
