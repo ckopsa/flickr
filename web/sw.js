@@ -46,8 +46,16 @@
 // document instead of an item and the URLs they used to guess, and
 // passage.js lost locatorSection to the server. A v16 shell serving the new
 // index.html would hand the panes an item and call a function that is gone.
-const CACHE = 'flickr-shell-v17';
-const SHELL = ['/', '/index.html', '/passage.js', '/cast.js', '/audio.js', '/audio.css', '/reader.js', '/pdfreader.js',
+// v18: index.html is markup and script tags now — the logic is renderers.js
+// (one pure function per document kind), player.js (the device) and kernel.js
+// (the router and the mounting), and audio.js is DELETED. A v17 shell has
+// none of those three files and would serve an index.html whose one inline
+// line, Kernel.boot(), names something that does not exist. This is the bump
+// the CI check in .github/workflows/tests.yml now insists on.
+const CACHE = 'flickr-shell-v18';
+const SHELL = ['/', '/index.html', '/passage.js', '/cast.js', '/audio.css',
+               '/renderers.js', '/player.js', '/kernel.js',
+               '/reader.js', '/pdfreader.js',
                '/vendor/jszip.min.js', '/vendor/epub.min.js',
                '/vendor/pdf.min.mjs', '/vendor/pdf.worker.min.mjs',
                '/manifest.json', '/icon-192.png', '/icon-512.png'];

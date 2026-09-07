@@ -298,7 +298,7 @@ leaves the variable write to a person.
 | `GET /api/works` | library as works: movies, whole shows, audiobooks, albums, books (+ stray files), title-sorted, each with `work_key`, `kind`, `medium`, `author`, counts, and a `representative_item_id` for artwork |
 | `GET /api/works/{key}/items` | one work's member items (episodes in season/episode order, parts and tracks in part order, each track with its `identity.track_title`); 404 for unknown keys |
 | `GET /api/artists` | the album works shelved by artist: `name`, `album_count`, `albums` in year order (`work_key`, `title`, `year`, `track_count`, `representative_item_id`), and the artist's own `representative_item_id` — the item whose `/cover` is the picture; name-sorted, `[]` without music |
-| `GET /api/continue?client_id=NAME` | a profile's resume list: most-recent first, max 20, finished (≥90%) and <5 s positions excluded, one entry per work; a book entry carries `fraction` instead of a meaningful seconds/duration pair |
+| `GET /api/continue?client_id=NAME` | a profile's resume list as a **document** (below): most-recent first, max 20, finished (≥90%) and <5 s positions excluded, one entry per work |
 | `GET /api/feed/media?since=CURSOR` | change feed: works changed since the cursor with per-audience progress; response carries the next cursor (`l<n>.s<n>`); no `since` = everything |
 | `POST /api/items/{id}/decision` | dry-run: decision + trace, no side effects; audio items take the audio branch (415 for text — books are read, not streamed) |
 | `POST /api/items/{id}/play` | decide and act: presigned URL (direct) or HLS session (transcode, audio-only for audio items); 415 for text. Answers the **session document** (below), and takes an optional `passage` |
@@ -342,22 +342,23 @@ to demonstrate how the same file direct-plays or transcodes per client.
 
 flickr is becoming backend-driven: the server says what exists and what may
 be done to it, and the browser renders what it is told (`docs/hypermedia.md`
-has the envelope, the document table and the order of work). Seven of those
+has the envelope, the document table and the order of work). Nine of those
 documents are served now, beside — not instead of — everything above, and the
-browser reads every one of them but the root: the router asks what a hash
-means, the grid, the show pane, the detail pane and the artist's shelf are
-drawn from the answer and from the documents it points at, and the player
-reads the session document it gets back from play:
+browser reads every one of them, the root included and nothing else: the
+kernel starts at `/api/`, follows `actions.route` to learn what a hash means,
+and renders the answer. There is no other address in the client (*The
+client*, below).
 
 | Endpoint | Document |
 |---|---|
-| `GET /api/` | the root: the profile (`client_id`, query or cookie), links to library, continue, artists, works, items, scan and system, and the `scan` action. It is the only address a client is meant to know by heart |
-| `GET /api/items/{id}` | one item: its fields, `media_info` (chapters, sections, page count), its subtitle tracks with their `.vtt` addresses, artwork links, `links.work`/`prev`/`next` (the work's own order, bonus material aside), and the actions `play`, `read`, `progress`, `identity`, `reprobe`, `enrich` |
+| `GET /api/` | the root: the profile (`client_id`, query or cookie), links to library, continue, artists, works, items, scan, system and profiles, and the actions `scan`, `create_profile` and `route` — the address that turns a hash into a document. It is the only address a client is meant to know by heart, which is why the resolver is named here rather than learned |
+| `GET /api/items/{id}` | one item: its fields, `media_info` (chapters, sections, page count), `tech` (the grey line: what the file IS) and `overview` (the episode's own synopsis, or the work's), `year` where a title takes one, `extra: true` for bonus material, `resume` — where the asking profile left off, so nothing has to ask a progress route for it — its subtitle tracks with their `.vtt` addresses, artwork links, `links.work`/`prev`/`next` (the work's own order, bonus material aside), and the actions `play`, `read`, `progress`, `identity`, `reprobe`, `enrich` |
 | `GET /api/works/{key}` | one work: the fields `/api/works` publishes, `members` in order as item envelopes, `places` (the passage grammar's tokens with the labels a chip shows — `S03E22 0:00` · "S03E22 · Beach Games", `1:19:00` · "Let It Go", `ch. 7` · "The Cellar"), the profile's progress, and the actions `play`, `read`, `passage` |
 | `GET /api/library` | the grid: `items`, one tile per thing in the order the grid draws them (see *Library layout*), a `genre` facet for the chip row, and `count`. A tile is a small envelope — `self` and `links.self` (the work or artist document), `kind` (`work`/`artist`), `title`, `subtitle` ("3 seasons · 42 episodes", "Radiohead · 1997 · 12 tracks", "3 albums"), `tech`, `medium`, `work_kind`, `year`, `genres`, `item_id` (the member a tap opens) and `links.artwork`, the poster or the file's own cover, chosen here rather than in the browser |
 | `GET /api/artists/{name}` | one artist's shelf: `name` as the shelf spells it (the match is case-insensitive), `album_count`, `track_count`, `albums` in year order (the year-less last) as the same tiles with their covers, and `links.artwork`. An unknown name is a `no-such-artist` problem with the library as the remedy |
 | `GET /api/sessions/{id}` | one play — direct play included, which used to have no id: `url`, `method`, `decision`, `started_at`, the `passage` resolved (with `ends_at`, the bound that applies to THIS item) and the `marks` being made, `links.item`/`back`/`work`/`next`, and the actions `progress`, `keep_watching`, `stop`, `next`, `mark_in`, `mark_out`, `link` |
 | `GET /api/sessions/{id}` (a book) | one reading, opened by `read`: `method: "read"`, `format` (`epub`/`pdf`), `etag`, `sections` (the contents, `index` + `title`) or `page_count`, the profile's saved `locator` (or null), the `passage` resolved (`from`/`to` as locators, the `from_section`/`to_section` or `from_page`/`to_page` they land on, and `ends_at`), `links.book`/`item`/`back`/`work`, and the actions `progress`, `keep_reading`, `stop` |
+| `GET /api/continue` | the resume shelf: `items`, one per work, each an item envelope with the `work_title` over its own `label`, `position_seconds` (or a book's `fraction`), `percent` — the bar's width in one unit for every medium — `links.artwork` (the episode's still, the film's poster, the record's or the book's cover, and the work's picture when this one file has none) and one action, `resume`, labelled in the verb the medium uses |
 | `GET /api/-/route?hash=` | what a hash means: `view` (`library`, `work`, `artist`, `item`), the `document` to render, the `passage` resolved to item ids and to a book's spine sections or a PDF's pages, and `autoplay` — true for a text passage as for a timed one. See "Deep links and passages" |
 | `GET /api/-/passage?…` | a minted passage: its absolute `href` and the `sentence` that says it (`S03E22 2:22 – 14:14 of Beach Games`) — from an item and two times, or from a work and two of the places it publishes |
 
@@ -430,10 +431,13 @@ item route:
   plays.
 
 **The server resolves the hash.** The browser splits the hash off the URL and
-asks `GET /api/-/route?hash=<hash>`, which answers which `view` to render
-(`library`, `work`, `artist`, `item`), the `document` to render it from, the
-`passage` with every episode code resolved to an item id and every text
-locator to a spine section, and whether arriving `autoplay`s. A title, an
+asks `GET /api/-/route?hash=<hash>` (the address the root names as
+`actions.route`), which answers which `view` to render (`library`, `work`,
+`artist`, `item`), the `document` to render it from, the `passage` with every
+episode code resolved to an item id and every text locator to a spine
+section, and whether arriving `autoplay`s. **The kernel renders that answer
+and nothing else** — one renderer per document kind, each a pure function of
+the envelope (*The client*, below). A title, an
 episode or an item that is not there comes back as `application/problem+json`
 with a remedy — the library, or the show's own page. The grammar above lives
 in `internal/passage` (Go), one implementation, table-tested against the same
@@ -549,6 +553,31 @@ every client rather than for the one that remembers them.
 against the open PDF; both are handed the reading session document and
 compose no address of their own.
 
+## The client
+
+`web/` is three files and a device or two, and the whole of what it knows is
+that `/api/` exists:
+
+| File | What it is |
+|---|---|
+| `kernel.js` | the router and the mounting: boot (the profile gate, the service worker, cast), `splitHash` → `actions.route` → `render(view, document, passage, autoplay)`, `hashchange` under a sequence guard, a document cache keyed by `self`, an `api(href)` that reads `application/problem+json` into a `Problem` (its `detail`, its `remedy`), and one delegated click listener. A control carries the href and the method the DOCUMENT gave it; the kernel follows them. The profile rides as a `client_id` cookie, so no href is ever touched |
+| `renderers.js` | one renderer per document kind — `library`, `work` (show pane / record pane by `work_kind`), `artist`, `item`, `session` (the player chrome), `continue`. Each is a pure function of the envelope returning HTML: it draws the fields, and a control per entry in `actions` carrying that action's own `label`. A missing action is a control that is not there; an `unavailable` entry is the reason, in words. **A renderer never composes a URL** — every address it emits is `links[rel].href` or `actions[name].href`, and `web/render_test.mjs` greps the source to keep it so. What it does compose is a hash: the hash grammar above is the client's |
+| `player.js` | the device: the media element, hls.js, the position tick, the scrub bar and its chapter ticks and passage flags, the volume, the subtitle and audio-track selects, the trickplay previews, the tap-to-play the browser asks for, the end-of-passage pause, and the heartbeat that posts to `session.actions.progress.href` (a 409 there means a passage is on, which is an answer, not an error) |
+| `cast.js`, `reader.js`, `pdfreader.js` | the other devices, unchanged in what they do: the cast bridge reads the session document, and a book is read through one |
+| `passage.js` | what is left of the grammar on this side: the clock predicates and the hash spellings. The rules are the server's |
+
+`index.html` is markup and script tags, and one line of logic — `Kernel.boot()`.
+
+Two invariants hold the seam:
+
+- **The media element is made once.** No renderer emits a `<video>`; the
+  session chrome carries a `#device-slot`, and the device element is moved
+  into it synchronously on every re-render. A document swap — a mark set, a
+  passage left — must never drop the buffer, and this is how.
+- **One address by heart.** `/api/` is the only literal in `kernel.js`, and
+  there is none at all in `renderers.js` or `player.js`. `web/kernel_test.mjs`
+  asserts both.
+
 ## Casting
 
 The web UI is a Google Cast sender: the cast icon in the control row streams
@@ -641,3 +670,27 @@ trailer at all); the store tests migrate a pre-locator `state.db`;
 `node --test web/passage_test.mjs` covers the passage and locator grammar;
 and `node --test web/cast_test.mjs` covers the cast bridge's reading of the
 session document.
+
+**The two sides share one truth.** `cmd/server/goldens_shared_test.go` copies
+`cmd/server/testdata/hyper/*.json` to `web/testdata/hyper/` and FAILS when the
+two differ (`go test ./cmd/server -update` refreshes both halves in one run),
+and the client's suites render those very documents:
+
+```sh
+node --test web/*_test.mjs
+```
+
+- `web/render_test.mjs` runs every renderer over every golden and asserts the
+  contract: each action becomes a control carrying the document's own label
+  and href, each address in the output came out of the document, no renderer
+  emits a media element, and an unknown field changes nothing.
+- `web/kernel_test.mjs` asserts what the client is allowed to know — one
+  `/api/` literal in the kernel, none in the device or the renderers, one line
+  of logic in `index.html` — and that every file the page loads is in `sw.js`'s
+  SHELL list.
+
+CI runs both suites, parses every `web/*.js`, and on a pull request fails when
+a SHELL file changed without a `CACHE` bump in `web/sw.js`
+(`scripts/shell-bump-check.sh`): the shell is served cache-first and `sw.js` is
+the only file a browser re-checks, so an unbumped change never reaches a
+browser that has the old shell.

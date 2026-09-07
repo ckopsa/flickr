@@ -1,0 +1,57 @@
+{
+  "self": "/api/sessions/5e5510f00d00",
+  "kind": "session",
+  "title": "Flatland",
+  "id": "5e5510f00d00",
+  "item_id": 12,
+  "profile": "chris",
+  "method": "read",
+  "format": "pdf",
+  "etag": "e12",
+  "started_at": "2026-09-07T09:00:00Z",
+  "page_count": 400,
+  "locator": null,
+  "passage": null,
+  "links": {
+    "back": {
+      "href": "/api/items/12",
+      "title": "Flatland"
+    },
+    "book": {
+      "href": "/api/items/12/book"
+    },
+    "item": {
+      "href": "/api/items/12",
+      "title": "Flatland"
+    },
+    "work": {
+      "href": "/api/works/book%3Aedwin-a-abbott-flatland-1884",
+      "title": "Flatland"
+    }
+  },
+  "actions": {
+    "progress": {
+      "method": "POST",
+      "href": "/api/sessions/5e5510f00d00/progress",
+      "input": {
+        "fraction": "number?",
+        "locator": "string?",
+        "page": "number?",
+        "position_seconds": "number?",
+        "section": "number?"
+      },
+      "label": "Save the place"
+    },
+    "stop": {
+      "method": "DELETE",
+      "href": "/api/sessions/5e5510f00d00",
+      "label": "Close the book"
+    }
+  },
+  "unavailable": {
+    "keep_reading": {
+      "reason": "no passage is on — this is ordinary reading, and the place is being saved"
+    }
+  }
+}
+

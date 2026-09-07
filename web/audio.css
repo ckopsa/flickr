@@ -1,7 +1,9 @@
-/* flickr — the audio pane (audiobooks, albums) and the artist's shelf;
-   behaviour in web/audio.js. The pane sits between #detail-info and
-   #player-pane inside #view-detail; the shelf is #view-artist, a sibling of
-   #view-show that audio.js fills. */
+/* flickr — the audio pane (audiobooks, albums) and the artist's shelf. Both
+   are DRAWN by web/renderers.js now — the work renderer for a record's pane,
+   the artist renderer for a shelf — and web/audio.js, which used to group the
+   library into albums and artists by hand, is gone: the grouping is the
+   server's (internal/works, cmd/server/library.go) and the drawing is a pure
+   function of the document. What is left here is the look of it. */
 #audio-pane { margin-top: 14px; }
 #audio-head { display: flex; gap: 18px; align-items: flex-start; margin-bottom: 12px; }
 #audio-cover { width: 200px; height: 200px; border-radius: 10px; object-fit: cover; background: #1e2026;

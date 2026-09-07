@@ -1,0 +1,179 @@
+{
+  "self": "/api/library",
+  "kind": "library",
+  "title": "Library",
+  "profile": "chris",
+  "count": 6,
+  "items": [
+    {
+      "self": "/api/works/tmdb%3A2316",
+      "kind": "work",
+      "title": "The Office",
+      "work_kind": "show",
+      "medium": "video",
+      "year": 2005,
+      "subtitle": "1 season · 2 episodes · 1 extra",
+      "tech": "1280x720 h264/aac",
+      "genres": [
+        "Comedy"
+      ],
+      "item_id": 8,
+      "search": "the office s03e22 - beach games.mkv",
+      "links": {
+        "artwork": {
+          "href": "/api/items/8/poster"
+        },
+        "self": {
+          "href": "/api/works/tmdb%3A2316",
+          "title": "The Office"
+        }
+      }
+    },
+    {
+      "self": "/api/works/tmdb%3A109445",
+      "kind": "work",
+      "title": "Frozen",
+      "work_kind": "movie",
+      "medium": "video",
+      "year": 2013,
+      "subtitle": "2013",
+      "tech": "1920x816 h264/ac3 · 8.40 GB · 3 ch",
+      "genres": [
+        "Animation",
+        "Family",
+        "Adventure"
+      ],
+      "item_id": 4,
+      "search": "frozen frozen.mkv",
+      "links": {
+        "artwork": {
+          "href": "/api/items/4/poster"
+        },
+        "self": {
+          "href": "/api/works/tmdb%3A109445",
+          "title": "Frozen"
+        }
+      }
+    },
+    {
+      "self": "/api/artists/Radiohead",
+      "kind": "artist",
+      "title": "Radiohead",
+      "medium": "audio",
+      "album_count": 3,
+      "subtitle": "3 albums",
+      "tech": "artist · 1993–1997",
+      "search": "radiohead pablo honey ok computer the bends",
+      "links": {
+        "artwork": {
+          "href": "/api/items/10/cover"
+        },
+        "self": {
+          "href": "/api/artists/Radiohead",
+          "title": "Radiohead"
+        }
+      }
+    },
+    {
+      "self": "/api/works/audiobook%3Afrank-herbert-dune-1965",
+      "kind": "work",
+      "title": "Dune",
+      "work_kind": "audiobook",
+      "medium": "audio",
+      "author": "Frank Herbert",
+      "year": 1965,
+      "subtitle": "Frank Herbert · 1965 · 2 parts",
+      "tech": "audiobook · aac · 22:20:00",
+      "item_id": 1,
+      "search": "dune frank herbert 01 - part 1.m4b",
+      "links": {
+        "artwork": {
+          "href": "/api/items/1/cover"
+        },
+        "self": {
+          "href": "/api/works/audiobook%3Afrank-herbert-dune-1965",
+          "title": "Dune"
+        }
+      }
+    },
+    {
+      "self": "/api/works/book%3Aedwin-a-abbott-flatland-1884",
+      "kind": "work",
+      "title": "Flatland",
+      "work_kind": "book",
+      "medium": "text",
+      "author": "Edwin A. Abbott",
+      "year": 1884,
+      "subtitle": "Edwin A. Abbott · 1884",
+      "tech": "text · 3 MB · 400 p.",
+      "item_id": 12,
+      "search": "flatland edwin a. abbott flatland.pdf",
+      "links": {
+        "artwork": {
+          "href": "/api/items/12/cover"
+        },
+        "self": {
+          "href": "/api/works/book%3Aedwin-a-abbott-flatland-1884",
+          "title": "Flatland"
+        }
+      }
+    },
+    {
+      "self": "/api/works/book%3Ashirley-jackson-the-haunting-of-hill-house-1959",
+      "kind": "work",
+      "title": "The Haunting of Hill House",
+      "work_kind": "book",
+      "medium": "text",
+      "author": "Shirley Jackson",
+      "year": 1959,
+      "subtitle": "Shirley Jackson · 1959",
+      "tech": "text · 1 MB · 8 ch",
+      "item_id": 3,
+      "search": "the haunting of hill house shirley jackson the haunting of hill house.epub",
+      "links": {
+        "artwork": {
+          "href": "/api/items/3/cover"
+        },
+        "self": {
+          "href": "/api/works/book%3Ashirley-jackson-the-haunting-of-hill-house-1959",
+          "title": "The Haunting of Hill House"
+        }
+      }
+    }
+  ],
+  "facets": {
+    "genre": [
+      {
+        "value": "Adventure",
+        "count": 1
+      },
+      {
+        "value": "Animation",
+        "count": 1
+      },
+      {
+        "value": "Comedy",
+        "count": 1
+      },
+      {
+        "value": "Family",
+        "count": 1
+      }
+    ]
+  },
+  "links": {
+    "artists": {
+      "href": "/api/artists",
+      "title": "Artists"
+    },
+    "continue": {
+      "href": "/api/continue?client_id=chris",
+      "title": "Continue watching"
+    },
+    "root": {
+      "href": "/api/",
+      "title": "flickr"
+    }
+  }
+}
+

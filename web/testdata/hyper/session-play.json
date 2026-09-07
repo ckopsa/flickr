@@ -1,0 +1,127 @@
+{
+  "self": "/api/sessions/5e5510f00d00",
+  "kind": "session",
+  "title": "Beach Games",
+  "id": "5e5510f00d00",
+  "item_id": 8,
+  "profile": "chris",
+  "method": "direct_play",
+  "url": "https://storage.test/Shows/The Office (2005)/Season 3/S03E22 - Beach Games.mkv?signed",
+  "content_type": "video/x-matroska",
+  "seek_seconds": 142,
+  "started_at": "2026-09-07T09:00:00Z",
+  "decision": {
+    "method": "direct_play",
+    "trace": [
+      {
+        "check": "container",
+        "passed": true,
+        "detail": "file is mkv; client plays mkv"
+      },
+      {
+        "check": "video_codec",
+        "passed": true,
+        "detail": "file is h264; client plays h264"
+      },
+      {
+        "check": "audio_codec",
+        "passed": true,
+        "detail": "file is aac; client plays aac, ac3"
+      },
+      {
+        "check": "resolution",
+        "passed": true,
+        "detail": "file is 1280x720; client max 1920x1080"
+      },
+      {
+        "check": "audio_channels",
+        "passed": true,
+        "detail": "file has 2 channels; client max 6"
+      },
+      {
+        "check": "verdict",
+        "passed": true,
+        "detail": "all checks passed — direct play"
+      }
+    ]
+  },
+  "passage": {
+    "t": 142,
+    "end": 854,
+    "until": 9
+  },
+  "marks": {},
+  "links": {
+    "artwork": {
+      "href": "/api/items/8/still"
+    },
+    "back": {
+      "href": "/api/items/8",
+      "title": "Beach Games"
+    },
+    "item": {
+      "href": "/api/items/8",
+      "title": "Beach Games"
+    },
+    "next": {
+      "href": "/api/items/9",
+      "title": "The Job"
+    },
+    "work": {
+      "href": "/api/works/tmdb%3A2316",
+      "title": "The Office"
+    }
+  },
+  "actions": {
+    "keep_watching": {
+      "method": "POST",
+      "href": "/api/sessions/5e5510f00d00/keep_watching",
+      "label": "Keep watching"
+    },
+    "mark_in": {
+      "method": "POST",
+      "href": "/api/sessions/5e5510f00d00/mark/in",
+      "input": {
+        "clear": "boolean?",
+        "seconds": "number"
+      },
+      "label": "Mark in"
+    },
+    "mark_out": {
+      "method": "POST",
+      "href": "/api/sessions/5e5510f00d00/mark/out",
+      "input": {
+        "clear": "boolean?",
+        "seconds": "number"
+      },
+      "label": "Mark out"
+    },
+    "next": {
+      "method": "POST",
+      "href": "/api/sessions/5e5510f00d00/next",
+      "input": {
+        "capabilities": "capabilities?"
+      },
+      "label": "▶ The Job"
+    },
+    "progress": {
+      "method": "POST",
+      "href": "/api/sessions/5e5510f00d00/progress",
+      "input": {
+        "position_seconds": "number"
+      },
+      "label": "Save the place"
+    },
+    "stop": {
+      "method": "DELETE",
+      "href": "/api/sessions/5e5510f00d00",
+      "label": "Stop"
+    }
+  },
+  "unavailable": {
+    "link": {
+      "reason": "mark an in point first — a passage needs somewhere to start"
+    }
+  }
+}
+

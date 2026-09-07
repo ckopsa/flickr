@@ -1,0 +1,100 @@
+{
+  "self": "/api/sessions/5e5510f00d00",
+  "kind": "session",
+  "title": "The Haunting of Hill House",
+  "id": "5e5510f00d00",
+  "item_id": 3,
+  "profile": "chris",
+  "method": "read",
+  "format": "epub",
+  "etag": "e3",
+  "started_at": "2026-09-07T09:00:00Z",
+  "sections": [
+    {
+      "index": 1,
+      "title": "Cover"
+    },
+    {
+      "index": 2,
+      "title": "Title Page"
+    },
+    {
+      "index": 3,
+      "title": "Chapter One"
+    },
+    {
+      "index": 4,
+      "title": "Chapter Two"
+    },
+    {
+      "index": 5,
+      "title": "The Hill"
+    },
+    {
+      "index": 6,
+      "title": "The Tower"
+    },
+    {
+      "index": 7,
+      "title": "The Cellar"
+    },
+    {
+      "index": 8,
+      "title": "Afterword"
+    }
+  ],
+  "locator": {
+    "cfi": "epubcfi(/6/14[ch07]!/4/2/1:0)",
+    "section": 7,
+    "fraction": 0.34
+  },
+  "passage": {
+    "from": "ch:3",
+    "to": "ch:4",
+    "from_section": 3,
+    "to_section": 4,
+    "ends_at": "ch:4"
+  },
+  "links": {
+    "back": {
+      "href": "/api/items/3",
+      "title": "The Haunting of Hill House"
+    },
+    "book": {
+      "href": "/api/items/3/book"
+    },
+    "item": {
+      "href": "/api/items/3",
+      "title": "The Haunting of Hill House"
+    },
+    "work": {
+      "href": "/api/works/book%3Ashirley-jackson-the-haunting-of-hill-house-1959",
+      "title": "The Haunting of Hill House"
+    }
+  },
+  "actions": {
+    "keep_reading": {
+      "method": "POST",
+      "href": "/api/sessions/5e5510f00d00/keep_reading",
+      "label": "Keep reading"
+    },
+    "progress": {
+      "method": "POST",
+      "href": "/api/sessions/5e5510f00d00/progress",
+      "input": {
+        "fraction": "number?",
+        "locator": "string?",
+        "page": "number?",
+        "position_seconds": "number?",
+        "section": "number?"
+      },
+      "label": "Save the place"
+    },
+    "stop": {
+      "method": "DELETE",
+      "href": "/api/sessions/5e5510f00d00",
+      "label": "Close the book"
+    }
+  }
+}
+

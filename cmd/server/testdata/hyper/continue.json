@@ -1,0 +1,288 @@
+{
+  "self": "/api/continue?client_id=chris",
+  "kind": "continue",
+  "title": "Continue watching",
+  "profile": "chris",
+  "count": 3,
+  "items": [
+    {
+      "self": "/api/items/1",
+      "kind": "item",
+      "title": "01 - Part 1.m4b",
+      "id": 1,
+      "medium": "audio",
+      "label": "Part 1",
+      "duration_seconds": 41400,
+      "tech": "aac 2ch · 411 MB · 3 ch",
+      "year": 1965,
+      "chapters": [
+        {
+          "start_seconds": 0,
+          "title": "Chapter 01"
+        },
+        {
+          "start_seconds": 2400,
+          "title": "Chapter 02"
+        },
+        {
+          "start_seconds": 4740,
+          "title": "Chapter 03"
+        }
+      ],
+      "resume": {
+        "position_seconds": 4800
+      },
+      "work_title": "Dune",
+      "position_seconds": 4800,
+      "percent": 11.594202898550725,
+      "links": {
+        "artwork": {
+          "href": "/api/items/1/cover"
+        },
+        "cover": {
+          "href": "/api/items/1/cover"
+        },
+        "work": {
+          "href": "/api/works/audiobook%3Afrank-herbert-dune-1965",
+          "title": "Dune"
+        }
+      },
+      "actions": {
+        "play": {
+          "method": "POST",
+          "href": "/api/items/1/play",
+          "input": {
+            "passage": "passage?",
+            "seek_seconds": "number?"
+          },
+          "label": "▶ Play"
+        },
+        "progress": {
+          "method": "POST",
+          "href": "/api/progress",
+          "input": {
+            "client_id": "string",
+            "item_id": "1",
+            "position_seconds": "number"
+          },
+          "label": "Save the place"
+        },
+        "resume": {
+          "method": "POST",
+          "href": "/api/items/1/play",
+          "input": {
+            "passage": "passage?",
+            "seek_seconds": "number?"
+          },
+          "label": "▶ Resume"
+        }
+      },
+      "unavailable": {
+        "read": {
+          "reason": "an audiobook is played, not read"
+        }
+      }
+    },
+    {
+      "self": "/api/items/3",
+      "kind": "item",
+      "title": "The Haunting of Hill House",
+      "id": 3,
+      "medium": "text",
+      "label": "The Haunting of Hill House.epub",
+      "tech": "text · 1 MB · 8 ch",
+      "year": 1959,
+      "chapters": [
+        {
+          "start_seconds": 0,
+          "title": "Cover"
+        },
+        {
+          "start_seconds": 0,
+          "title": "Title Page"
+        },
+        {
+          "start_seconds": 0,
+          "title": "Chapter One"
+        },
+        {
+          "start_seconds": 0,
+          "title": "Chapter Two"
+        },
+        {
+          "start_seconds": 0,
+          "title": "The Hill"
+        },
+        {
+          "start_seconds": 0,
+          "title": "The Tower"
+        },
+        {
+          "start_seconds": 0,
+          "title": "The Cellar"
+        },
+        {
+          "start_seconds": 0,
+          "title": "Afterword"
+        }
+      ],
+      "sections": 8,
+      "resume": {
+        "locator": {
+          "cfi": "epubcfi(/6/14[ch07]!/4/2/1:0)",
+          "section": 7,
+          "fraction": 0.34
+        }
+      },
+      "work_title": "The Haunting of Hill House",
+      "position_seconds": 0,
+      "fraction": 0.34,
+      "percent": 34,
+      "links": {
+        "artwork": {
+          "href": "/api/items/3/cover"
+        },
+        "book": {
+          "href": "/api/items/3/book"
+        },
+        "cover": {
+          "href": "/api/items/3/cover"
+        },
+        "work": {
+          "href": "/api/works/book%3Ashirley-jackson-the-haunting-of-hill-house-1959",
+          "title": "The Haunting of Hill House"
+        }
+      },
+      "actions": {
+        "progress": {
+          "method": "POST",
+          "href": "/api/progress",
+          "input": {
+            "client_id": "string",
+            "fraction": "number?",
+            "item_id": "3",
+            "locator": "string?",
+            "page": "number?",
+            "position_seconds": "number?",
+            "section": "number?"
+          },
+          "label": "Save the place"
+        },
+        "read": {
+          "method": "POST",
+          "href": "/api/items/3/read",
+          "input": {
+            "client_id": "string?",
+            "passage": "passage?"
+          },
+          "label": "Read"
+        },
+        "resume": {
+          "method": "POST",
+          "href": "/api/items/3/read",
+          "input": {
+            "client_id": "string?",
+            "passage": "passage?"
+          },
+          "label": "Keep reading"
+        }
+      },
+      "unavailable": {
+        "play": {
+          "reason": "a book is read, not played"
+        }
+      }
+    },
+    {
+      "self": "/api/items/8",
+      "kind": "item",
+      "title": "Beach Games",
+      "id": 8,
+      "medium": "video",
+      "label": "S03E22 · Beach Games",
+      "duration_seconds": 2640,
+      "tech": "1280x720 h264/aac · 2.40 GB · 2 ch",
+      "overview": "Michael takes the office to the beach.",
+      "chapters": [
+        {
+          "start_seconds": 0,
+          "title": "Cold open"
+        },
+        {
+          "start_seconds": 142,
+          "title": "Titles"
+        }
+      ],
+      "resume": {
+        "position_seconds": 745
+      },
+      "work_title": "The Office",
+      "position_seconds": 745,
+      "percent": 28.219696969696972,
+      "links": {
+        "artwork": {
+          "href": "/api/items/8/still"
+        },
+        "poster": {
+          "href": "/api/items/8/poster"
+        },
+        "still": {
+          "href": "/api/items/8/still"
+        },
+        "trickplay": {
+          "href": "/api/items/8/trickplay.json"
+        },
+        "work": {
+          "href": "/api/works/tmdb%3A2316",
+          "title": "The Office"
+        }
+      },
+      "actions": {
+        "play": {
+          "method": "POST",
+          "href": "/api/items/8/play",
+          "input": {
+            "passage": "passage?",
+            "seek_seconds": "number?"
+          },
+          "label": "▶ Play"
+        },
+        "progress": {
+          "method": "POST",
+          "href": "/api/progress",
+          "input": {
+            "client_id": "string",
+            "item_id": "8",
+            "position_seconds": "number"
+          },
+          "label": "Save the place"
+        },
+        "resume": {
+          "method": "POST",
+          "href": "/api/items/8/play",
+          "input": {
+            "passage": "passage?",
+            "seek_seconds": "number?"
+          },
+          "label": "▶ Resume"
+        }
+      },
+      "unavailable": {
+        "read": {
+          "reason": "an episode is played, not read"
+        }
+      }
+    }
+  ],
+  "links": {
+    "library": {
+      "href": "/api/library",
+      "title": "Library"
+    },
+    "root": {
+      "href": "/api/",
+      "title": "flickr"
+    }
+  }
+}
+

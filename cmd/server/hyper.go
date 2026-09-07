@@ -78,8 +78,22 @@ func (s *server) handleRootDoc(w http.ResponseWriter, r *http.Request) {
 		Link("items", "/api/items", "Items").
 		Link("scan", "/api/scan", "Scan status").
 		Link("system", "/api/system", "System").
+		Link("profiles", "/api/users", "Profiles").
 		Action("scan", hyper.Action{
 			Method: "POST", Href: "/api/scan", Label: "Scan the library",
+		}).
+		// The client knows /api/ by heart and nothing else, so the address
+		// that turns a hash into a document has to be named here: without it
+		// the one URL the kernel composes would be two.
+		Action("route", hyper.Action{
+			Method: "GET", Href: "/api/-/route",
+			Input: map[string]string{"hash": "string"},
+			Label: "Open an address",
+		}).
+		Action("create_profile", hyper.Action{
+			Method: "POST", Href: "/api/users",
+			Input: map[string]string{"name": "string"},
+			Label: "Create a profile",
 		})
 	hyper.WriteDoc(w, http.StatusOK, doc)
 }
@@ -117,7 +131,12 @@ func (s *server) handleItemDoc(w http.ResponseWriter, r *http.Request) {
 		hyper.WriteProblem(w, serverProblem(err))
 		return
 	}
-	hyper.WriteDoc(w, http.StatusOK, s.itemEnvelope(*item, works.ByItem(ws)[id], true))
+	positions, err := s.positionsFor(profileOf(r))
+	if err != nil {
+		hyper.WriteProblem(w, serverProblem(err))
+		return
+	}
+	hyper.WriteDoc(w, http.StatusOK, s.itemEnvelope(*item, works.ByItem(ws)[id], true, positions))
 }
 
 // subtitle is one subtitle track as a document lists it: what the probe
@@ -161,7 +180,7 @@ func subtitlesOf(it store.Item) []subtitle {
 // subtitle tracks, the neighbours either side of it, and the three
 // curatorial actions (identity, reprobe, enrich) that belong on one item's
 // own page and would be noise repeated down a twenty-episode list.
-func (s *server) itemEnvelope(it store.Item, wk *works.Work, full bool) *hyper.Envelope {
+func (s *server) itemEnvelope(it store.Item, wk *works.Work, full bool, positions map[int64]store.Position) *hyper.Envelope {
 	medium := it.MediaInfo.MediumOrVideo() // nil media info reads as video
 	base := itemHref(it.ID)
 	doc := hyper.Doc(base, "item", itemTitle(it)).
@@ -171,8 +190,27 @@ func (s *server) itemEnvelope(it store.Item, wk *works.Work, full bool) *hyper.E
 	}
 	doc.Field("medium", medium).
 		Field("label", works.ItemLabel(it))
+	// Bonus material is a member of its work but not a step in it: the flag
+	// is what a list needs to keep it out of the run and put it under its own
+	// heading, and it used to be read off identity.kind in the browser.
+	if identityKind(it) == "extra" {
+		doc.Field("extra", true)
+	}
 	if it.MediaInfo != nil && it.MediaInfo.DurationSeconds > 0 {
 		doc.Field("duration_seconds", it.MediaInfo.DurationSeconds)
+	}
+	// The two lines a screen writes under a title, decided here rather than
+	// composed from four half-fields in the browser: `tech` is what the FILE
+	// is (the same phrase a tile carries, for this one member), `overview` is
+	// what the thing is ABOUT — the episode's own synopsis where there is
+	// one, the film's or the book's otherwise. `year` is the parenthesis a
+	// title takes, and an episode or a featurette takes none.
+	doc.Field("tech", techLine(it))
+	if ov := itemOverview(it); ov != "" {
+		doc.Field("overview", ov)
+	}
+	if y := itemYear(it); y != 0 {
+		doc.Field("year", y)
 	}
 	if full {
 		if it.Identity != nil {
@@ -203,6 +241,13 @@ func (s *server) itemEnvelope(it store.Item, wk *works.Work, full bool) *hyper.E
 		if mi.PageCount > 0 {
 			doc.Field("page_count", mi.PageCount)
 		}
+	}
+	// Where this profile left off, on the item's own document. The browser
+	// used to ask GET /api/progress for it by hand; the place belongs to the
+	// thing it is a place in, and a client that follows a link to an item is
+	// told where it stands in the same breath.
+	if r := resumeOf(it, positions); r != nil {
+		doc.Field("resume", r)
 	}
 
 	if wk != nil {
@@ -267,6 +312,65 @@ func (s *server) itemEnvelope(it store.Item, wk *works.Work, full bool) *hyper.E
 		}
 	}
 	return doc
+}
+
+// resume is where a profile left off in one item: the clock for anything
+// with one, the locator for a book. Absent when there is no place worth
+// coming back to — under five seconds is a misclick, and the last ten
+// seconds of a film are the credits, not a place.
+type resume struct {
+	PositionSeconds float64        `json:"position_seconds,omitempty"`
+	Locator         *model.Locator `json:"locator,omitempty"`
+}
+
+func resumeOf(it store.Item, positions map[int64]store.Position) *resume {
+	p, ok := positions[it.ID]
+	if !ok {
+		return nil
+	}
+	if p.Locator != nil {
+		if p.Locator.Fraction <= 0 && p.Locator.Section <= 1 && p.Locator.Page <= 1 {
+			return nil
+		}
+		return &resume{PositionSeconds: p.PositionSeconds, Locator: p.Locator}
+	}
+	if p.PositionSeconds <= 5 {
+		return nil
+	}
+	if it.MediaInfo != nil && it.MediaInfo.DurationSeconds > 0 &&
+		p.PositionSeconds >= it.MediaInfo.DurationSeconds-10 {
+		return nil
+	}
+	return &resume{PositionSeconds: p.PositionSeconds}
+}
+
+// itemOverview is what this one file is about, in the words whoever wrote
+// them: an episode's own synopsis, and the work's for everything else.
+func itemOverview(it store.Item) string {
+	e := it.Enrichment
+	if e == nil {
+		return ""
+	}
+	if e.EpisodeOverview != "" {
+		return e.EpisodeOverview
+	}
+	return e.Overview
+}
+
+// itemYear is the year a title is shown with. An episode's year is the
+// show's and is said on the show's page; a featurette has none of its own.
+func itemYear(it store.Item) int {
+	switch identityKind(it) {
+	case "episode", "extra":
+		return 0
+	}
+	if it.Enrichment != nil && it.Enrichment.Year != 0 {
+		return it.Enrichment.Year
+	}
+	if it.Identity != nil {
+		return it.Identity.Year
+	}
+	return 0
 }
 
 // artworkLinks names every picture and every byte-stream this item has, by
@@ -579,7 +683,7 @@ func (s *server) workEnvelope(wk *works.Work, profile string, positions map[int6
 
 	members := make([]*hyper.Envelope, 0, len(wk.Items))
 	for _, it := range wk.Items {
-		members = append(members, s.itemEnvelope(it, wk, false))
+		members = append(members, s.itemEnvelope(it, wk, false, positions))
 	}
 	doc.Field("members", members)
 

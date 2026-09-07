@@ -119,6 +119,26 @@ func has(doc map[string]any, group, name string) bool {
 	return ok
 }
 
+// The play session as a golden, so the renderers on the other side of the
+// wire (web/render_test.mjs) draw the player chrome from the same bytes the
+// handler writes. The id is minted and the start is a clock reading, so both
+// are pinned the way a reading session's are (read_test.go).
+func TestPlaySessionGolden(t *testing.T) {
+	// Beach Games under the passage a deep link opens it with: `t` seeds the
+	// seek, `end` is the bound the client's clock stops at, and `until` makes
+	// it a run — so the document carries keep_watching, next and the marks
+	// all at once, which is the whole of the player chrome.
+	_, h := fixturePlayer(t)
+	w := post(t, h, fmt.Sprintf("/api/items/%d/play", idBeach), map[string]any{
+		"capabilities": directPlayCaps(), "client_id": "chris",
+		"passage": map[string]any{"t": 142, "end": 854, "until": idTheJob},
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("POST play = %d: %s", w.Code, w.Body)
+	}
+	readGolden(t, "session-play", decode(t, w), w.Body.Bytes())
+}
+
 // A play is a session: the document says what was decided, where the bytes
 // are, and what may be done next — for a DIRECT play too, which until now
 // had no id at all.

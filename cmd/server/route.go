@@ -285,19 +285,19 @@ func (s *server) handleRouteDoc(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	profile := profileOf(r)
+	positions, err := s.positionsFor(profile)
+	if err != nil {
+		hyper.WriteProblem(w, serverProblem(err))
+		return
+	}
 	var doc *hyper.Envelope
 	switch target.View {
 	case "work":
-		positions, err := s.positionsFor(profile)
-		if err != nil {
-			hyper.WriteProblem(w, serverProblem(err))
-			return
-		}
 		doc = s.workEnvelope(target.Work, profile, positions)
 	case "artist":
 		doc = artistEnvelope(target.Artist)
 	case "item":
-		doc = s.itemEnvelope(*target.Item, works.ByItem(ws)[target.Item.ID], true)
+		doc = s.itemEnvelope(*target.Item, works.ByItem(ws)[target.Item.ID], true, positions)
 	default:
 		doc = libraryEnvelope()
 	}
