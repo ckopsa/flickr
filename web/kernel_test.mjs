@@ -73,6 +73,25 @@ test('the shell lists every file the page loads, and the cache is bumped with th
   assert.match(sw, /const CACHE = 'flickr-shell-v\d+';/);
 });
 
+// How the subtitles look is the one setting no document has an opinion about,
+// so it is split across three files: the page offers the controls and carries
+// the sheet, the kernel writes the ::cue rule into it, and the device — the
+// only half that can reach a cue — puts the line on the cues it has loaded.
+// The halves have to agree on the ids, which is what this checks.
+test('the subtitle look has a control, a rule to write and a device to place it', () => {
+  const html = read('index.html');
+  const src = read('kernel.js');
+  assert.match(html, /<style id="cue-style">/,
+    'the page carries no sheet for the kernel to write the ::cue rule into');
+  for (const id of ['cue-size', 'cue-ground', 'cue-position']) {
+    assert.match(html, new RegExp('<select id="' + id + '"'), id + ' is not on the page');
+    assert.ok(code(src).includes("'" + id + "'"), id + ' is not driven by the kernel');
+  }
+  assert.match(code(src), /::cue \{/, 'the kernel writes no ::cue rule');
+  assert.match(code(read('player.js')), /setCueLine/,
+    'the device is never told where the cues sit');
+});
+
 // --- the documents the kernel follows ----------------------------------------
 
 test('the root names everything the client needs to reach', () => {

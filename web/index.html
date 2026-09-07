@@ -63,6 +63,9 @@
   .set-row.end { justify-content: flex-end; margin-bottom: 0; }
   .set-row.col { display: block; }
   .set-label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+  /* the three subtitle selects, side by side while there is room for them */
+  .set-cues { display: flex; gap: 8px; flex-wrap: wrap; }
+  .set-cues select { flex: 1 1 120px; }
   /* the household dashboard: one line per live sitting, who on the left and
      where they have got to on the right */
   #settings-activity { font-size: 13px; }
@@ -735,6 +738,11 @@
       animation: none !important; }
   }
 </style>
+<!-- the subtitle rule, written by the kernel from the Subtitles section of the
+     settings panel: WebVTT rendering honours ::cue for the type and the ground,
+     so how big the words are and what they sit on is one rule the page carries.
+     Empty until the panel has been read, which is what the browser does anyway. -->
+<style id="cue-style"></style>
 </head>
 <body>
 <!-- the header is the name, the search box and who is watching. Typing
@@ -776,6 +784,30 @@
     </div>
     <div class="set-row">
       <span id="hw" title=""></span>
+    </div>
+    <!-- how the subtitles read: how big, what they sit on, and how far up the
+         picture. kernel.js writes the ::cue rule above from the first two and
+         remembers all three in this browser; the third is each cue's own
+         `line`, which only the device can set. -->
+    <div class="set-row col">
+      <span class="set-label">Subtitles</span>
+      <div class="set-cues">
+        <select id="cue-size" aria-label="Subtitle size">
+          <option value="small">Small</option>
+          <option value="medium">Medium</option>
+          <option value="large">Large</option>
+          <option value="huge">Huge</option>
+        </select>
+        <select id="cue-ground" aria-label="Subtitle background">
+          <option value="box">Box</option>
+          <option value="shadow">Shadow</option>
+          <option value="none">No background</option>
+        </select>
+        <select id="cue-position" aria-label="Subtitle position">
+          <option value="bottom">Bottom</option>
+          <option value="raised">Raised</option>
+        </select>
+      </div>
     </div>
     <!-- who is playing what, right now: the server's own list
          (root.links.activity), read while this panel is up. kernel.js fills

@@ -781,6 +781,7 @@
   function openSettings() {
     paintAutoplay();
     paintTenFoot();
+    paintCues();
     $('settings').hidden = false;
     watchActivity(true);
   }
@@ -788,6 +789,68 @@
   function closeSettings() {
     $('settings').hidden = true;
     watchActivity(false);
+  }
+
+  // --- subtitle appearance -----------------------------------------------------
+  //
+  // How the subtitles READ is a matter of eyesight and of the room, never of
+  // the file: no document has an opinion about how big a word should be. So
+  // the three settings are kept in this browser and applied the two ways
+  // WebVTT allows — the type and the ground through a ::cue rule written into
+  // #cue-style, which is what a browser honours for a cue's font and its
+  // background; the position through each cue's own `line`, which only the
+  // device can set, so the player is handed the number and puts it on the
+  // cues as each track loads.
+  const CUE_SIZES = { small: '70%', medium: '100%', large: '140%', huge: '200%' };
+  const CUE_GROUNDS = {
+    box: 'background: rgba(0,0,0,0.75);',
+    shadow: 'background: transparent; text-shadow: 0 1px 2px #000, 0 0 6px #000;',
+    none: 'background: transparent;',
+  };
+  // Raised is three lines up from the bottom, which clears a transport bar and
+  // most burned-in credits; bottom is wherever the cue itself asked to sit.
+  const CUE_LINES = { bottom: 'auto', raised: -4 };
+  const CUE_SELECTS = [['cue-size', 'size'], ['cue-ground', 'ground'], ['cue-position', 'position']];
+
+  // A remembered value counts only if it is still one of the offered ones:
+  // what is in storage was written by an older version of this file, or by
+  // nobody at all.
+  function offered(map, v, dflt) {
+    return Object.prototype.hasOwnProperty.call(map, v) ? v : dflt;
+  }
+
+  function cuePrefs() {
+    let s = {};
+    try { s = JSON.parse(localStorage.cueStyle || '{}') || {}; } catch (e) { /* no storage */ }
+    return {
+      size: offered(CUE_SIZES, s.size, 'medium'),
+      ground: offered(CUE_GROUNDS, s.ground, 'box'),
+      position: offered(CUE_LINES, s.position, 'bottom'),
+    };
+  }
+
+  function applyCues() {
+    const p = cuePrefs();
+    const style = $('cue-style');
+    if (style) {
+      style.textContent = '::cue { font-size: ' + CUE_SIZES[p.size] + '; ' + CUE_GROUNDS[p.ground] + ' }';
+    }
+    root.Player.setCueLine(CUE_LINES[p.position]);
+    paintCues(p);
+  }
+
+  function paintCues(p) {
+    p = p || cuePrefs();
+    for (const [id, key] of CUE_SELECTS) {
+      if ($(id)) $(id).value = p[key];
+    }
+  }
+
+  function setCue(key, value) {
+    const p = cuePrefs();
+    p[key] = value;
+    try { localStorage.cueStyle = JSON.stringify(p); } catch (e) { /* it lasts the sitting */ }
+    applyCues();
   }
 
   // --- household activity ------------------------------------------------------
@@ -1223,6 +1286,9 @@
     $('settings').onclick = e => { if (e.target.id === 'settings') closeSettings(); };
     $('settings-autoplay').onclick = () => { root.Player.setAutoplay(!root.Player.autoplay()); paintAutoplay(); };
     $('settings-tenfoot').onclick = () => setTenFoot(!tenFoot);
+    for (const [id, key] of CUE_SELECTS) {
+      $(id).onchange = e => setCue(key, e.target.value);
+    }
     // Remembered if it was ever chosen, guessed if it was not.
     let remembered = null;
     try { remembered = localStorage.tenFoot || null; } catch (e) { /* no storage */ }
@@ -1248,6 +1314,7 @@
     if (!location.hash) history.replaceState(null, '', '#/');
 
     root.Player.init(kernel);
+    applyCues();   // the device is made now, so the cue line has somewhere to land
 
     try { rootDoc = remember(await api(ROOT)); }
     catch (e) { $('view').innerHTML = '<div id="empty">' + esc(e.detail || e.message) + '</div>'; return; }
