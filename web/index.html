@@ -1673,53 +1673,72 @@ function onPlaybackEnded() {
 }
 video.addEventListener('ended', onPlaybackEnded); // covers direct play AND hls.js
 
-// The one road to a progress write, and it goes through the session:
+// The player's road to a progress write, and it goes through the session:
 // actions.progress is the address, and the answer to a write during a
 // passage is 409 — a scene replayed for a talk is not where the person is
 // in the film. That refusal is the server's answer, not an error: no retry,
 // nothing said on screen. (There is no pause/unload write today; if one is
-// added it goes through here.) The reader reports through here too, with
-// `place` = { locator, fraction, section } instead of a clock position; it
-// has no session document until hyper 5, so for it the old client-side gate
-// is still the only rule there is.
-function saveProgress(positionSeconds, place) {
+// added it goes through here.) A book has its own session and its own place
+// (a locator, not a clock): the reader pane posts that to its session's
+// progress action itself, and never comes through here.
+function saveProgress(positionSeconds) {
   if (!currentItem) return;
-  // The session's action, but only while it is THIS item's session — a book
-  // opened over a player that is still up has none of its own.
+  // The session's action, but only while it is THIS item's session.
   const act = session?.item_id === currentItem.id ? session.actions?.progress : null;
   if (!act && passage) return;
   fetch(act ? act.href : '/api/progress', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       item_id: currentItem.id, client_id: clientId || 'anonymous',
-      position_seconds: positionSeconds, ...(place || {}),
+      position_seconds: positionSeconds,
     }),
   }).catch(() => { /* the network, or a refusal; neither is the player's business */ });
 }
 
 // ---------------------------------------------------------------------------
-// text: the reader pane (reader.js; a .pdf goes to pdfreader.js behind the
-// same Reader facade). A book is read, not played, but it keeps the
-// player's contract: currentItem marks the pane open so a route change
-// closes it (closePlayer → Reader.close), `passage` gates saveProgress exactly
-// as for video, and the place is reported through saveProgress with a
-// locator (an EPUB's CFI, or a PDF's page) instead of seconds. routePassage
-// is the route's from/to (or null).
+// text: the reader pane (reader.js; a PDF goes to pdfreader.js behind the
+// same Reader facade). A book is READ THROUGH A SESSION the way a film is
+// played through one: the read action answers the session document, and that
+// document is the whole of what the reader is handed — the bytes, the
+// contents, the saved locator, the passage resolved, and the actions for the
+// place and for keeping on. The pane posts its own place and its own "keep
+// reading"; what stays here is the route (a passage dropped from the hash)
+// and the player's contract, so a route change closes the book
+// (closePlayer → Reader.close) as it stops a stream. routePassage is the
+// route's from/to (or null).
 // ---------------------------------------------------------------------------
 function isText(it) { return it?.media_info?.medium === 'text'; }
-function openReader(item, routePassage) {
+async function openReader(item, routePassage) {
   hideUpNext();
   const tp = isTextPassage(routePassage) ? routePassage : null;
   currentItem = item;
   setPassage(tp);
   $('detail-info').hidden = true;
   $('player-pane').hidden = true;
-  Reader.open(item, {
+  await stopSession(); // whatever was open before — a player, or another book
+  let doc;
+  try {
+    // Composed here for the same reason play's address is (hyper 6 hands the
+    // kernel the item document and this becomes actions.read.href): the
+    // passage rides the request, and the server resolves it onto the session.
+    doc = await api(`/api/items/${item.id}/read`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        client_id: clientId || 'anonymous',
+        ...(tp ? { passage: { from: tp.from, to: tp.to } } : {}),
+      }),
+    });
+  } catch (e) {
+    $('status').textContent = 'Error: ' + e.message;
+    return;
+  }
+  session = doc;      // the reading session; the reader takes its actions from it
+  sessionId = doc.id || null;
+  Reader.open(doc, {
     container: $('reader-pane'),
-    passage: tp,
-    clientId: clientId || 'anonymous',
-    onPlace: place => saveProgress(0, place), // gated: a passage writes nothing
-    onKeep: () => { setPassage(null); if (currentRoute?.passage) location.replace(itemHash(item.id, null)); },
+    // The reader took the passage off the session; this keeps the route and
+    // the player's own flags in step with it.
+    onKeep: s => { session = s || session; setPassage(null); if (currentRoute?.passage) location.replace(itemHash(item.id, null)); },
     onBack: () => { closePlayer(); if (currentRoute?.passage) location.replace(itemHash(item.id, null)); },
   });
   if (!tp) recordRecentlyPlayed(item.id); // feeds the continue row's fallback path

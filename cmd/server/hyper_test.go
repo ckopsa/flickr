@@ -42,6 +42,7 @@ const (
 	idTheJob    = 9
 	idYou       = 10
 	idTelex     = 11
+	idFlatland  = 12
 )
 
 func fixtureItems() []store.Item {
@@ -181,6 +182,17 @@ func fixtureItems() []store.Item {
 			MediaInfo: &model.MediaInfo{
 				Medium: model.MediumAudio, Container: "flac", AudioCodec: "flac",
 				DurationSeconds: 259, BitrateBps: 960000, AudioChannels: 2,
+			},
+		},
+		// The other kind of book: a PDF, which counts in pages where an EPUB
+		// counts in spine sections and has no contents list at all.
+		{
+			ObjectKey: "Books/Edwin A. Abbott/Flatland.pdf",
+			ETag:      "e12", Size: 3400000,
+			Identity: &model.Identity{Kind: "book", Title: "Flatland", Author: "Edwin A. Abbott", Year: 1884},
+			MediaInfo: &model.MediaInfo{
+				Medium: model.MediumText, Container: "pdf", PageCount: 400,
+				Document: &model.Document{Title: "Flatland", Creator: "Edwin A. Abbott"},
 			},
 		},
 	}
@@ -659,7 +671,7 @@ func TestExistingRoutesUnchanged(t *testing.T) {
 	if err := json.Unmarshal(get(t, h, "/api/items").Body.Bytes(), &items); err != nil {
 		t.Fatalf("/api/items: %v", err)
 	}
-	if len(items) != 11 {
+	if len(items) != len(fixtureItems()) {
 		t.Errorf("/api/items returned %d items", len(items))
 	}
 	// /api/works/{key}/items is still that work's members, not a document.

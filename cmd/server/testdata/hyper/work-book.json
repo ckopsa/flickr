@@ -124,8 +124,12 @@
           "label": "Save the place"
         },
         "read": {
-          "method": "GET",
-          "href": "/api/items/3/book",
+          "method": "POST",
+          "href": "/api/items/3/read",
+          "input": {
+            "client_id": "string?",
+            "passage": "passage?"
+          },
           "label": "Read"
         }
       },
@@ -155,8 +159,12 @@
       "label": "Copy a passage link"
     },
     "read": {
-      "method": "GET",
-      "href": "/api/items/3/book",
+      "method": "POST",
+      "href": "/api/items/3/read",
+      "input": {
+        "client_id": "string?",
+        "passage": "passage?"
+      },
       "label": "Read"
     }
   },

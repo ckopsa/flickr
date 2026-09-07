@@ -210,6 +210,12 @@ func (p *playSessions) reapIdle(maxIdle time.Duration, live func(string) bool) [
 	now := time.Now()
 	for id, row := range p.rows {
 		gone := now.Sub(row.touched) > maxIdle
+		if row.Method == methodRead {
+			// A reader that has gone quiet has been reading the page. There
+			// is no stream behind a book to reap, so the grace is long
+			// (readIdleTimeout, read.go) and the cost of it is one small row.
+			gone = now.Sub(row.touched) > readIdleTimeout
+		}
 		if row.Pipeline != "" {
 			gone = !live(row.Pipeline)
 		}
@@ -469,6 +475,12 @@ func (s *server) writeSession(w http.ResponseWriter, r *http.Request, row playSe
 		return
 	}
 	next, wk, _ := s.sessionNeighbour(row)
+	// A book is read through a session too, and its document is the text
+	// half of this one: no stream, no clock, locators for a place (read.go).
+	if row.Method == methodRead {
+		hyper.WriteDoc(w, status, s.readEnvelope(row, *item, wk))
+		return
+	}
 	hyper.WriteDoc(w, status, s.sessionEnvelope(row, *item, next, wk))
 }
 
@@ -701,11 +713,12 @@ func (s *server) handleSessionProgress(w http.ResponseWriter, r *http.Request) {
 // passageOnProblem is the refusal itself: what happened, and the one action
 // that would make the write available.
 func passageOnProblem(row playSession) hyper.Problem {
+	// The way out is the medium's (escapeFrom, passage.go): a film is watched
+	// on, a book read on, and the remedy names the action this session offers.
+	out := escapeFrom(row)
 	return hyper.Refuse(http.StatusConflict, "passage-on",
-		"A passage is on, so the place is not being saved",
-		"this session is playing a passage; the saved place belongs to ordinary viewing").
-		WithRemedy("keep watching to leave the passage — the place is saved from then on",
-			&hyper.Link{Href: "/api/sessions/" + row.ID + "/keep_watching", Title: "Keep watching"})
+		"A passage is on, so the place is not being saved", out.detail).
+		WithRemedy(out.remedy, &hyper.Link{Href: out.href, Title: out.label})
 }
 
 // handleKeepWatching is the escape hatch: the passage is over, ordinary

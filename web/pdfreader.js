@@ -4,13 +4,15 @@
 // width, with Prev / Next, a page field and the keyboard's arrows.
 //
 // It keeps the EPUB pane's contract exactly (see reader.js, whose Reader
-// facade hands a .pdf item here): open / close / isOpen / passage. The place
-// leaves through opts.onPlace({ page, fraction }) — index.html routes that
-// into saveProgress(), the one gate for /api/progress, closed while a
-// passage is set — and in passage mode this file does not call onPlace at
-// all: two locks on the same door, as in reader.js. A PDF's place is a page:
-// the server stores { page, fraction } in the same locator column an EPUB's
-// CFI goes in, and reads it back as `p. 213 / 400`.
+// facade hands a session whose `format` is "pdf" here): open / close /
+// isOpen / passage, all four taking the READING SESSION document. The bytes
+// are `links.book`, the count is `page_count`, the resume page is `locator`,
+// the bounds are `passage` (already resolved to pages) and the place is
+// posted to `actions.progress.href` — where a 409 is the server saying a
+// passage is on. In passage mode this file reports nothing at all: two locks
+// on the same door, as in reader.js. A PDF's place is a page: the server
+// stores { page, fraction } in the same locator column an EPUB's CFI goes
+// in, and reads it back as `p. 213 / 400`.
 //
 // Locators (parseLocator etc.) and the end predicate (textPassageEnded)
 // are the pure functions in passage.js; pg:<n> is the spelling a page
@@ -26,10 +28,11 @@
   const RESIZE_DELAY_MS = 200; // re-fit after the window settles
 
   let container = null, ui = null, keysBound = false;
-  let item = null, opts = null, doc = null, count = 0, page = 0;
-  let passage = null;          // the route passage the pane was opened with; null = normal reading
+  let sess = null, opts = null, doc = null, count = 0, page = 0;
+  let passage = null;          // the session's passage; null = ordinary reading
   let from = null, to = null;  // its bounds, parsed
   let ended = false;           // the end bound has been reached: no more turning
+  let refused = false;         // the server answered 409: a passage is on after all
   let openSeq = 0, drawSeq = 0; // stale async work from an earlier open / draw checks these
   let renderTask = null;       // the pdf.js render in flight, cancelled by the next one
   let placeTimer = null, pendingPlace = null, resizeTimer = null;
@@ -111,11 +114,6 @@
     return String(s == null ? '' : s).replace(/[&<>"']/g, ch =>
       ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
   }
-  function titleOf(it) {
-    return (it.enrichment && it.enrichment.title) ||
-           (it.media_info && it.media_info.document && it.media_info.document.title) ||
-           (it.identity && it.identity.title) || String(it.object_key || '').split('/').pop();
-  }
   function clamp01(f) { return !(f > 0) ? 0 : f > 1 ? 1 : f; }
 
   function fail(msg) {
@@ -127,47 +125,48 @@
 
   // --- opening ----------------------------------------------------------------
 
-  // opts: { container, passage, clientId, onPlace(place), onKeep(), onBack() }
-  async function open(it, o) {
+  // s is the reading session document; o is { container, onKeep(session), onBack() }
+  async function open(s, o) {
     const seq = ++openSeq;
     teardown();
-    item = it;
+    sess = s;
     opts = o || {};
     build(opts.container);
     if (!ui.canvas) { ui.view.innerHTML = '<canvas class="rd-canvas"></canvas>'; ui.canvas = ui.view.firstChild; }
-    passage = root.isTextPassage(opts.passage) ? opts.passage : null;
+    // The passage came resolved: from/to as locators, and the pages they
+    // land on. A `to` before `from` was dropped by the server, not here.
+    passage = root.isTextPassage(sess.passage) ? sess.passage : null;
     from = passage ? root.parseLocator(passage.from) : null;
     to = passage ? root.parseLocator(passage.to) : null;
-    // A `to` before `from` is no bound, the way an `end` before `t` is
-    // dropped — judged only where the two are comparable without the book.
-    if (from && to && from.kind === to.kind &&
-        ((to.kind === 'pg' && to.n < from.n) || (to.kind === 'pct' && to.f < from.f))) to = null;
     ended = false;
+    refused = false;
     page = 0;
-    count = (it.media_info && it.media_info.page_count) || 0; // the prober's count until the file says
+    count = sess.page_count || 0; // the prober's count until the file says
     container.hidden = false;
     ui.end.hidden = true;
     ui.prev.disabled = ui.next.disabled = ui.pageIn.disabled = false;
-    ui.title.textContent = titleOf(it);
+    ui.title.textContent = sess.title || '';
     ui.readout.textContent = passage ? 'in passage' : '';
     ui.msg.textContent = 'Opening…';
     ui.pageIn.value = '';
     ui.pageOf.textContent = count ? '/ ' + count : '';
 
+    const bytes = (sess.links && sess.links.book && sess.links.book.href) || '';
+    if (!bytes) { fail('This reading session names no book to open.'); return; }
     const lib = root.pdfjsLib;
     if (!lib || typeof lib.getDocument !== 'function') { fail(MISSING); return; }
     try {
       if (lib.GlobalWorkerOptions && !lib.GlobalWorkerOptions.workerSrc) lib.GlobalWorkerOptions.workerSrc = WORKER_SRC;
-      // /book answers Range requests, so pdf.js reads the cross-reference
+      // The book answers Range requests, so pdf.js reads the cross-reference
       // first and then only the objects of the page shown.
-      const task = lib.getDocument({ url: '/api/items/' + it.id + '/book' });
+      const task = lib.getDocument({ url: bytes });
       const d = await task.promise;
       if (seq !== openSeq) { try { d.destroy(); } catch (e) { /* already gone */ } return; }
       doc = d;
       count = d.numPages || count;
       ui.pageOf.textContent = count ? '/ ' + count : '';
       ui.pageIn.max = String(count || 1);
-      const start = passage ? pageFor(from) : await savedPage();
+      const start = passage ? pageFor(from) : savedPage();
       if (seq !== openSeq) return;
       ui.msg.textContent = '';
       await goTo(start || 1);
@@ -191,40 +190,40 @@
     if (!ui) return;
     teardown();
     container.hidden = true;
-    item = null;
+    sess = null;
     passage = from = to = null;
-    ended = false;
+    ended = refused = false;
     page = count = 0;
   }
 
   function isOpen(id) {
-    return !!(ui && item && !container.hidden && ui.title.isConnected && (id == null || item.id === id));
+    return !!(ui && sess && !container.hidden && ui.title.isConnected && (id == null || sess.item_id === id));
   }
 
   // --- pages ------------------------------------------------------------------
 
-  // The page a locator names: pg is itself, pct lands proportionally (0 on
-  // the first page, 1 on the last), the EPUB spellings name nothing here.
-  // Clamped into the book; null when the locator says nothing.
+  // The page a locator names. The SESSION worked it out against the probed
+  // count (`passage.from_page`); this stands in for the passage's own start
+  // when the file would not say how many pages it has, and for a page the
+  // reader is sent to by anything but the passage. pg is itself, pct lands
+  // proportionally (0 on the first page, 1 on the last), the EPUB spellings
+  // name nothing here. Clamped into the book; null when it says nothing.
   function pageFor(loc) {
+    if (loc === from && passage && passage.from_page > 0) return clampPage(passage.from_page);
     if (!loc) return null;
     let n = null;
     if (loc.kind === 'pg') n = loc.n;
     else if (loc.kind === 'pct' && count > 0) n = Math.floor(loc.f * count) + 1;
-    if (n == null) return null;
-    return count > 0 ? Math.min(count, Math.max(1, n)) : Math.max(1, n);
+    return n == null ? null : clampPage(n);
   }
+  function clampPage(n) { return count > 0 ? Math.min(count, Math.max(1, n)) : Math.max(1, n); }
 
-  // Normal reading resumes from the saved page when there is one (a row an
-  // EPUB reader wrote for this item carries no page and starts over).
-  async function savedPage() {
-    try {
-      const r = await fetch('/api/progress?item_id=' + item.id + '&client_id=' + encodeURIComponent(opts.clientId || 'anonymous'));
-      const j = await r.json();
-      return j && Number.isInteger(j.page) && j.page > 0 ? j.page : null;
-    } catch (e) {
-      return null;
-    }
+  // Ordinary reading resumes from the saved page, which came WITH the
+  // session (a row an EPUB reader wrote for this item carries no page and
+  // starts over).
+  function savedPage() {
+    const loc = sess && sess.locator;
+    return loc && Number.isInteger(loc.page) && loc.page > 0 ? loc.page : null;
   }
 
   // goTo shows page n (clamped) and reports it; draw alone re-fits the page
@@ -308,7 +307,20 @@
     if (placeTimer) { clearTimeout(placeTimer); placeTimer = null; }
     const place = pendingPlace;
     pendingPlace = null;
-    if (place && !passage && opts && opts.onPlace) opts.onPlace(place);
+    if (place && !passage && !refused) postPlace(place);
+  }
+  // The place goes to the session's own progress action — this pane knows no
+  // addresses of its own. A 409 is the server saying a passage is on: an
+  // answer, not an error, and the answer is to stop reporting until it is
+  // left. Anything else is the network, which is not the reader's business.
+  function postPlace(place) {
+    const act = sess && sess.actions && sess.actions.progress;
+    if (!act || !act.href) return;
+    fetch(act.href, {
+      method: act.method || 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(place),
+    }).then(r => { if (r.status === 409) refused = true; }).catch(() => {});
   }
 
   // --- paging -----------------------------------------------------------------
@@ -323,6 +335,9 @@
 
   // --- passage end ------------------------------------------------------------
 
+  // The two ways out are the session document's: the keep_reading action,
+  // labelled as the server labels it, and the back link, which names what
+  // going back goes back to.
   function endPassage() {
     ended = true;
     ui.next.disabled = true;
@@ -330,16 +345,28 @@
       : to.kind === 'pg' ? 'Through page ' + to.n
       : to.kind === 'pct' ? 'At ' + Math.round(to.f * 100) + '%'
       : 'At the marked place';
+    const keep = sess && sess.actions && sess.actions.keep_reading;
+    ui.keep.textContent = (keep && keep.label) || 'Keep reading';
+    const back = sess && sess.links && sess.links.back;
+    ui.back.title = back && back.title ? 'Back to ' + back.title : '';
     ui.end.hidden = false;
   }
-  // "Keep reading": leave passage mode — the bound is cleared, normal reading
-  // (progress reports included) resumes from here. index.html drops the
-  // passage from the route and opens the gate; then the current page counts.
-  function keepReading() {
+  // "Keep reading": leave the passage. It is the SESSION's passage, so
+  // leaving it is a write — the server clears it and answers the session as
+  // it now is, progress accepted from here on. index.html drops the passage
+  // from the route in onKeep; then the current page counts.
+  async function keepReading() {
+    const act = sess && sess.actions && sess.actions.keep_reading;
+    if (act) {
+      try {
+        const r = await fetch(act.href, { method: act.method || 'POST' });
+        if (r.ok) sess = await r.json();
+      } catch (e) { /* the session may already be over; the pane leaves the passage either way */ }
+    }
     passage = from = to = null;
-    ended = false;
+    ended = refused = false;
     ui.end.hidden = true;
-    if (opts && opts.onKeep) opts.onKeep();
+    if (opts && opts.onKeep) opts.onKeep(sess);
     if (page > 0) onPage();
   }
 

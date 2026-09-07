@@ -689,3 +689,28 @@ func querySeconds(q url.Values, name string) *float64 {
 	}
 	return &v
 }
+
+// ── leaving a passage ───────────────────────────────────────────────────
+
+// escape is the way out of a passage, in the words of the medium: the action
+// that clears it, and the sentence the 409 offers it with. One rule, two
+// sittings — a film is watched on, a book read on — and the refusal says
+// whichever this session is rather than making the client translate.
+type escape struct{ href, label, remedy, detail string }
+
+func escapeFrom(row playSession) escape {
+	if row.Method == methodRead {
+		return escape{
+			href:   "/api/sessions/" + row.ID + "/keep_reading",
+			label:  "Keep reading",
+			remedy: "keep reading to leave the passage — the place is saved from then on",
+			detail: "this session is reading a passage; the saved place belongs to ordinary reading",
+		}
+	}
+	return escape{
+		href:   "/api/sessions/" + row.ID + "/keep_watching",
+		label:  "Keep watching",
+		remedy: "keep watching to leave the passage — the place is saved from then on",
+		detail: "this session is playing a passage; the saved place belongs to ordinary viewing",
+	}
+}

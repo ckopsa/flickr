@@ -3,7 +3,7 @@
   "kind": "library",
   "title": "Library",
   "profile": "chris",
-  "count": 5,
+  "count": 6,
   "items": [
     {
       "self": "/api/works/tmdb%3A2316",
@@ -93,6 +93,28 @@
         "self": {
           "href": "/api/works/audiobook%3Afrank-herbert-dune-1965",
           "title": "Dune"
+        }
+      }
+    },
+    {
+      "self": "/api/works/book%3Aedwin-a-abbott-flatland-1884",
+      "kind": "work",
+      "title": "Flatland",
+      "work_kind": "book",
+      "medium": "text",
+      "author": "Edwin A. Abbott",
+      "year": 1884,
+      "subtitle": "Edwin A. Abbott · 1884",
+      "tech": "text · 3 MB · 400 p.",
+      "item_id": 12,
+      "search": "flatland edwin a. abbott flatland.pdf",
+      "links": {
+        "artwork": {
+          "href": "/api/items/12/cover"
+        },
+        "self": {
+          "href": "/api/works/book%3Aedwin-a-abbott-flatland-1884",
+          "title": "Flatland"
         }
       }
     },

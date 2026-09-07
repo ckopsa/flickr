@@ -1,25 +1,33 @@
 // flickr — the reader pane: EPUB books on epub.js (vendored under web/vendor,
 // so a LAN-only engine loads nothing from the internet at read time).
 //
-// A book is read, not played, but it shares the player's contract with
-// index.html, which hooks in through four calls:
-//   Reader.open(item, opts)   Read pressed, a continue-reading tap, or a
-//                             from/to route arriving
-//   Reader.close()            the route left the item (closePlayer)
-//   Reader.isOpen(id)         is this item open in the pane?
-//   Reader.passage()          the passage record the pane was opened with
+// A book is read, not played, but it is read through a SESSION, the way a
+// film is played through one: POST /api/items/{id}/read answers the session
+// document and THAT is what this pane is handed. Everything it used to work
+// out or guess is on it — `links.book` for the bytes, `sections` for the
+// contents, `locator` for where the reader left off, `passage` for the bounds
+// (already resolved to section indexes), `actions.progress` for the place and
+// `actions.keep_reading` for the way out. This file composes no URL at all.
+//
+// index.html hooks in through four calls:
+//   Reader.open(session, opts)  Read pressed, a continue-reading tap, or a
+//                               from/to route arriving
+//   Reader.close()              the route left the item (closePlayer)
+//   Reader.isOpen(id)           is this item open in the pane?
+//   Reader.passage()            the passage the session was opened under
 // Everything else — the book, the TOC, paging, the readout — lives here.
 // Reader is a facade over two panes sharing one container: this file's EPUB
-// pane, and the PDF pane in pdfreader.js, which a .pdf item is handed to
-// (see the bottom of this file). Both keep the contract above.
+// pane, and the PDF pane in pdfreader.js, which the session's `format` sends
+// a PDF to (see the bottom of this file). Both keep the contract above.
 //
-// Position leaves through opts.onPlace({ locator, fraction, section }), which
-// index.html routes into saveProgress(): the one gate for /api/progress, closed
-// while a passage is set. This file never writes progress on its own, and in
-// passage mode it does not even call onPlace — two locks on the same door.
+// The place is posted to `actions.progress.href`, and a 409 there is the
+// server saying a passage is on — an answer, not an error: the pane stops
+// reporting until the passage is left. In passage mode it does not report at
+// all, so the rule holds on both sides of the wire.
 //
 // Locators (parseLocator etc.) and the end predicate are pure functions in
-// passage.js; this file resolves them against the open book.
+// passage.js; this file resolves them against the open book. Which SECTION a
+// locator lands in is the session's answer now, not this file's.
 (function (root) {
   'use strict';
 
@@ -29,10 +37,11 @@
   const LOCATION_CHARS = 1024;  // epub.js location granularity (chars per location)
 
   let container = null, ui = null, keysBound = false;
-  let item = null, opts = null, book = null, rendition = null, compareCFI = null;
-  let passage = null;           // the route passage the pane was opened with; null = normal reading
+  let sess = null, opts = null, book = null, rendition = null, compareCFI = null;
+  let passage = null;           // the session's passage; null = ordinary reading
   let from = null, to = null;   // its bounds, parsed
   let ended = false;            // the end bound has been reached: no more advancing
+  let refused = false;          // the server answered 409: a passage is on after all
   let locationsReady = false;   // book.locations generated or loaded: fractions are the book's own
   let openSeq = 0;              // stale async work from an earlier open checks this
   let placeTimer = null, pendingPlace = null;
@@ -96,32 +105,33 @@
     return String(s == null ? '' : s).replace(/[&<>"']/g, ch =>
       ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
   }
-  function titleOf(it) {
-    return (it.enrichment && it.enrichment.title) ||
-           (it.media_info && it.media_info.document && it.media_info.document.title) ||
-           (it.identity && it.identity.title) || String(it.object_key || '').split('/').pop();
+  // One reach into the document, so a relation that is not there reads as
+  // absent rather than throwing halfway down a chain.
+  function hrefOf(group, name) {
+    const entry = sess && sess[group] && sess[group][name];
+    return entry && entry.href ? entry.href : null;
   }
+  function sections() { return (sess && sess.sections) || []; }
   function sectionCount() {
     if (book && book.spine && book.spine.length > 0) return book.spine.length;
-    const mi = item && item.media_info;
-    return (mi && (mi.sections || (mi.chapters && mi.chapters.length))) || 0;
+    return sections().length;
   }
   function clamp01(f) { return !(f > 0) ? 0 : f > 1 ? 1 : f; }
 
-  // The TOC comes from media_info.chapters — one entry per spine item, in
-  // order, titled from the book's own nav/NCX by the prober — so section i
-  // (1-based) is spine item i-1 and a tap needs no lookup in the book.
+  // The contents are the session's `sections` — one entry per spine item, in
+  // order, titled from the book's own nav/NCX by the prober — so an entry's
+  // `index` is the 1-based section and a tap needs no lookup in the book.
   function renderTOC() {
-    const chs = (item.media_info && item.media_info.chapters) || [];
+    const secs = sections();
     ui.toc.innerHTML = '';
-    if (!chs.length) { ui.toc.innerHTML = '<div class="rd-toc-empty">No contents listed.</div>'; return; }
-    chs.forEach((ch, i) => {
+    if (!secs.length) { ui.toc.innerHTML = '<div class="rd-toc-empty">No contents listed.</div>'; return; }
+    for (const s of secs) {
       const b = document.createElement('button');
-      b.dataset.section = String(i + 1);
-      b.textContent = ch.title || ('Section ' + (i + 1));
-      b.onclick = () => { goSection(i + 1); ui.toc.hidden = true; };
+      b.dataset.section = String(s.index);
+      b.textContent = s.title || ('Section ' + s.index);
+      b.onclick = () => { goSection(s.index); ui.toc.hidden = true; };
       ui.toc.appendChild(b);
-    });
+    }
   }
   function markTOC(section) {
     for (const b of ui.toc.querySelectorAll('button')) {
@@ -137,36 +147,37 @@
 
   // --- opening ----------------------------------------------------------------
 
-  // opts: { container, passage, clientId, onPlace(place), onKeep(), onBack() }
-  async function open(it, o) {
+  // s is the reading session document; o is { container, onKeep(session), onBack() }
+  async function open(s, o) {
     const seq = ++openSeq;
     teardown();
-    item = it;
+    sess = s;
     opts = o || {};
     build(opts.container);
-    passage = root.isTextPassage(opts.passage) ? opts.passage : null;
+    // The passage came resolved: from/to as locators, and the sections they
+    // land in. A `to` before `from` was dropped by the server, not here.
+    passage = root.isTextPassage(sess.passage) ? sess.passage : null;
     from = passage ? root.parseLocator(passage.from) : null;
     to = passage ? root.parseLocator(passage.to) : null;
-    // A `to` before `from` is no bound, the way an `end` before `t` is
-    // dropped — judged only where the two are comparable without the book.
-    if (from && to && from.kind === to.kind &&
-        ((to.kind === 'ch' && to.n < from.n) || (to.kind === 'pct' && to.f < from.f))) to = null;
     ended = false;
+    refused = false;
     locationsReady = false;
     lastLocation = null;
     container.hidden = false;
     ui.end.hidden = true;
     ui.prev.disabled = ui.next.disabled = false;
-    ui.title.textContent = titleOf(it);
+    ui.title.textContent = sess.title || '';
     ui.readout.textContent = passage ? 'in passage' : '';
     ui.msg.textContent = 'Opening…';
     ui.toc.hidden = true;
     renderTOC();
 
+    const bytes = hrefOf('links', 'book');
+    if (!bytes) { fail('This reading session names no book to open.'); return; }
     if (typeof root.ePub !== 'function') { fail(MISSING); return; }
     try {
       compareCFI = (a, b) => new root.ePub.CFI().compare(a, b);
-      book = root.ePub('/api/items/' + it.id + '/book', { openAs: 'epub' });
+      book = root.ePub(bytes, { openAs: 'epub' });
       rendition = book.renderTo(ui.view, { width: '100%', height: '100%', flow: 'paginated', spread: 'none' });
       // A paper page in a dark UI.
       rendition.themes.default({ body: { background: '#f4f1ea', color: '#1c1c1c' } });
@@ -180,7 +191,7 @@
       });
       await book.ready;
       if (seq !== openSeq) return;
-      const target = passage ? await targetFor(from) : await savedTarget();
+      const target = passage ? await targetFor(from) : savedTarget();
       if (seq !== openSeq) return;
       await rendition.display(target);
       if (seq !== openSeq) return;
@@ -209,19 +220,19 @@
     if (!ui) return;
     teardown();
     container.hidden = true;
-    item = null;
+    sess = null;
     passage = from = to = null;
-    ended = false;
+    ended = refused = false;
     lastLocation = null;
   }
 
   function isOpen(id) {
-    return !!(ui && item && !container.hidden && ui.title.isConnected && (id == null || item.id === id));
+    return !!(ui && sess && !container.hidden && ui.title.isConnected && (id == null || sess.item_id === id));
   }
 
   // --- locations and the fraction --------------------------------------------
 
-  function locationsKey() { return 'epub-locations:' + item.id + ':' + (item.etag || ''); }
+  function locationsKey() { return 'epub-locations:' + sess.item_id + ':' + (sess.etag || ''); }
 
   async function ensureLocations() {
     if (locationsReady) return true;
@@ -291,14 +302,27 @@
     if (placeTimer) { clearTimeout(placeTimer); placeTimer = null; }
     const place = pendingPlace;
     pendingPlace = null;
-    if (place && !passage && opts && opts.onPlace) opts.onPlace(place);
+    if (place && !passage && !refused) postPlace(place);
+  }
+  // The place goes to the session's own progress action — the reader knows
+  // no addresses of its own. A 409 is the server saying a passage is on: an
+  // answer, not an error, and the answer is to stop reporting until it is
+  // left. Anything else is the network, which is not the reader's business.
+  function postPlace(place) {
+    const act = sess && sess.actions && sess.actions.progress;
+    if (!act || !act.href) return;
+    fetch(act.href, {
+      method: act.method || 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(place),
+    }).then(r => { if (r.status === 409) refused = true; }).catch(() => {});
   }
 
   // --- locators against the open book ----------------------------------------
 
   // A display target for a locator: a CFI, a spine href, or undefined (the
-  // beginning). pct wants the book's locations; when they cannot be made the
-  // proportional section stands in.
+  // beginning). pct wants the book's locations; when they cannot be made,
+  // the section the SESSION says it lands in stands in.
   async function targetFor(loc) {
     if (!loc || !book) return undefined;
     if (loc.kind === 'cfi') return loc.cfi;
@@ -310,7 +334,7 @@
       if (await ensureLocations()) {
         try { return book.locations.cfiFromPercentage(loc.f); } catch (e) { /* fall through */ }
       }
-      return hrefOfSection(root.locatorSection(loc, sectionCount()));
+      return hrefOfSection(passage && passage.from_section);
     }
     return undefined;
   }
@@ -321,16 +345,11 @@
     return sec ? sec.href : undefined;
   }
 
-  // Normal reading resumes from the saved locator (a CFI) when there is one.
-  async function savedTarget() {
-    try {
-      const r = await fetch('/api/progress?item_id=' + item.id + '&client_id=' + encodeURIComponent(opts.clientId || 'anonymous'));
-      const j = await r.json();
-      const loc = root.parseLocator(j && j.locator);
-      return loc && loc.kind === 'cfi' ? loc.cfi : undefined;
-    } catch (e) {
-      return undefined;
-    }
+  // Ordinary reading resumes from the saved locator, which came WITH the
+  // session: the reader asks no second address where the place is.
+  function savedTarget() {
+    const loc = root.parseLocator(sess.locator && sess.locator.cfi);
+    return loc && loc.kind === 'cfi' ? loc.cfi : undefined;
   }
 
   // --- paging -----------------------------------------------------------------
@@ -355,6 +374,9 @@
 
   // --- passage end ------------------------------------------------------------
 
+  // The two ways out are the session document's: the keep_reading action,
+  // labelled as the server labels it, and the back link, which names what
+  // going back goes back to.
   function endPassage() {
     ended = true;
     ui.next.disabled = true;
@@ -362,44 +384,54 @@
       : to.kind === 'ch' ? 'Through section ' + to.n
       : to.kind === 'pct' ? 'At ' + Math.round(to.f * 100) + '%'
       : 'At the marked place';
+    const keep = sess && sess.actions && sess.actions.keep_reading;
+    ui.keep.textContent = (keep && keep.label) || 'Keep reading';
+    const back = sess && sess.links && sess.links.back;
+    ui.back.title = back && back.title ? 'Back to ' + back.title : '';
     ui.end.hidden = false;
   }
-  // "Keep reading": leave passage mode — the bound is cleared, normal reading
-  // (progress reports included) resumes from here. index.html drops the
-  // passage from the route and opens the gate; then the current place counts.
-  function keepReading() {
+  // "Keep reading": leave the passage. It is the SESSION's passage, so
+  // leaving it is a write — the server clears it and answers the session as
+  // it now is, progress accepted from here on. index.html drops the passage
+  // from the route in onKeep; then the current place counts.
+  async function keepReading() {
+    const act = sess && sess.actions && sess.actions.keep_reading;
+    if (act) {
+      try {
+        const r = await fetch(act.href, { method: act.method || 'POST' });
+        if (r.ok) sess = await r.json();
+      } catch (e) { /* the session may already be over; the pane leaves the passage either way */ }
+    }
     passage = from = to = null;
-    ended = false;
+    ended = refused = false;
     ui.end.hidden = true;
     ui.next.disabled = false;
-    if (opts && opts.onKeep) opts.onKeep();
+    if (opts && opts.onKeep) opts.onKeep(sess);
     if (lastLocation) onRelocated(lastLocation);
   }
 
   // --- the facade -------------------------------------------------------------
-  // A .pdf item is read page by page in the PDF pane (pdfreader.js); every
-  // other text item is an EPUB and opens here. The two share the container,
-  // so opening one closes the other, and index.html asks the facade, never
-  // a pane. A PDF with no PDF pane loaded gets one sentence, not an epub.js
-  // error about a zip.
-  function isPDF(it) {
-    const key = String(it && it.object_key || '');
-    return /\.pdf$/i.test(key) || !!(it && it.media_info && it.media_info.container === 'pdf');
-  }
+  // A PDF is read page by page in the PDF pane (pdfreader.js); every other
+  // book is an EPUB and opens here. WHICH is the session document's answer
+  // (`format`), not a guess at the file name. The two panes share the
+  // container, so opening one closes the other, and index.html asks the
+  // facade, never a pane. A PDF with no PDF pane loaded gets one sentence,
+  // not an epub.js error about a zip.
+  function isPDF(s) { return !!s && s.format === 'pdf'; }
   function pdfPane() { return root.PDFReader || null; }
   root.Reader = {
-    open(it, o) {
-      if (!isPDF(it)) {
+    open(s, o) {
+      if (!isPDF(s)) {
         if (pdfPane()) pdfPane().close();
-        return open(it, o);
+        return open(s, o);
       }
       close();
-      if (pdfPane()) return pdfPane().open(it, o);
-      item = it;
+      if (pdfPane()) return pdfPane().open(s, o);
+      sess = s;
       opts = o || {};
       build(opts.container);
       container.hidden = false;
-      ui.title.textContent = titleOf(it);
+      ui.title.textContent = (s && s.title) || '';
       fail('The PDF pane is missing: web/pdfreader.js did not load.');
       return undefined;
     },
