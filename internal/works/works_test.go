@@ -861,6 +861,83 @@ func TestWorkProgressBook(t *testing.T) {
 	}
 }
 
+// pdfBook is a book item whose file is a PDF of pageCount pages (0 = the
+// probe found no count).
+func pdfBook(id int64, key, author, title string, pageCount int) store.Item {
+	it := book(id, key, author, title, 0)
+	it.MediaInfo = &model.MediaInfo{Medium: model.MediumText, Container: "pdf", PageCount: pageCount}
+	return it
+}
+
+func paged(itemID int64, page int, frac, updated float64) store.Position {
+	return store.Position{ItemID: itemID, UpdatedAt: updated, Locator: &model.Locator{Page: page, Fraction: frac}}
+}
+
+// A PDF's place is a page: the text reads "p. 213 / 400" and the fraction is
+// the page over the probed count — the server's arithmetic, whatever
+// fraction the row carries; without a count the text is "p. 213" and the
+// reader's own fraction stands.
+func TestWorkProgressPDF(t *testing.T) {
+	counted := Build([]store.Item{pdfBook(20, "Books/A/Paper.pdf", "A", "Paper", 400)})
+	uncounted := Build([]store.Item{pdfBook(21, "Books/A/Scan.pdf", "A", "Scan", 0)})
+	for _, tc := range []struct {
+		name     string
+		w        *Work
+		pos      store.Position
+		fraction float64
+		text     string
+		status   string
+	}{
+		{"page over count", &counted[0], paged(20, 213, 0.5325, 7), 213.0 / 400, "p. 213 / 400", "active"},
+		{"the count wins over a stale fraction", &counted[0], paged(20, 100, 0.9, 7), 0.25, "p. 100 / 400", "active"},
+		{"finished at nine tenths of the pages", &counted[0], paged(20, 360, 0.9, 7), 0.9, "p. 360 / 400", "finished"},
+		{"a page past the count is clamped", &counted[0], paged(20, 500, 1, 7), 1, "p. 500 / 400", "finished"},
+		{"first page", &counted[0], paged(20, 1, 0.0025, 7), 1.0 / 400, "p. 1 / 400", "active"},
+		{"no count: the reader's fraction", &uncounted[0], paged(21, 213, 0.5325, 7), 0.5325, "p. 213", "active"},
+		{"no count, no fraction", &uncounted[0], paged(21, 213, 0, 7), 0, "p. 213", "active"},
+		{"an epub row on a pdf item reads as an epub row", &uncounted[0], placed(21, "x", 3, 0.4, 7), 0.4, "ch. 3 · 40%", "active"},
+	} {
+		p, ok := WorkProgress(tc.w, map[int64]store.Position{tc.pos.ItemID: tc.pos})
+		if !ok {
+			t.Fatalf("%s: expected progress", tc.name)
+		}
+		if p.Fraction != tc.fraction || p.ProgressText != tc.text || p.Status != tc.status || p.UpdatedAt != 7 {
+			t.Errorf("%s: %+v, want fraction %v text %q status %s", tc.name, p, tc.fraction, tc.text, tc.status)
+		}
+	}
+}
+
+// The resume list treats a PDF by its page: page 1 is the cover (noise),
+// page 2 is a place, the entry's fraction is page over count, and nine
+// tenths of the pages is finished.
+func TestContinueListPDF(t *testing.T) {
+	ws := Build([]store.Item{
+		pdfBook(20, "Books/A/Reading.pdf", "A", "Reading", 400),
+		pdfBook(21, "Books/A/Glanced.pdf", "A", "Glanced", 400),
+		pdfBook(22, "Books/A/Done.pdf", "A", "Done", 400),
+		pdfBook(23, "Books/A/Second Page.pdf", "A", "Second Page", 0),
+	})
+	got := ContinueList(ws, []store.Position{
+		paged(20, 213, 0.5325, 100), // reading
+		paged(21, 1, 0, 90),         // opened to the first page: noise
+		paged(22, 380, 0.95, 80),    // finished: gone
+		paged(23, 2, 0, 60),         // second page, no count, no fraction: a place
+	}, 20)
+	var ids []int64
+	for _, e := range got {
+		ids = append(ids, e.ItemID)
+	}
+	if want := []int64{20, 23}; !reflect.DeepEqual(ids, want) {
+		t.Fatalf("ids = %v, want %v", ids, want)
+	}
+	if e := got[0]; e.Fraction != 213.0/400 || e.Label != "Reading.pdf" || e.PositionSeconds != 0 || e.DurationSeconds != 0 {
+		t.Errorf("pdf entry: %+v", e)
+	}
+	if e := got[1]; e.Fraction != 0 {
+		t.Errorf("uncounted pdf entry keeps the reader's fraction: %+v", e)
+	}
+}
+
 // The resume list keeps a book by its locator, drops one finished or barely
 // opened, and hands the client the fraction since seconds mean nothing.
 func TestContinueListText(t *testing.T) {

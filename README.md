@@ -164,7 +164,34 @@ a handful of architectural decisions (see design notes below):
    *End of the passage*, write nothing. A book's cover — the image its OPF
    names — is extracted once on first request into `data/covers/<id>.jpg`
    and served by the same `GET /api/items/{id}/cover` an audio item's
-   attached picture is (14); tiles ask `/cover` for every non-video item. PDF is its own bead.
+   attached picture is (14); tiles ask `/cover` for every non-video item.
+16. **A PDF is a book with pages instead of sections** — `.pdf` under
+   `Books/` is admitted as the same `book` kind and `text` medium as an
+   EPUB, and everything from 15 applies with the page as the unit. Probing
+   reads the file's own structure with no external tool (`ProbePDF`):
+   trailer → cross-reference → Catalog → page tree → `/Count`, through
+   classic xref tables, PDF 1.5 xref streams (FlateDecode, PNG predictors)
+   and object streams alike, and when the table lies or is missing it scans
+   the file for the page tree instead; the count lands in
+   `media_info.page_count` (0 = the file would not say; the probe never
+   fails on that) and the Info dictionary's `/Title` and `/Author` in
+   `media_info.document`. The reader pane is pdf.js, vendored like epub.js
+   (`web/pdfreader.js` behind the same `Reader` facade `web/reader.js`
+   exports): one page at a time on a canvas fit to the pane's width, Prev /
+   Next, a page field, the arrow keys; `GET /api/items/{id}/book` serves it
+   as `application/pdf` and pdf.js reads it by Range. The place is the page:
+   the same `locator` column holds `{"page": 213, "fraction": 0.5325}`,
+   `POST /api/progress` takes `page` beside the EPUB fields, and the
+   fraction law gets its page unit — `progress` is page over the probed
+   count (the server's own arithmetic; the reader's fraction stands in when
+   the count is unknown) and `progress_text` reads `p. 213 / 400` (or `p.
+   213`); finished at ≥ 0.9, continue-reading by page, page 1 the cover
+   nobody resumes to. The locator grammar gains `pg:<n>`: `#/item/<id>?from=
+   pg:213&to=pg:240` opens at page 213 and ends the passage when page 240 is
+   the page shown — inclusive, the page stays on view, *End of the passage*
+   appears and Next turns no further — and writes nothing, the three passage
+   rules unchanged. A PDF has no named cover: `/cover` answers 404 without a
+   download and the tile falls back as for any coverless item.
 
 ## Library layout
 
@@ -182,7 +209,7 @@ that category's kind with what the path gives.
 | `Shows/` (`TV/`, `Series/`) | `Shows/<Show (Year)>/Season <n>/<S01E02 or E02 or 1x02 or 01 - Name>.mkv`, `Shows/<Show>/<file>` | kind `episode`, title = show, season/episode from the filename then the season directory (0 = unnumbered); `Featurettes/`, `Deleted Scenes/` → `extra` |
 | `Audiobooks/` | `Audiobooks/<Author>/<Title (Year)>/<03 - Chapter Three.m4b>`, `Audiobooks/<Author>/<Title>.m4b` | kind `audiobook_part`, author, title, year, `part` from the filename's leading ordinal (`03 - …`, `Part 3`, `03`; 0 when absent or for a single-file book) |
 | `Music/` (`Albums/`) | `Music/<Artist>/<Album (Year)>/<01 Title.flac>` | kind `track`, author = artist, title = ALBUM (the album is the work), `part` = track number, `track_title` = the name after the ordinal (`Title`); a loose `Music/<Artist>/<Title>.mp3` is a one-track album named by the file |
-| `Books/` (`Ebooks/`) | `Books/<Author>/<Title (Year)>.epub`, `Books/<Author>/<Title>/<file>.epub` | kind `book`, author, title (from the file or the directory), year |
+| `Books/` (`Ebooks/`) | `Books/<Author>/<Title (Year)>.epub`, `Books/<Author>/<Title>/<file>.epub` (`.pdf` the same) | kind `book`, author, title (from the file or the directory), year |
 
 Examples, key → identity:
 
@@ -198,8 +225,8 @@ Books/George Orwell/1984.epub                        book       George Orwell ·
 
 What the scan admits, by medium: **video** `.mkv .mp4 .m4v .avi .mov .webm
 .ts .wmv`; **audio** `.m4b .m4a .mp3 .flac .opus .ogg .aac .wav`; **text**
-`.epub` (`.pdf` is a later bead). Subtitle sidecars (`.srt .ass .ssa .vtt`)
-are matched to the file they sit beside, not admitted on their own.
+`.epub .pdf`. Subtitle sidecars (`.srt .ass .ssa .vtt`) are matched to the
+file they sit beside, not admitted on their own.
 
 Vocabulary, from file to work:
 
@@ -217,8 +244,9 @@ sum of its parts' durations (earlier parts count whole), its text reads
 `part 3 of 12 · 41:10`; a single chaptered file reads
 `ch. 7 · 1:19:22 / 11:30:00`; a book's fraction is the percentage the reader
 reports with its locator, its text `ch. 7 · 34%` (a row written before the
-reader existed still reads as a position without a place). Audio plays
-(design note 14) and text reads (15).
+reader existed still reads as a position without a place); a PDF's fraction
+is its page over its page count, its text `p. 213 / 400` (`p. 213` when the
+probe found no count). Audio plays (design note 14) and text reads (15, 16).
 
 ## Run
 
@@ -252,13 +280,13 @@ locally except HLS segments in `data/streams/`.
 | `GET /api/items/{id}/poster` | cached TMDB poster (image/jpeg, 404 if absent) |
 | `GET /api/items/{id}/cover` | an audio item's embedded cover art, extracted with ffmpeg on first request and cached in `data/covers/`; falls back to the poster route, 404 when neither exists |
 | `GET /api/items/{id}/still` | cached TMDB episode still (image/jpeg, 404 if absent) |
-| `GET /api/items/{id}/book` | a text item's bytes for the reader (`application/epub+zip`, Range requests honoured); 415 for anything that is not text |
-| `GET /api/items/{id}/cover` | the item's own cover art: a book's OPF cover image, extracted once into `data/covers/`; 404 when the book names none, 415 for video (whose artwork is the poster) |
+| `GET /api/items/{id}/book` | a text item's bytes for the reader (`application/epub+zip`, or `application/pdf` for a `.pdf`; Range requests honoured); 415 for anything that is not text |
+| `GET /api/items/{id}/cover` | the item's own cover art: a book's OPF cover image, extracted once into `data/covers/`; 404 when the book names none (a PDF never does), 415 for video (whose artwork is the poster) |
 | `GET /api/items/{id}/trickplay.json` | scrub-preview sprite index (404 if not generated) |
 | `GET /api/items/{id}/trickplay/{n}.jpg` | sprite sheet n |
 | `POST /api/items/{id}/trickplay` | force-generate sprites for one item (synchronous) |
 | `DELETE /api/sessions/{id}` | stop a transcode session (idle sessions are auto-reaped) |
-| `POST/GET /api/progress` | playback position per (item, client): `position_seconds` for video/audio; for text also `locator` (an EPUB CFI), `fraction` (0..1, the book's own percentage; 400 outside that range) and optional `section` (1-based spine index, derived from the CFI when omitted). GET returns the text fields only when the row holds a locator |
+| `POST/GET /api/progress` | playback position per (item, client): `position_seconds` for video/audio; for text also `locator` (an EPUB CFI), `fraction` (0..1, the book's own percentage; 400 outside that range) and optional `section` (1-based spine index, derived from the CFI when omitted); for a PDF `page` (1-based; 400 when negative) with the same `fraction` (page over count). GET returns the text fields only when the row holds a locator |
 | `GET/POST /api/users` | list / idempotently create profile names (clients use the name as `client_id`) |
 | `POST /api/telemetry` | append any JSON object to `data/telemetry.jsonl`; always 200 |
 
@@ -303,18 +331,23 @@ item route:
   through the episodes and stops after the item with that id. `t` applies to
   the first item only; `end`, if given, applies within the last item —
   omit it to let that episode play out.
-- `from` / `to` are **locators** for text passages, three spellings of a
-  place in a book: `cfi:<epub cfi>` (a point, the form the reader's own
+- `from` / `to` are **locators** for text passages, four spellings of a
+  place in a book: `cfi:<epub cfi>` (a point, the form the EPUB reader's own
   progress speaks — a bare `epubcfi(…)` is accepted as the same), `ch:<n>`
-  (the n-th spine section, 1-based, as `media_info.chapters` lists them) or
-  `pct:<0..1>` (the book's own percentage). The reader opens at `from` and
-  stops at `to`. A `ch:<n>` bound is inclusive — the passage runs through
-  section n and ends when the reader would turn into n+1, the way `until`
-  plays its episode out; `cfi:` and `pct:` bounds are points, reached when
-  the page shown starts at or after them. The book ending ends any passage.
+  (the n-th spine section, 1-based, as `media_info.chapters` lists them),
+  `pct:<0..1>` (the book's own percentage) or `pg:<n>` (the n-th page of a
+  PDF, 1-based). The reader opens at `from` and stops at `to`. A `ch:<n>`
+  bound is inclusive — the passage runs through section n and ends when the
+  reader would turn into n+1, the way `until` plays its episode out; a
+  `pg:<n>` bound is inclusive too, and since a page is its own last page the
+  passage ends when page n is the page shown (it stays on view, the reader
+  turns no further); `cfi:` and `pct:` bounds are points, reached when the
+  page shown starts at or after them. The book ending ends any passage.
   Either bound alone is fine (`from` alone: start there, read on; `to`
   alone: from the beginning to there). A `to` before a `from` of the same
-  spelling is dropped like an `end` before `t`.
+  spelling is dropped like an `end` before `t`. A spelling the open book
+  cannot read (`pg:` on an EPUB, `ch:` or `cfi:` on a PDF) opens at the
+  beginning and bounds nothing; `pct:` works on both.
 - The show form is for a minter that knows a show's link and a person's
   spelling of an episode but no item ids: `ep=S02E05` (any case) names the
   episode, `until=S02E07` names the last episode of a run. It is resolved
@@ -332,6 +365,7 @@ Examples:
 #/item/77?from=ch%3A3&to=ch%3A4        chapters 3 and 4 of book 77
 #/item/77?from=pct%3A0.4&to=cfi%3Aepubcfi(%2F6%2F14!%2F4%2F2)
                                        from 40% of the book to a marked place in section 7
+#/item/80?from=pg%3A213&to=pg%3A240    pages 213 through 240 of PDF 80
 ```
 
 Three rules hold for every passage session:
@@ -386,7 +420,8 @@ text `parseLocator`, `sectionFromCFI`, `locatorSection`), both end
 predicates (`passageEnded`, `textPassageEnded`) and the marking logic
 (`snapToChapter`, `markBounds`, `passageLink`) as pure functions; `node
 --test web/passage_test.mjs` runs their tests without a build step.
-`web/reader.js` resolves locators against the open book.
+`web/reader.js` resolves locators against the open EPUB, `web/pdfreader.js`
+against the open PDF.
 
 ## Casting
 
@@ -429,5 +464,7 @@ Decision-engine tests cover the canonical matrix cases (e.g. 4K HEVC HDR10 +
 h264-only client → tone-mapped, downscaled h264 transcode); pipeline tests
 pin the FFmpeg argv contract (filter order, seek-before-input, copy paths).
 The works tests table the fraction law for every shape, books included
-(`ch. 7 · 34%`); the store tests migrate a pre-locator `state.db`; and
+(`ch. 7 · 34%`, `p. 213 / 400`); the scanner tests build EPUBs and PDFs in
+memory (classic xref tables, xref and object streams, lying offsets, no
+trailer at all); the store tests migrate a pre-locator `state.db`; and
 `node --test web/passage_test.mjs` covers the passage and locator grammar.

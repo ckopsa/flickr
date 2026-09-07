@@ -170,8 +170,9 @@ func openEpub(r io.ReaderAt, size int64) (*epubPackage, error) {
 }
 
 // ErrNoCover is EpubCover's answer for a book whose package names no cover
-// image (or names a member the zip does not carry) — not a broken book.
-var ErrNoCover = errors.New("epub: the package names no cover image")
+// image (or names a member the zip does not carry) — not a broken book. A
+// PDF gets the same answer without being opened (ReadTextCover).
+var ErrNoCover = errors.New("the book names no cover image")
 
 // maxCoverBytes bounds a cover read; anything larger is not a cover.
 const maxCoverBytes = 20 << 20

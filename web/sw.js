@@ -12,10 +12,14 @@
 // same way (index.html's grid builder calls isAudioItem at render time);
 // v9 adds the reader (reader.js and the vendored epub.js + JSZip): same-
 // origin now, so the shell carries them and a book opens with nothing
-// fetched from the internet.
-const CACHE = 'flickr-shell-v9';
-const SHELL = ['/', '/index.html', '/passage.js', '/audio.js', '/audio.css', '/reader.js',
+// fetched from the internet. v10 adds the PDF pane (pdfreader.js, and the
+// vendored pdf.js module + its worker, which pdf.js loads by URL at open
+// time) the same way, and reader.js became the facade the new index.html
+// calls.
+const CACHE = 'flickr-shell-v10';
+const SHELL = ['/', '/index.html', '/passage.js', '/audio.js', '/audio.css', '/reader.js', '/pdfreader.js',
                '/vendor/jszip.min.js', '/vendor/epub.min.js',
+               '/vendor/pdf.min.mjs', '/vendor/pdf.worker.min.mjs',
                '/manifest.json', '/icon-192.png', '/icon-512.png'];
 
 self.addEventListener('install', (e) => {

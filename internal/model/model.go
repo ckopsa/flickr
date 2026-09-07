@@ -51,6 +51,11 @@ type MediaInfo struct {
 	// Sections is the spine length of a text item — how many reading-order
 	// documents the book is made of. 0 for video and audio.
 	Sections int `json:"sections,omitempty"`
+	// PageCount is a PDF's page count, read from its page tree at probe time
+	// (0 when the file would not say; the reader then counts for itself). A
+	// PDF has pages where an EPUB has sections: fixed, numbered, the unit
+	// its locator speaks. 0 for everything that is not a PDF.
+	PageCount int `json:"page_count,omitempty"`
 	// Document is what a text file says about itself (its package metadata),
 	// as opposed to what its path says (Identity). Only set for text.
 	Document  *Document       `json:"document,omitempty"`
@@ -73,8 +78,9 @@ func (m *MediaInfo) MediumOrVideo() string {
 }
 
 // Document is the embedded metadata of a text item (EPUB package metadata:
-// dc:title, dc:creator, dc:language). It is recorded, not trusted over the
-// path: identity stays deterministic from the object key alone.
+// dc:title, dc:creator, dc:language; a PDF's Info dictionary: /Title and
+// /Author as Creator). It is recorded, not trusted over the path: identity
+// stays deterministic from the object key alone.
 type Document struct {
 	Title    string `json:"title,omitempty"`
 	Creator  string `json:"creator,omitempty"`
@@ -85,11 +91,14 @@ type Document struct {
 // has no clock, so the reader reports the EPUB CFI of the page it shows,
 // the 1-based spine section that page is in (the "chapter" of the progress
 // text; 0 = unknown) and the book's own percentage as a fraction in [0,1].
+// A PDF's place is its Page (1-based; 0 = not a PDF place) with the same
+// fraction beside it — page over page count, as the reader measured it.
 // It is stored as one JSON value in playback_state.locator, beside
 // position_seconds, and is nil for anything that is not text.
 type Locator struct {
 	CFI      string  `json:"cfi,omitempty"`
 	Section  int     `json:"section,omitempty"`
+	Page     int     `json:"page,omitempty"`
 	Fraction float64 `json:"fraction"`
 }
 
