@@ -162,6 +162,8 @@ func fixtureItems() []store.Item {
 				Chapters: []model.Chapter{
 					{StartSeconds: 0, Title: "Cold open"},
 					{StartSeconds: 142, Title: "Titles"},
+					{StartSeconds: 173, Title: "Act one"},
+					{StartSeconds: 2580, Title: "End credits"},
 				},
 				Subtitles: []model.SubtitleTrack{
 					{Ordinal: 0, Codec: "subrip", Language: "eng", Title: "English", Supported: true,

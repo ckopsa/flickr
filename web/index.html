@@ -428,6 +428,15 @@
   #upnext-cancel { margin-top: 10px; }
   #upnext-play { margin-top: 10px; margin-right: 8px; background: #2a4a8a; border-color: #3a5da8; }
   #upnext-play:hover { background: #33579e; }
+  /* Skip intro / Skip credits: the session says where those stretches are,
+     and the button sits over the lower right of the picture while the
+     position is inside one — above the transport, so neither covers the
+     other, and inside #device so it goes fullscreen with the picture. */
+  #skips { position: absolute; right: 20px; bottom: 76px; z-index: 57; display: flex; gap: 8px; }
+  #skips .skip { font-size: 14px; font-weight: 600; padding: 9px 18px; border-radius: 8px;
+    background: rgba(20,21,26,0.88); border: 1px solid #6a6f80; color: var(--fg);
+    box-shadow: 0 6px 20px rgba(0,0,0,0.5); }
+  #skips .skip:hover { border-color: #5b8def; background: rgba(27,29,36,0.95); }
   /* end-of-passage panel: paused at the bound, two ways out */
   #device { position: relative; }
   /* Fullscreen belongs to the DEVICE wrapper, not to the media element: the

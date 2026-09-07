@@ -129,6 +129,27 @@ test('the session chrome hands the device a slot, never a player', () => {
     'element is moved into it, so the buffer survives a document swap');
 });
 
+// Skip intro / Skip credits: the stretches are the SESSION's, said in the
+// server's own words, and the button seeks to where each one ends.
+test('every skip the session names becomes a button in the server\'s words', () => {
+  const doc = golden('session-play');
+  const html = R.session(doc, {});
+  assert.ok(doc.skips.length, 'the golden must carry the skips this asserts on');
+  for (const s of doc.skips) {
+    assert.ok(html.includes('>' + R.esc(s.label) + '<'), 'no button labelled ' + s.label);
+    assert.ok(html.includes('data-skip-start="' + s.start + '"'), 'the button says where the stretch starts');
+    assert.ok(html.includes('data-seek="' + s.end + '"'), 'and seeks to where it ends');
+  }
+  // Drawn hidden: the player shows the one the position is inside.
+  assert.equal((html.match(/class="skip"[^>]*hidden/g) || []).length, doc.skips.length);
+  // A file whose chapters say nothing gets no box at all.
+  const bare = JSON.parse(JSON.stringify(doc));
+  bare.skips = [];
+  assert.ok(!R.session(bare, {}).includes('id="skips"'));
+  delete bare.skips;
+  assert.ok(!R.session(bare, {}).includes('id="skips"'));
+});
+
 // --- the mini player ---------------------------------------------------------
 
 // The other shape the chrome comes in: the same session document, collapsed

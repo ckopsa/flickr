@@ -20,6 +20,7 @@ import (
 
 	"flickr/internal/model"
 	"flickr/internal/pipeline"
+	"flickr/internal/store"
 )
 
 // directPlayCaps read the show's episodes as they are (mkv/h264/aac, 720p,
@@ -611,5 +612,83 @@ func TestStopEndsTheSession(t *testing.T) {
 	w = get(t, h, self)
 	if w.Code != http.StatusNotFound || decode(t, w)["type"] != "no-such-session" {
 		t.Errorf("after the stop, GET = %d: %s", w.Code, w.Body)
+	}
+}
+
+// The skips, derived from chapter NAMES and nothing else: no probe, no
+// fingerprint, no guess at where an opening might be. The table is the rule
+// (skipsIn, session.go).
+func TestSkipsFromChapterNames(t *testing.T) {
+	item := func(duration float64, chs ...model.Chapter) store.Item {
+		return store.Item{MediaInfo: &model.MediaInfo{DurationSeconds: duration, Chapters: chs}}
+	}
+	ch := func(at float64, title string) model.Chapter {
+		return model.Chapter{StartSeconds: at, Title: title}
+	}
+	for _, tc := range []struct {
+		name string
+		it   store.Item
+		want []sessionSkip
+	}{
+		{"a file with no chapters has nothing to skip", item(3600), nil},
+		{"a file nobody probed has nothing to skip", store.Item{}, nil},
+		{"an intro runs until the chapter after it",
+			item(3600, ch(0, "Cold open"), ch(60, "Intro"), ch(150, "Act one")),
+			[]sessionSkip{{Kind: "intro", Start: 60, End: 150, Label: "Skip intro"}}},
+		{"credits run to the end of the file",
+			item(3600, ch(0, "Act one"), ch(3400, "End credits")),
+			[]sessionSkip{{Kind: "credits", Start: 3400, End: 3600, Label: "Skip credits"}}},
+		{"both, in the order the file carries them",
+			item(2640, ch(0, "Cold open"), ch(142, "Titles"), ch(173, "Act one"), ch(2580, "End credits")),
+			[]sessionSkip{
+				{Kind: "intro", Start: 142, End: 173, Label: "Skip intro"},
+				{Kind: "credits", Start: 2580, End: 2640, Label: "Skip credits"}}},
+		{"the match is on the words, whatever their case",
+			item(1800, ch(0, "OPENING"), ch(90, "One"), ch(1700, "Closing Credits")),
+			[]sessionSkip{
+				{Kind: "intro", Start: 0, End: 90, Label: "Skip intro"},
+				{Kind: "credits", Start: 1700, End: 1800, Label: "Skip credits"}}},
+		{"an opening credits chapter is an opening, not an ending",
+			item(1800, ch(0, "Opening credits"), ch(85, "One")),
+			[]sessionSkip{{Kind: "intro", Start: 0, End: 85, Label: "Skip intro"}}},
+		{"an intro with nothing after it is the last marker, not an opening",
+			item(2640, ch(0, "Cold open"), ch(142, "Titles")), nil},
+		{"a chapter that names neither is left alone",
+			item(1800, ch(0, "Frozen Heart"), ch(900, "Let It Go")), nil},
+		{"a credits chapter at the very end of the file is no stretch at all",
+			item(1800, ch(0, "One"), ch(1800, "End credits")), nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := skipsIn(tc.it)
+			if len(got) != len(tc.want) {
+				t.Fatalf("skips = %+v, want %+v", got, tc.want)
+			}
+			for i := range got {
+				if got[i] != tc.want[i] {
+					t.Errorf("skip %d = %+v, want %+v", i, got[i], tc.want[i])
+				}
+			}
+		})
+	}
+}
+
+// And the document carries them, so the client is told where the titles are
+// rather than taught how to look.
+func TestSessionDocumentCarriesTheSkips(t *testing.T) {
+	_, _, doc := playing(t, idBeach, nil)
+	list, _ := doc["skips"].([]any)
+	if len(list) != 2 {
+		t.Fatalf("skips = %v", doc["skips"])
+	}
+	first, _ := list[0].(map[string]any)
+	if first["kind"] != "intro" || first["start"] != 142.0 || first["end"] != 173.0 ||
+		first["label"] != "Skip intro" {
+		t.Errorf("first skip = %v", first)
+	}
+	// A file whose chapters say nothing carries an empty list rather than no
+	// field at all: a client that reads it knows the answer either way.
+	_, _, none := playing(t, idTheJob, nil)
+	if list, ok := none["skips"].([]any); !ok || len(list) != 0 {
+		t.Errorf("skips on a file with no chapters = %v", none["skips"])
 	}
 }

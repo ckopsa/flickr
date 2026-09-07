@@ -43,6 +43,7 @@
   let selectedSubOrdinal = null, burnSubOrdinal = null, selectedAudioOrdinal = null;
   let trickplay = null, trickplayItemId = null;
   let upNextTimer = null, upNextTarget = null;
+  let creditsCued = false;       // this stretch of credits has started the up next
   let autoplayNext = localStorage.autoplayNext !== 'off';
   let scrubbing = false;         // a finger (or a mouse) is dragging the bar
   let tapTimer = null, lastTapAt = 0, rippleTimer = null;
@@ -233,6 +234,15 @@
       if (old) old.remove();
       element.prepend(title);
     }
+    // The skip buttons ride inside the device for the same reason: they
+    // overlay the picture's lower right, and a picture gone fullscreen must
+    // keep them.
+    const skipBox = chrome.querySelector('#skips');
+    if (skipBox) {
+      const old = element.querySelector('#skips');
+      if (old) old.remove();
+      element.append(skipBox);
+    }
     // The immersive layout belongs to the PICTURE: a record has none to fill,
     // and neither does the remote — while the television has the picture this
     // page is a card of controls, which the theatre bars would sit on top of.
@@ -246,6 +256,7 @@
     syncMuteButton();
     syncFullscreenButton();
     syncRateControl();
+    paintSkips();
     hostSleepMenu(chrome);
     syncSleepButton();
     setAutoplay(autoplayNext);
@@ -464,6 +475,7 @@
       return;
     }
     hideUpNext();
+    creditsCued = false; // another file, another set of credits
     closeClip(); // the marks belonged to the sitting that is ending
     // The chapter bound was THIS item's; a timer is a wall clock and carries
     // on into the next episode, which is what somebody falling asleep meant.
@@ -887,6 +899,41 @@
         postMark(kind, at);
       });
     }
+  }
+
+  // --- the skips ---------------------------------------------------------------
+  //
+  // Netflix's button with no detection behind it: the SESSION DOCUMENT says
+  // where the opening titles and the closing credits are (`skips`, derived
+  // from the file's own chapter names in cmd/server/session.go) and this only
+  // shows the one the position is inside. The button was drawn by the session
+  // chrome, carries the server's own label and seeks to where the stretch
+  // ends; nothing here decides what a stretch is.
+  //
+  // The credits are the cue for what is next, too: in a run the up-next
+  // countdown starts when they begin rather than at the last frame, which is
+  // where a person actually gets up and leaves.
+  function skips() {
+    const s = session && session.item_id === (item && item.id) ? session.skips : null;
+    return Array.isArray(s) ? s : [];
+  }
+  // Half a second short of the end, so the button is never the thing that is
+  // pressed the instant it stops meaning anything.
+  function skipAt(pos) {
+    return skips().find(s => pos >= s.start && pos < s.end - 0.5) || null;
+  }
+  function paintSkips() {
+    const box = element && element.querySelector('#skips');
+    if (!box) return;
+    const here = skipAt(position()), list = skips();
+    box.querySelectorAll('.skip').forEach((b, i) => { b.hidden = !here || list[i] !== here; });
+    if (here && here.kind === 'credits') {
+      // Not during a passage: that sitting has an end of its own, and a panel
+      // to say so.
+      if (!creditsCued && !passage && nextId() != null) { creditsCued = true; showUpNext(); }
+      return;
+    }
+    creditsCued = false;
   }
 
   // --- the run: up next and the advance ----------------------------------------
@@ -1598,6 +1645,7 @@
     // stream that ran out — lights the room back up all the same.
     if (element.classList.contains('idle') && !isPlaying()) wake();
     paintMini();
+    paintSkips();
     checkSleep();
     checkPassageEnd();
     if (passageEndFired && !passageNaturalEnd && isPlaying()) {

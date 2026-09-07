@@ -51,6 +51,20 @@
     "until": 9
   },
   "marks": {},
+  "skips": [
+    {
+      "kind": "intro",
+      "start": 142,
+      "end": 173,
+      "label": "Skip intro"
+    },
+    {
+      "kind": "credits",
+      "start": 2580,
+      "end": 2640,
+      "label": "Skip credits"
+    }
+  ],
   "links": {
     "artwork": {
       "href": "/api/items/8/still"

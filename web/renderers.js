@@ -872,6 +872,7 @@
         '<div id="now-playing">' + esc(nowPlaying(doc, c)) + '</div>' +
       '</div>' +
       '<div id="device-slot"></div>' +
+      skipButtons(doc) +
       '<div id="doc-controls">' +
         prevNext(doc) +
         markChip('in', doc, marks.in, c) +
@@ -887,6 +888,24 @@
       '<div id="trace"></div>' +
       upNext(doc) +
       passageEndPanel(doc);
+  }
+
+  // The stretches the SESSION says are worth jumping over — the opening
+  // titles, the closing credits — each as the button the server labelled it
+  // with. Where it seeks to is where the stretch ends, carried the way a
+  // chapter carries its start (data-seek), so pressing one goes through the
+  // same seek every chapter button does.
+  //
+  // They are drawn hidden: player.js moves this box into the device, where it
+  // overlays the picture and goes fullscreen with it, and shows the one the
+  // position is actually inside.
+  function skipButtons(doc) {
+    const skips = (doc && doc.skips) || [];
+    if (!skips.length) return '';
+    return '<div id="skips">' + skips.map(s =>
+      '<button class="skip" data-seek="' + esc(s.end) + '"' +
+        ' data-skip-start="' + esc(s.start) + '" data-skip-end="' + esc(s.end) + '"' +
+        ' hidden>' + esc(s.label || '') + '</button>').join('') + '</div>';
   }
 
   // What is playing, said the way the medium says it: a record names the work
