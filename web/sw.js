@@ -15,8 +15,12 @@
 // fetched from the internet. v10 adds the PDF pane (pdfreader.js, and the
 // vendored pdf.js module + its worker, which pdf.js loads by URL at open
 // time) the same way, and reader.js became the facade the new index.html
-// calls.
-const CACHE = 'flickr-shell-v10';
+// calls. v11 carries two index.html-only changes (reload when a new worker
+// takes control; tap-to-play when autoplay is refused) — and the RULE that
+// forgetting bit: the shell is cache-first and this file is the only thing
+// the browser re-checks, so EVERY change to a SHELL file needs a bump here
+// or no browser ever sees it. A CI check for that is worth a bead.
+const CACHE = 'flickr-shell-v11';
 const SHELL = ['/', '/index.html', '/passage.js', '/audio.js', '/audio.css', '/reader.js', '/pdfreader.js',
                '/vendor/jszip.min.js', '/vendor/epub.min.js',
                '/vendor/pdf.min.mjs', '/vendor/pdf.worker.min.mjs',
