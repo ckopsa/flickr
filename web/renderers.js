@@ -940,7 +940,11 @@
         // has room for one word. player.js writes the word and hides it while
         // the television is playing, which has no speed to set.
         '<button id="mini-rate" title="Playback speed" aria-label="Playback speed">1×</button>' +
-        // The four above are the DEVICE's and player.js answers them. This one
+        // The moon opens the sleep timer. Its list is the device's own element,
+        // moved in here by player.js — the bar keeps the device in a hidden
+        // box, so a menu drawn inside it could never be seen.
+        '<button id="mini-sleep" title="Sleep timer" aria-label="Sleep timer">🌙</button>' +
+        // The five above are the DEVICE's and player.js answers them. This one
         // is the document's: the session's own stop, said in the server's words,
         // so a sitting can be ended from the bar without opening it back up.
         control('stop', action(doc, 'stop'), { id: 'mini-stop' }) +

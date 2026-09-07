@@ -218,7 +218,32 @@
     return false;
   }
 
+  // --- the other bound in the same clock: a chapter ---------------------------
+  //
+  // Not a passage. The sleep timer's "end of chapter" (web/player.js) is a
+  // bound in the item's own clock like every bound above, and it lives here
+  // for the same reason they do: this file is the client's pure clock, the
+  // half that can be tested without a browser.
+  //
+  // Where the CURRENT chapter ends is where the next one starts, so the bound
+  // is the first start STRICTLY after `seconds` — a position sitting exactly
+  // on a mark is in that chapter, not the one before it. Marks in any order,
+  // entries with no clock ignored, and null when there is no boundary left at
+  // all: a file with no chapters, one chapter, or a position past the last
+  // mark, none of which is an end to stop at.
+  function nextChapterStart(chapters, seconds) {
+    const from = typeof seconds === 'number' && Number.isFinite(seconds) ? seconds : 0;
+    let next = null;
+    for (const ch of chapters || []) {
+      if (!ch || typeof ch.start_seconds !== 'number' || !Number.isFinite(ch.start_seconds)) continue;
+      if (ch.start_seconds <= from) continue;
+      if (next == null || ch.start_seconds < next) next = ch.start_seconds;
+    }
+    return next;
+  }
+
   const api = { splitHash, parsePassage, passageQuery, isTimedPassage,
+                nextChapterStart,
                 passageEndAt, passageEnded, runContinues, passageForNext,
                 parseLocator, formatLocator, sectionFromCFI,
                 isTextPassage, textPassageEnded };

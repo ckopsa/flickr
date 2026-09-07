@@ -54,6 +54,11 @@
   const IDLE_MS = 3000;          // how long a still pointer waits before the chrome goes
   const CLIP_SECONDS = 30;       // how long a clip is before anything is dragged
   const RATES = [0.75, 1, 1.25, 1.5, 1.75, 2];  // the speeds, YouTube's list
+  const SLEEP_MINUTES = [15, 30, 45, 60];  // what the moon offers, in minutes
+  const SLEEP_FADE = 5;          // how long the sound takes to go down at the end
+  let sleepMenu = null;          // the moon's list, moved between the two chromes
+  let sleep = null;              // { kind: 'timer'|'chapter', at } while armed
+  let sleepVolume = null;        // the volume before the fade, put back after the pause
 
   // --- capability profiles -----------------------------------------------------
   // What the PLAYING device can take. The dropdown simulates other devices;
@@ -187,6 +192,7 @@
           '<select id="rate" title="Playback speed" aria-label="Playback speed">' +
             RATES.map(r => `<option value="${r}">${rateLabel(r)}</option>`).join('') +
           '</select>' +
+          '<button id="btn-sleep" title="Sleep timer" aria-label="Sleep timer">🌙</button>' +
           '<button id="btn-autoplay"></button>' +
           '<button id="btn-clip" title="Mark a clip" aria-pressed="false" hidden>✂ Clip</button>' +
           '<button id="btn-pip" title="Picture in picture" aria-label="Picture in picture" hidden>⧉</button>' +
@@ -197,6 +203,7 @@
       '</div>';
     video = element.querySelector('#video');
     scrub = element.querySelector('#scrub');
+    buildSleepMenu();
     bindDevice();
     bindNowPlaying();
   }
@@ -237,6 +244,8 @@
     syncMuteButton();
     syncFullscreenButton();
     syncRateControl();
+    hostSleepMenu(chrome);
+    syncSleepButton();
     setAutoplay(autoplayNext);
     renderSubSelector();
     renderAudioSelector();
@@ -260,6 +269,7 @@
     else if (b.id === 'mini-back') seekTo(position() - 30);
     else if (b.id === 'mini-fwd') seekTo(position() + 30);
     else if (b.id === 'mini-rate') { cycleRate(); return; }
+    else if (b.id === 'mini-sleep') { toggleSleepMenu(); return; }
     syncPlayButton();
   }
 
@@ -453,6 +463,9 @@
     }
     hideUpNext();
     closeClip(); // the marks belonged to the sitting that is ending
+    // The chapter bound was THIS item's; a timer is a wall clock and carries
+    // on into the next episode, which is what somebody falling asleep meant.
+    if (sleep && sleep.kind === 'chapter' && (!item || item.id !== itemDoc.id)) cancelSleep();
     item = itemDoc;
     document.body.classList.toggle('audio-mode', itemDoc.medium === 'audio');
     passage = o.passage || null;
@@ -556,6 +569,7 @@
   async function close() {
     hideUpNext();
     closeClip();
+    cancelSleep();
     setPassage(null);
     if (casting()) { castEndSuppressed = true; if (remoteController) remoteController.stop(); }
     else if (video) { video.pause(); video.removeAttribute('src'); video.load(); }
@@ -1070,6 +1084,132 @@
     b.setAttribute('aria-label', 'Playback speed: ' + rateLabel(r));
   }
 
+  // --- the sleep timer ---------------------------------------------------------
+  //
+  // Audible's and YouTube's, and the reason both have it: somebody listening
+  // in bed wants the house quiet in half an hour without having to be awake to
+  // say so. The moon opens a small list — the minutes, the end of the chapter,
+  // and off — and while something is armed it counts down in its own face.
+  //
+  // The last few seconds fade the sound out rather than stopping mid-sentence,
+  // and the volume the person set comes back the moment the pause has
+  // happened: the morning must not find the stereo turned down. Casting is not
+  // a special case here — the remote is paused and its volume faded through
+  // the same two calls the media element takes.
+  //
+  // The menu is a SECOND element that moves with the device, for the same
+  // reason the device itself moves: the bar keeps the device in a hidden box,
+  // so a list drawn inside it could never be seen.
+  function buildSleepMenu() {
+    sleepMenu = document.createElement('div');
+    sleepMenu.id = 'sleep-menu';
+    sleepMenu.hidden = true;
+    sleepMenu.innerHTML =
+      SLEEP_MINUTES.map(m => `<button data-sleep="${m}">${m} minutes</button>`).join('') +
+      '<button id="sleep-chapter" data-sleep="chapter">End of chapter</button>' +
+      '<button data-sleep="off">Off</button>';
+    // The menu answers its own clicks wherever it is hosted, so neither
+    // chrome's listener has to know it is there.
+    sleepMenu.addEventListener('click', e => {
+      const b = e.target.closest && e.target.closest('button');
+      if (!b) return;
+      e.stopPropagation();
+      chooseSleep(b.dataset.sleep);
+    });
+  }
+  function hostSleepMenu(chrome) {
+    if (!sleepMenu) return;
+    showSleepMenu(false);
+    (chrome.querySelector('#mini-bar') || element).appendChild(sleepMenu);
+  }
+  function chapters() { return (item && item.media_info && item.media_info.chapters) || []; }
+  function chapterBound() { return root.nextChapterStart(chapters(), position()); }
+
+  function showSleepMenu(on) {
+    if (!sleepMenu) return;
+    // 'End of chapter' means nothing in a file with no chapters, and nothing
+    // past the last one either: there is no boundary left to stop at.
+    if (on && $('sleep-chapter')) $('sleep-chapter').hidden = chapterBound() == null;
+    sleepMenu.hidden = !on;
+  }
+  function toggleSleepMenu() { showSleepMenu(!!(sleepMenu && sleepMenu.hidden)); }
+
+  function chooseSleep(choice) {
+    showSleepMenu(false);
+    if (choice === 'off') { cancelSleep(); return; }
+    if (choice === 'chapter') {
+      const at = chapterBound();
+      if (at == null) return;
+      sleep = { kind: 'chapter', at };
+    } else {
+      const mins = Number(choice);
+      if (!(mins > 0)) return;
+      sleep = { kind: 'timer', at: Date.now() + mins * 60000 };
+    }
+    restoreSleepVolume();
+    syncSleepButton();
+  }
+  function cancelSleep() {
+    sleep = null;
+    restoreSleepVolume();
+    syncSleepButton();
+  }
+  // How long is left, in the seconds a person would count: a timer runs on the
+  // wall clock, and a chapter bound runs on the ITEM's — which at 1.5x is not
+  // the same thing, so it is divided by the speed it is being listened at.
+  function sleepRemaining() {
+    if (!sleep) return null;
+    if (sleep.kind === 'timer') return Math.max(0, (sleep.at - Date.now()) / 1000);
+    const r = casting() ? 1 : rate();
+    return Math.max(0, (sleep.at - position()) / (r > 0 ? r : 1));
+  }
+  function deviceVolume() {
+    return casting() ? (remotePlayer ? remotePlayer.volumeLevel || 0 : 0) : (video ? video.volume : 0);
+  }
+  function setDeviceVolume(v) {
+    v = Math.max(0, Math.min(1, v));
+    if (casting()) {
+      if (!remotePlayer) return;
+      remotePlayer.volumeLevel = v;
+      if (remoteController) remoteController.setVolumeLevel();
+    } else if (video) video.volume = v;
+  }
+  // The fade is the device's own and the slider is left alone: the volume
+  // being wound down is not a volume the person chose.
+  function fadeSleep(frac) {
+    if (sleepVolume == null) sleepVolume = deviceVolume();
+    setDeviceVolume(sleepVolume * Math.max(0, Math.min(1, frac)));
+  }
+  function restoreSleepVolume() {
+    if (sleepVolume == null) return;
+    setDeviceVolume(sleepVolume);
+    sleepVolume = null;
+  }
+  function checkSleep() {
+    if (!sleep) return;
+    const left = sleepRemaining();
+    syncSleepButton();
+    if (left > SLEEP_FADE) { restoreSleepVolume(); return; }
+    if (left > 0) { fadeSleep(left / SLEEP_FADE); return; }
+    sleep = null;
+    if (isPlaying()) {
+      if (casting()) { if (remoteController) remoteController.playOrPause(); }
+      else if (video) video.pause();
+    }
+    restoreSleepVolume();
+    syncSleepButton();
+  }
+  function syncSleepButton() {
+    const left = sleepRemaining();
+    for (const id of ['btn-sleep', 'mini-sleep']) {
+      const b = $(id);
+      if (!b) continue;
+      b.textContent = left == null ? '🌙' : '🌙 ' + fmtTime(left);
+      b.classList.toggle('on', left != null);
+      b.setAttribute('aria-label', left == null ? 'Sleep timer' : 'Sleep timer: ' + fmtTime(left) + ' left');
+    }
+  }
+
   // Fullscreen is the DEVICE WRAPPER's, never the <video>'s. Taking the
   // wrapper full keeps the scrub bar on screen — its chapter ticks, its
   // passage flags, its trickplay previews — which the native fullscreen
@@ -1128,6 +1268,7 @@
   // Escape is the way out, in the order the room offers one: the help card,
   // then fullscreen, then the sitting itself — which is what Back does.
   function escapeOut() {
+    if (sleepMenu && !sleepMenu.hidden) { showSleepMenu(false); return; }
     if ($('keys-help') && !$('keys-help').hidden) { showKeys(false); return; }
     if (document.fullscreenElement) { document.exitFullscreen(); return; }
     K.closeStage();
@@ -1137,10 +1278,11 @@
   // The volume the keys set is the one the slider sets, on whichever device is
   // playing; the slider follows so the two never disagree.
   function nudgeVolume(delta) {
-    const now = casting() ? (remotePlayer.volumeLevel || 0) : (video ? video.volume : 0);
-    const v = Math.max(0, Math.min(1, now + delta));
-    if (casting()) { remotePlayer.volumeLevel = v; if (remoteController) remoteController.setVolumeLevel(); }
-    else if (video) video.volume = v;
+    const v = Math.max(0, Math.min(1, deviceVolume() + delta));
+    setDeviceVolume(v);
+    // A volume set DURING a sleep fade is the one to come back to: the fade is
+    // the device's own and must not undo a choice made while it ran.
+    if (sleepVolume != null) sleepVolume = v;
     if ($('vol')) $('vol').value = String(v);
   }
 
@@ -1263,6 +1405,7 @@
       if (t.id === 'btn-mute') { toggleMute(); return; }
       if (t.id === 'btn-fs') { toggleFullscreen(); return; }
       if (t.id === 'btn-keys') { toggleKeys(); return; }
+      if (t.id === 'btn-sleep') { toggleSleepMenu(); return; }
       if (t.id === 'btn-autoplay') { setAutoplay(!autoplayNext); return; }
       if (t.id === 'btn-clip') { toggleClip(); return; }
       if (t.id === 'btn-clip-share') { shareClip(); return; }
@@ -1273,6 +1416,16 @@
 
     // The chrome comes back for any sign of life over the picture, and the
     // keys are the device's wherever the focus is (the guard is in onKey).
+    // A list left open over the page closes when the next thing is pressed,
+    // unless that thing is the moon that opened it or the list itself.
+    document.addEventListener('click', e => {
+      if (!sleepMenu || sleepMenu.hidden) return;
+      const t = e.target;
+      if (t && t.closest && (t.closest('#sleep-menu') || t.closest('#btn-sleep') ||
+                             t.closest('#mini-sleep'))) return;
+      showSleepMenu(false);
+    });
+
     element.addEventListener('pointermove', wake);
     element.addEventListener('pointerdown', wake);
     document.addEventListener('keydown', onKey);
@@ -1305,8 +1458,8 @@
     element.addEventListener('input', e => {
       if (e.target.id !== 'vol') return;
       const v = parseFloat(e.target.value);
-      if (casting()) { remotePlayer.volumeLevel = v; remoteController.setVolumeLevel(); }
-      else video.volume = v;
+      setDeviceVolume(v);
+      if (sleepVolume != null) sleepVolume = v;
     });
 
     element.addEventListener('change', e => {
@@ -1418,6 +1571,7 @@
     // stream that ran out — lights the room back up all the same.
     if (element.classList.contains('idle') && !isPlaying()) wake();
     paintMini();
+    checkSleep();
     checkPassageEnd();
     if (passageEndFired && !passageNaturalEnd && isPlaying()) {
       const endAt = passageEndNow();
