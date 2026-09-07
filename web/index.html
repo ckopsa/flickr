@@ -137,6 +137,12 @@
   /* the PDF pane (pdfreader.js): one page on a canvas, fit to the width, scrolled when taller */
   .rd-pdf { overflow: auto; background: #3a3b40; padding: 6px; }
   .rd-canvas { display: block; margin: 0 auto; background: #fff; box-shadow: 0 2px 12px rgba(0,0,0,0.5); }
+  /* the dark page (ReaderTheme in reader.js): the epub frame is themed from
+     inside by epub.js; the PDF canvas is inverted here, hue-rotated so a
+     colour figure keeps its hues while the paper goes dark */
+  .rd-dark .rd-view { background: #1b1d24; }
+  .rd-dark .rd-canvas { background: #1b1d24; filter: invert(.91) hue-rotate(180deg); }
+  .rd-theme { font-size: 16px; line-height: 1; }
   .rd-page { font-size: 13px; color: #9a9daa; white-space: nowrap; font-variant-numeric: tabular-nums; }
   .rd-page-in { width: 64px; font-size: 13px; padding: 4px 6px; border-radius: 6px; border: 1px solid #2a2c33; background: #14151a; color: inherit; }
   .rd-end button { margin-top: 10px; margin-right: 8px; }

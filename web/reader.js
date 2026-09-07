@@ -31,6 +31,33 @@
 (function (root) {
   'use strict';
 
+// --- the page's theme: paper or dark ----------------------------------------
+// One choice for both readers, remembered per browser (localStorage
+// readerTheme); the first visit follows the app, which is dark. epub.js
+// takes it as a named theme inside the book's frame; the PDF pane takes
+// it as a class on the container and inverts its canvas in CSS.
+if (!root.ReaderTheme) root.ReaderTheme = (() => {
+  const RULES = {
+    paper: { body: { background: '#f4f1ea', color: '#1c1c1c' } },
+    dark:  { body: { background: '#1b1d24', color: '#d6d6d0' },
+             'p, div, span, li, td, th, h1, h2, h3, h4, h5, h6, blockquote, dt, dd': { color: '#d6d6d0 !important', 'background-color': 'transparent !important' },
+             a: { color: '#8ab4f8 !important' },
+             img: { filter: 'brightness(.85)' } },
+  };
+  function current() {
+    let t = null;
+    try { t = localStorage.readerTheme; } catch (e) { /* no storage */ }
+    return t === 'paper' || t === 'dark' ? t : 'dark';
+  }
+  function toggle() {
+    const t = current() === 'dark' ? 'paper' : 'dark';
+    try { localStorage.readerTheme = t; } catch (e) { /* no storage */ }
+    return t;
+  }
+  function apply(c) { if (c) c.classList.toggle('rd-dark', current() === 'dark'); }
+  return { rules: t => RULES[t] || RULES.paper, current, toggle, apply };
+})();
+
   const MISSING = 'The reader library is missing: web/vendor/epub.min.js and web/vendor/jszip.min.js ' +
                   'are not vendored (see web/vendor/README.md).';
   const PLACE_DELAY_MS = 800;   // debounce for position reports (a page turn per second is bursty)
@@ -60,6 +87,7 @@
         '<button class="rd-toc-btn" title="Contents">☰</button>' +
         '<div class="rd-title"></div>' +
         '<div class="rd-readout"></div>' +
+        '<button class="rd-theme" title="Paper or dark page">◐</button>' +
         '<button class="rd-close" title="Close the book">✕ Back</button>' +
       '</div>' +
       '<div class="rd-body">' +
@@ -79,6 +107,7 @@
       '</div>';
     const q = sel => c.querySelector(sel);
     ui = {
+      theme: q('.rd-theme'),
       title: q('.rd-title'), readout: q('.rd-readout'), toc: q('.rd-toc'), view: q('.rd-view'),
       msg: q('.rd-msg'), end: q('.rd-end'), endSub: q('.rd-end-sub'),
       prev: q('.rd-prev'), next: q('.rd-next'), tocBtn: q('.rd-toc-btn'), close: q('.rd-close'),
@@ -87,6 +116,7 @@
     ui.prev.onclick = prev;
     ui.next.onclick = next;
     ui.tocBtn.onclick = () => { ui.toc.hidden = !ui.toc.hidden; };
+    ui.theme.onclick = () => { const t = ReaderTheme.toggle(); if (rendition) rendition.themes.select(t); ReaderTheme.apply(container); };
     ui.close.onclick = () => opts && opts.onBack && opts.onBack();
     ui.back.onclick = () => opts && opts.onBack && opts.onBack();
     ui.keep.onclick = keepReading;
@@ -179,8 +209,14 @@
       compareCFI = (a, b) => new root.ePub.CFI().compare(a, b);
       book = root.ePub(bytes, { openAs: 'epub' });
       rendition = book.renderTo(ui.view, { width: '100%', height: '100%', flow: 'paginated', spread: 'none' });
-      // A paper page in a dark UI.
-      rendition.themes.default({ body: { background: '#f4f1ea', color: '#1c1c1c' } });
+      // Two pages: paper, and a dark one for the dark UI. Registered as
+      // named themes so a toggle swaps them on the open book; the book's
+      // own colours yield to the page (!important), because a publisher's
+      // black-on-white paragraph rule would otherwise survive the swap.
+      rendition.themes.register('paper', ReaderTheme.rules('paper'));
+      rendition.themes.register('dark', ReaderTheme.rules('dark'));
+      rendition.themes.select(ReaderTheme.current());
+      ReaderTheme.apply(container);
       rendition.on('relocated', loc => { if (seq === openSeq) onRelocated(loc); });
       rendition.on('displayError', err => { if (seq === openSeq) ui.msg.textContent = 'Could not display: ' + err; });
       // Tap the left/right edge of the page to turn it (links still work).

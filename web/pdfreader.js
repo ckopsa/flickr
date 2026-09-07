@@ -49,6 +49,7 @@
       '<div class="rd-bar">' +
         '<div class="rd-title"></div>' +
         '<div class="rd-readout"></div>' +
+        '<button class="rd-theme" title="Paper or dark page">◐</button>' +
         '<button class="rd-close" title="Close the book">✕ Back</button>' +
       '</div>' +
       '<div class="rd-body">' +
@@ -69,6 +70,7 @@
       '</div>';
     const q = sel => c.querySelector(sel);
     ui = {
+      theme: q('.rd-theme'),
       title: q('.rd-title'), readout: q('.rd-readout'), view: q('.rd-view'), canvas: q('.rd-canvas'),
       msg: q('.rd-msg'), end: q('.rd-end'), endSub: q('.rd-end-sub'),
       prev: q('.rd-prev'), next: q('.rd-next'), pageIn: q('.rd-page-in'), pageOf: q('.rd-page-of'),
@@ -76,6 +78,8 @@
     };
     ui.prev.onclick = prev;
     ui.next.onclick = next;
+    ui.theme.onclick = () => { ReaderTheme.toggle(); ReaderTheme.apply(container); };
+    ReaderTheme.apply(container);
     ui.close.onclick = () => opts && opts.onBack && opts.onBack();
     ui.back.onclick = () => opts && opts.onBack && opts.onBack();
     ui.keep.onclick = keepReading;
