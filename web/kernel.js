@@ -553,6 +553,10 @@
     if (seek) { root.Player.playFrom(currentItem, Number(seek.dataset.seek)); return; }
     const actEl = t.closest('[data-act]');
     if (actEl) {
+      // A form carries an action the same way a button does, but it is
+      // SUBMITTED rather than clicked: its fields are the body. Leave the
+      // click alone so the browser validates the fields and raises submit.
+      if (actEl.tagName === 'FORM') return;
       e.preventDefault();
       e.stopPropagation();
       // A control that also names a route is TAKEN there: the resume shelf's
@@ -605,11 +609,48 @@
     await root.Player.invoke(req, { item: currentItem, work: currentWork });
   }
 
+  // A form is an action with a BODY: the fields a renderer drew from the
+  // action's `input` sketch, sent as JSON to the action's own href. Fixing an
+  // identity is the one so far, and it is why the button alone could never
+  // work — a POST with no body says nothing.
+  async function onSubmit(e) {
+    const form = e.target.closest('[data-act]');
+    if (!form || form.tagName !== 'FORM') return;
+    e.preventDefault();
+    try {
+      await api(form.dataset.href, {
+        method: form.dataset.method || 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(formBody(form)),
+      });
+    } catch (err) {
+      note(err instanceof Problem ? err.detail : String(err.message || err));
+      return;
+    }
+    // The answer changed what every document says about this thing.
+    forget();
+    applyRoute();
+  }
+
+  // The body one form sends: a field per input, typed as the sketch drew it —
+  // a number control is a number — and an empty optional field left out
+  // rather than sent as "".
+  function formBody(form) {
+    const body = {};
+    for (const el of form.querySelectorAll('input[name]')) {
+      const v = el.value.trim();
+      if (v === '' && !el.required) continue;
+      body[el.name] = el.type === 'number' ? Number(v) : v;
+    }
+    return body;
+  }
+
   // --- boot --------------------------------------------------------------------
 
   async function boot() {
     document.addEventListener('click', onClick);
     document.addEventListener('keydown', onKeydown);
+    document.addEventListener('submit', onSubmit);
     window.addEventListener('hashchange', applyRoute);
     window.addEventListener('beforeunload', () => root.Player.close());
     $('profile-chip').onclick = openGate;

@@ -455,9 +455,10 @@
       case 'keep_watching': case 'keep_reading':
         return keepWatching(req);
       default: {
-        // Anything else the document offers — fix the identity, probe again,
+        // Anything else the document offers that needs no body — probe again,
         // look it up on TMDB — is the same three lines, and the view is
-        // re-read afterwards because the answer changed what it says.
+        // re-read afterwards because the answer changed what it says. An
+        // action WITH a body is a form, and the kernel submits those.
         try { await K.api(req.href, { method: req.method }); }
         catch (e) { K.note(e.detail || String(e.message || e)); }
         K.forget();

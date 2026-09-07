@@ -250,6 +250,63 @@ test('a mark that has been set shows where it was set', () => {
   assert.ok(html.includes('data-act="link"'));
 });
 
+test('the curatorial controls are inside the Details fold, and Play is not', () => {
+  const doc = golden('item-film');
+  const html = R.item(doc, {});
+  const [above, folded] = html.split('<details id="detail-details">');
+  assert.ok(above.includes('data-act="play"'), 'Play stands alone above the fold');
+  for (const n of ['identity', 'reprobe']) {
+    assert.ok(!above.includes('data-act="' + n + '"'), n + ' is not a peer of Play');
+    assert.ok(folded.includes('data-act="' + n + '"'), n + ' is not inside the fold');
+  }
+  // An action the document does not afford is its reason, in the same fold.
+  assert.ok(folded.includes(R.esc(doc.unavailable.enrich.reason)));
+});
+
+test('the identity form is drawn from the action\'s input sketch', () => {
+  const doc = golden('item-film');
+  const act = doc.actions.identity;
+  const html = R.identityForm(act, doc.identity);
+  // One control per sketch field, and nothing the sketch did not name.
+  const names = [...html.matchAll(/<input name="([^"]+)"/g)].map(m => m[1]);
+  assert.deepEqual([...names].sort(), Object.keys(act.input).sort());
+  // The sketch's type is the control's type, and its '?' is the difference
+  // between a required field and an optional one.
+  for (const [k, t] of Object.entries(act.input)) {
+    const field = html.match(new RegExp('<input name="' + k + '"[^>]*>'))[0];
+    assert.match(field, new RegExp('type="' + (t.startsWith('number') ? 'number' : 'text') + '"'), k);
+    assert.equal(/\brequired\b/.test(field), !t.endsWith('?'), k + ': wrong requiredness');
+  }
+  // The current identity fills it in; a field the identity does not carry is
+  // blank rather than absent.
+  assert.match(html, /<input name="title"[^>]*value="Frozen"/);
+  assert.match(html, /<input name="year"[^>]*value="2013"/);
+  assert.match(html, /<input name="season"[^>]*value=""/);
+  // The submit goes where the action says, by the method it names, under the
+  // document's own label.
+  assert.ok(html.includes('data-href="' + R.esc(act.href) + '"'));
+  assert.ok(html.includes('data-method="POST"'));
+  assert.ok(html.includes(R.esc(act.label)));
+});
+
+test('a sketch that grows a field grows the form', () => {
+  const doc = golden('item-film');
+  const act = JSON.parse(JSON.stringify(doc.actions.identity));
+  act.input.disc = 'number?';
+  const html = R.identityForm(act, doc.identity);
+  assert.match(html, /<input name="disc" type="number"/);
+  // The known fields keep their order; what is new comes after them.
+  const names = [...html.matchAll(/<input name="([^"]+)"/g)].map(m => m[1]);
+  assert.deepEqual(names.slice(0, 3), ['kind', 'title', 'year']);
+  assert.equal(names[names.length - 1], 'disc');
+});
+
+test('the identity form with no identity yet is blank, not broken', () => {
+  const html = R.identityForm(golden('item-film').actions.identity, null);
+  assert.ok(!/value="[^"]+"/.test(html), 'every field is empty');
+  assert.equal(R.identityForm(null, {}), '');
+});
+
 test('the decision trace hides behind a disclosure, closed by default', () => {
   const doc = golden('session-play');
   const t = R.trace(doc.decision, 'h264_vaapi', '');

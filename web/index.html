@@ -25,7 +25,7 @@
   /* the search box lives in the header now, and is only up on the library */
   #search { width: 260px; max-width: 40vw; }
   #gear { font-size: 15px; line-height: 1; padding: 6px 10px; }
-  button, select, input[type=text] { background: #23252d; color: inherit; border: 1px solid #3a3d47; border-radius: 6px; padding: 6px 12px; font-size: 13px; }
+  button, select, input[type=text], input[type=number] { background: #23252d; color: inherit; border: 1px solid #3a3d47; border-radius: 6px; padding: 6px 12px; font-size: 13px; }
   button, select { cursor: pointer; }
   button:hover { background: #2c2f38; }
   main { padding: 0; }
@@ -136,6 +136,14 @@
   #detail-details dl { display: grid; grid-template-columns: max-content 1fr; gap: 4px 16px; margin: 12px 0 0; font-size: 12px; }
   #detail-details dt { color: #6f7280; }
   #detail-details dd { margin: 0; color: #c5c8d4; font-family: ui-monospace, monospace; word-break: break-word; }
+  /* the curatorial controls, inside the same fold: what is done to the RECORD */
+  #detail-admin { margin-top: 16px; border-top: 1px solid #2a2c33; padding-top: 12px; }
+  #detail-admin .unavailable { margin: 6px 0; }
+  #identity-form { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: flex-end; margin-bottom: 12px; }
+  #identity-form label { display: flex; flex-direction: column; gap: 3px; }
+  #identity-form label span { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+  #identity-form input { width: 130px; }
+  #identity-form input[type=number] { width: 78px; }
   #now-playing { font-size: 15px; font-weight: 600; margin: 14px 0 10px; }
 
   #player-chrome { margin-top: 6px; }

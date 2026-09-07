@@ -367,7 +367,9 @@
     const art = artwork(doc) || (wk ? artwork(wk) : '');
     const chapters = ((doc.media_info && doc.media_info.chapters) || [])
       .filter(() => doc.medium !== 'text');
-    const drawn = ['play', 'read'];
+    // Play stands alone up here. The curatorial actions are drawn too — but
+    // inside the Details disclosure, so `drawn` names them as handled.
+    const drawn = ['play', 'read'].concat(ADMIN);
     const prev = link(doc, 'prev'), next = link(doc, 'next');
     const bonus = wk && wk.work_kind !== 'show' ? extras(wk) : [];
     const siblings = wk && wk.work_kind !== 'show' ? walked(wk) : [];
@@ -414,11 +416,74 @@
     if (file) rows.push(['File', file]);
     if (doc.identity && doc.identity.kind) rows.push(['Identity', doc.identity.kind]);
     for (const r of mediaFacts(doc.media_info)) rows.push(r);
-    if (!rows.length) return '';
+    const admin = adminBlock(doc);
+    if (!rows.length && !admin) return '';
     return '<details id="detail-details"><summary>Details</summary>' +
-      '<dl>' + rows.map(r =>
-        '<dt>' + esc(r[0]) + '</dt><dd>' + esc(r[1]) + '</dd>').join('') + '</dl>' +
+      (rows.length ? '<dl>' + rows.map(r =>
+        '<dt>' + esc(r[0]) + '</dt><dd>' + esc(r[1]) + '</dd>').join('') + '</dl>' : '') +
+      admin +
       '</details>';
+  }
+
+  // The curatorial actions: what a person does to the RECORD, not to the
+  // thing. They belong beside what the file IS rather than beside Play —
+  // nobody opened the page to re-probe a file — so they live inside the
+  // disclosure, and an unavailable one is its reason in words.
+  const ADMIN = ['identity', 'reprobe', 'enrich'];
+
+  function adminBlock(doc) {
+    const parts = ADMIN.map(n => {
+      const act = action(doc, n);
+      if (act) return n === 'identity' ? identityForm(act, doc.identity) : control(n, act);
+      const reason = why(doc, n);
+      return reason ? '<div class="unavailable">' + esc(reason) + '</div>' : '';
+    }).join('');
+    return parts ? '<div id="detail-admin">' + parts + '</div>' : '';
+  }
+
+  // The identity form, drawn from the action's own INPUT SKETCH: one field
+  // per entry, the sketch's type as the control's type ('number?' is an
+  // optional number), and the current value from the document's `identity`.
+  // Nothing here is a list of an identity's fields learned by heart — a
+  // sketch that grows a field grows the form — and the submit is the
+  // kernel's: this file only says what to send and where.
+  const IDENTITY_ORDER = ['kind', 'title', 'year', 'season', 'episode', 'part', 'author', 'track_title'];
+
+  // The sketch's fields in the order a person fills them in, with anything
+  // the sketch has grown since after them.
+  function sketchFields(sketch) {
+    const keys = Object.keys(sketch || {});
+    const known = IDENTITY_ORDER.filter(k => keys.includes(k));
+    return known.concat(keys.filter(k => !known.includes(k)).sort());
+  }
+
+  function fieldLabel(k) {
+    const s = String(k).replace(/_/g, ' ');
+    return s.charAt(0).toUpperCase() + s.slice(1);
+  }
+
+  function identityForm(act, current) {
+    if (!act) return '';
+    const sketch = act.input || {};
+    const cur = current || {};
+    const fields = sketchFields(sketch).map(k => {
+      const t = String(sketch[k] || 'string');
+      const optional = t.endsWith('?');
+      const type = t.replace(/\?$/, '') === 'number' ? 'number' : 'text';
+      const v = cur[k];
+      return '<label><span>' + esc(fieldLabel(k)) + '</span>' +
+        '<input name="' + esc(k) + '" type="' + type + '"' + (optional ? '' : ' required') +
+        ' value="' + esc(v == null ? '' : v) + '"></label>';
+    }).join('');
+    // data-act, data-href and data-method are what every control carries; the
+    // form adds a BODY, which is why the kernel submits it rather than
+    // clicking it.
+    return '<form id="identity-form" class="actform" data-act="identity"' +
+      ' data-href="' + esc(act.href) + '"' +
+      ' data-method="' + esc(act.method || 'POST') + '">' +
+      fields +
+      '<button type="submit" class="act">' + esc(act.label || 'identity') + '</button>' +
+      '</form>';
   }
 
   // The probe, said as it came: every field media_info carries, a list said as
@@ -619,7 +684,7 @@
 
   const api = {
     library, libraryGrid, work, artist, item, session, continueShelf,
-    card, memberRow, control, restControls, trace,
+    card, memberRow, control, restControls, trace, identityForm,
     esc, fmtTime, hashFor, itemHash, showHash, artistHash,
     idIn,
     linkHref: href, actionOf: action, unavailableReason: why, artworkOf: artwork,
