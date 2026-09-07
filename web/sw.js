@@ -5,9 +5,11 @@
 // unbumped cache keeps running old JS against new API data — which is not a
 // cosmetic staleness. v5's grouping reads identity kind "extra"; v4's code
 // treats those files as untitled movies and puts one tile on the grid per
-// featurette.
-const CACHE = 'flickr-shell-v6';
-const SHELL = ['/', '/index.html', '/manifest.json', '/icon-192.png', '/icon-512.png'];
+// featurette. v7 adds passage.js to the shell: index.html calls its
+// globals at parse time, so a v6 shell serving the new index without it
+// would throw before the router runs.
+const CACHE = 'flickr-shell-v7';
+const SHELL = ['/', '/index.html', '/passage.js', '/manifest.json', '/icon-192.png', '/icon-512.png'];
 
 self.addEventListener('install', (e) => {
   e.waitUntil(

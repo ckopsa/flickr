@@ -142,6 +142,80 @@ picture; forces a video re-encode, overlay applied before all other filters).
 The web UI includes capability presets (Chromecast v1, 4K HDR TV, cellular cap)
 to demonstrate how the same file direct-plays or transcodes per client.
 
+## Deep links and passages
+
+The web UI is hash-routed and `location.hash` is the only source of truth,
+so every view has a stable address:
+
+| Route | View |
+|---|---|
+| `#/` | library grid |
+| `#/show/<title>` | a show's episode list (`<title>` is `encodeURIComponent`'d) |
+| `#/item/<id>` | one item's detail pane (its Play button resumes from the saved place) |
+
+A **passage** is a start and an end within a work — a scene, or a run of
+episodes — and other systems (the household's day planner) mint links to
+them, so the grammar is fixed. The query rides on the hash path, after the
+item route:
+
+```
+#/item/<id>?t=<start_seconds>&end=<end_seconds>
+           &until=<item_id>           optional: an episode RUN
+           ?from=<locator>&to=<locator>  text passages (future epub reader)
+#/show/<title>?ep=S02E05&t=…&end=…[&until=S02E07]
+                                      the same, addressed by episode code
+```
+
+- `t` / `end` are seconds into the item, integers or decimals (`4740`,
+  `79.5`). An `end` at or before `t` is ignored.
+- `until=<item_id>` turns the link into an episode run: playback auto-advances
+  through the episodes and stops after the item with that id. `t` applies to
+  the first item only; `end`, if given, applies within the last item —
+  omit it to let that episode play out.
+- `from` / `to` are locators for text passages. They are parsed and carried
+  through the route today so the grammar is one thing; the player gives them
+  no behaviour until the reader lands.
+- The show form is for a minter that knows a show's link and a person's
+  spelling of an episode but no item ids: `ep=S02E05` (any case) names the
+  episode, `until=S02E07` names the last episode of a run. It is resolved
+  against the show's season/episode numbers when opened and the route is
+  replaced by the item form, so everything below applies unchanged. An `ep`
+  (or `until`) that names no episode shows one sentence on the show page
+  and plays nothing.
+
+Examples:
+
+```
+#/item/51?t=4740&end=5070              the scene from 1:19:00 to 1:24:30 of item 51
+#/item/58?t=120&until=59               episodes 58 and 59, skipping 58's first two minutes
+#/show/Ninjago?ep=S02E05&until=S02E06  the same run, spelled by show and episode
+```
+
+Three rules hold for every passage session:
+
+1. **Start there.** `t` wins over saved progress; a passage never resumes
+   from `/api/progress`.
+2. **Stop there.** At `end` (or once the `until` episode has finished) the
+   player pauses and shows *End of the passage*. It is not a natural end: no
+   up-next countdown, no "finished" mark. Both bounds are flagged on the
+   scrub bar and the time readout counts within the passage
+   (`2:14 / 5:30 in passage`).
+3. **No progress is written.** A scene replayed for a talk is not where the
+   person is in the film; the saved place belongs to normal viewing. Nothing
+   in a passage session — heartbeat, end, run — touches `/api/progress` or
+   the continue-watching row.
+
+The escape hatch is **Keep watching**: it leaves passage mode from the
+current position, drops the passage from the route, and normal behaviour
+resumes — progress writes included. Pressing play while paused at the end
+is the same choice. **Back** closes the player and leaves the bare item
+route behind. Casting honours all of this from the sender side: the page
+watches the receiver's time and pauses it at `end`.
+
+`web/passage.js` holds the grammar (`parsePassage`, `passageQuery`) and the
+end predicate as pure functions; `node --test web/passage_test.mjs` runs
+their tests without a build step.
+
 ## Casting
 
 The web UI is a Google Cast sender: the cast icon in the control row streams
