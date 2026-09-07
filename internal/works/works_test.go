@@ -810,8 +810,8 @@ func TestItemLabelTrack(t *testing.T) {
 		{track(3, "m/r/07 Karma Police.flac", "Radiohead", "OK Computer", 7), "Track 7"},
 		{track(4, "m/r/Untitled.flac", "Radiohead", "OK Computer", 0), "Untitled.flac"},
 	} {
-		if got := itemLabel(tc.it); got != tc.want {
-			t.Errorf("itemLabel(%s) = %q, want %q", tc.it.ObjectKey, got, tc.want)
+		if got := ItemLabel(tc.it); got != tc.want {
+			t.Errorf("ItemLabel(%s) = %q, want %q", tc.it.ObjectKey, got, tc.want)
 		}
 	}
 }

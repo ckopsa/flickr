@@ -1,0 +1,158 @@
+{
+  "self": "/api/items/4",
+  "kind": "item",
+  "title": "Frozen",
+  "id": 4,
+  "object_key": "Movies/Frozen (2013)/Frozen.mkv",
+  "medium": "video",
+  "label": "Frozen.mkv",
+  "duration_seconds": 6420,
+  "identity": {
+    "kind": "movie",
+    "title": "Frozen",
+    "year": 2013
+  },
+  "enrichment": {
+    "v": 3,
+    "tmdb_id": 109445,
+    "title": "Frozen",
+    "year": 2013,
+    "overview": "Young princess Anna sets off to find her sister.",
+    "has_poster": true,
+    "genres": [
+      "Animation",
+      "Family",
+      "Adventure"
+    ]
+  },
+  "media_info": {
+    "medium": "video",
+    "container": "mkv",
+    "video_codec": "h264",
+    "audio_codec": "ac3",
+    "width": 1920,
+    "height": 816,
+    "duration_seconds": 6420,
+    "bitrate_bps": 10400000,
+    "audio_channels": 6,
+    "fps": 23.976,
+    "chapters": [
+      {
+        "start_seconds": 0,
+        "title": "Frozen Heart"
+      },
+      {
+        "start_seconds": 1200,
+        "title": "Do You Want to Build a Snowman"
+      },
+      {
+        "start_seconds": 4740,
+        "title": "Let It Go"
+      }
+    ],
+    "subtitles": [
+      {
+        "ordinal": 0,
+        "codec": "subrip",
+        "language": "eng",
+        "title": "English",
+        "supported": true
+      },
+      {
+        "ordinal": 1,
+        "codec": "hdmv_pgs_subtitle",
+        "language": "eng",
+        "title": "English (full)",
+        "supported": false
+      }
+    ],
+    "audio_tracks": [
+      {
+        "ordinal": 0,
+        "codec": "ac3",
+        "language": "eng",
+        "channels": 6,
+        "default": true
+      }
+    ]
+  },
+  "subtitles": [
+    {
+      "ordinal": 0,
+      "language": "eng",
+      "title": "English",
+      "codec": "subrip",
+      "supported": true,
+      "href": "/api/items/4/subtitles/0.vtt"
+    },
+    {
+      "ordinal": 1,
+      "language": "eng",
+      "title": "English (full)",
+      "codec": "hdmv_pgs_subtitle",
+      "supported": false
+    }
+  ],
+  "links": {
+    "poster": {
+      "href": "/api/items/4/poster"
+    },
+    "trickplay": {
+      "href": "/api/items/4/trickplay.json"
+    },
+    "work": {
+      "href": "/api/works/tmdb%3A109445",
+      "title": "Frozen"
+    }
+  },
+  "actions": {
+    "identity": {
+      "method": "POST",
+      "href": "/api/items/4/identity",
+      "input": {
+        "author": "string?",
+        "episode": "number?",
+        "kind": "string",
+        "part": "number?",
+        "season": "number?",
+        "title": "string",
+        "track_title": "string?",
+        "year": "number?"
+      },
+      "label": "Fix the identity"
+    },
+    "play": {
+      "method": "POST",
+      "href": "/api/items/4/play",
+      "input": {
+        "passage": "passage?",
+        "seek_seconds": "number?"
+      },
+      "label": "▶ Play"
+    },
+    "progress": {
+      "method": "POST",
+      "href": "/api/progress",
+      "input": {
+        "client_id": "string",
+        "item_id": "4",
+        "position_seconds": "number"
+      },
+      "label": "Save the place"
+    },
+    "reprobe": {
+      "method": "POST",
+      "href": "/api/items/4/reprobe",
+      "label": "Probe this file again"
+    }
+  },
+  "unavailable": {
+    "enrich": {
+      "reason": "TMDB enrichment is off (TMDB_API_KEY is not set)"
+    },
+    "read": {
+      "reason": "a film is played, not read"
+    }
+  }
+}
+

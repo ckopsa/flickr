@@ -17,6 +17,19 @@ const watchedAt = 0.9
 // codec probe), not something anyone wants to resume.
 const minResumeSeconds = 5
 
+// Finished says whether a playback row has taken its item to the end: past
+// watchedAt of the clock, or of the text's own measure (a page over the
+// probed count, else the fraction the reader reported). It is the one
+// threshold — the resume list drops a finished item, a show counts a
+// finished episode, and a work's play action steps over one.
+func Finished(it store.Item, p store.Position) bool {
+	if p.Locator != nil {
+		return textFraction(&it, p.Locator) >= watchedAt
+	}
+	dur := itemDuration(it)
+	return dur > 0 && p.PositionSeconds >= watchedAt*dur
+}
+
 // Progress is one audience's standing in one work, derived fresh from
 // playback positions — never stored.
 type Progress struct {
@@ -86,7 +99,7 @@ func WorkProgress(w *Work, positions map[int64]store.Position) (Progress, bool) 
 		if dur > 0 && best.PositionSeconds >= watchedAt*dur {
 			status = "finished"
 		}
-		text := clock(best.PositionSeconds)
+		text := Clock(best.PositionSeconds)
 		if w.Medium == model.MediumAudio {
 			text = audioClock(itemOf(w, best.ItemID), best.PositionSeconds, dur)
 		}
@@ -125,7 +138,7 @@ func WorkProgress(w *Work, positions map[int64]store.Position) (Progress, bool) 
 		dur := durationOf(w, best.ItemID)
 		return Progress{
 			Status: "active", Fraction: fraction(best.PositionSeconds, dur),
-			ProgressText: clock(best.PositionSeconds), UpdatedAt: updated,
+			ProgressText: Clock(best.PositionSeconds), UpdatedAt: updated,
 		}, true
 	}
 	frac := float64(watched) / float64(w.EpisodeCount)
@@ -136,7 +149,7 @@ func WorkProgress(w *Work, positions map[int64]store.Position) (Progress, bool) 
 	if frac >= watchedAt {
 		status = "finished"
 	}
-	text := clock(furthestPos.PositionSeconds)
+	text := Clock(furthestPos.PositionSeconds)
 	if s, e := seasonEpisode(*furthest); e > 0 {
 		text = fmt.Sprintf("S%02dE%02d · %s", s, e, text)
 	}
@@ -262,7 +275,7 @@ func partsProgress(w *Work, positions map[int64]store.Position, updated float64)
 	if w.Kind == "album" {
 		noun = "track"
 	}
-	text := fmt.Sprintf("%s %d of %d · %s", noun, furthest+1, len(parts), clock(pos.PositionSeconds))
+	text := fmt.Sprintf("%s %d of %d · %s", noun, furthest+1, len(parts), Clock(pos.PositionSeconds))
 	return Progress{Status: status, Fraction: frac, ProgressText: text, UpdatedAt: updated}, true
 }
 
@@ -271,7 +284,7 @@ func partsProgress(w *Work, positions map[int64]store.Position, updated float64)
 // the position falls in, then the position over the whole; an unchaptered
 // file reads like a movie, a plain clock.
 func audioClock(it *store.Item, pos, dur float64) string {
-	text := clock(pos)
+	text := Clock(pos)
 	if it == nil || it.MediaInfo == nil {
 		return text
 	}
@@ -280,7 +293,7 @@ func audioClock(it *store.Item, pos, dur float64) string {
 		return text
 	}
 	if dur > 0 {
-		text += " / " + clock(dur)
+		text += " / " + Clock(dur)
 	}
 	return fmt.Sprintf("ch. %d · %s", ch, text)
 }
@@ -341,8 +354,11 @@ func fraction(pos, dur float64) float64 {
 	return f
 }
 
-// clock formats seconds as "43:12", or "1:02:03" past the hour.
-func clock(sec float64) string {
+// Clock formats seconds as "43:12", or "1:02:03" past the hour. It is the
+// way this project spells a time everywhere — a progress line, and the time
+// tokens a work offers a passage (the passage grammar reads back exactly
+// this spelling).
+func Clock(sec float64) string {
 	s := int(sec)
 	if s < 0 {
 		s = 0
@@ -424,7 +440,7 @@ func ContinueList(works []Work, positions []store.Position, max int) []ContinueE
 				continue
 			}
 			out = append(out, ContinueEntry{
-				ItemID: it.ID, WorkKey: key, Title: w.Title, Label: itemLabel(*it),
+				ItemID: it.ID, WorkKey: key, Title: w.Title, Label: ItemLabel(*it),
 				DurationSeconds: dur, Fraction: frac, UpdatedAt: p.UpdatedAt,
 			})
 			continue
@@ -450,7 +466,7 @@ func ContinueList(works []Work, positions []store.Position, max int) []ContinueE
 			ItemID:          it.ID,
 			WorkKey:         key,
 			Title:           w.Title,
-			Label:           itemLabel(*it),
+			Label:           ItemLabel(*it),
 			PositionSeconds: p.PositionSeconds,
 			DurationSeconds: dur,
 			UpdatedAt:       p.UpdatedAt,
@@ -480,26 +496,42 @@ func resumable(p store.Position) bool {
 	return p.PositionSeconds >= minResumeSeconds
 }
 
-// nextMember is the next real member after itemID in the work's ordering —
-// the next episode by (season, episode), the next part or track by number;
-// w.Items is already sorted that way, with bonus material last — or nil at
-// the finale. Finishing an episode never advances into a featurette.
-func nextMember(w *Work, itemID int64) *store.Item {
+// Neighbours are the members either side of itemID in the work's own
+// ordering — the previous and next episode by (season, episode), the
+// previous and next part or track by number; w.Items is already sorted that
+// way, with bonus material last. Bonus material is skipped on both sides
+// (finishing an episode never advances into a featurette) and an item that
+// is itself bonus material — or not a member at all — has no neighbours: it
+// sits outside the order the work is moved through.
+func Neighbours(w *Work, itemID int64) (prev, next *store.Item) {
 	for i := range w.Items {
-		if w.Items[i].ID != itemID {
+		if w.Items[i].ID != itemID || isExtra(w.Items[i]) {
 			continue
+		}
+		for j := i - 1; j >= 0; j-- {
+			if !isExtra(w.Items[j]) {
+				prev = &w.Items[j]
+				break
+			}
 		}
 		for j := i + 1; j < len(w.Items); j++ {
 			if !isExtra(w.Items[j]) {
-				return &w.Items[j]
+				next = &w.Items[j]
+				break
 			}
 		}
-		return nil
+		return prev, next
 	}
-	return nil
+	return nil, nil
 }
 
-// itemLabel names one item inside its work: numbered episodes get
+// nextMember is the next real member after itemID, or nil at the finale.
+func nextMember(w *Work, itemID int64) *store.Item {
+	_, next := Neighbours(w, itemID)
+	return next
+}
+
+// ItemLabel names one item inside its work: numbered episodes get
 // "S02E05 · <title>" (enrichment episode title when known, else the file
 // basename); a numbered audiobook part is "Part 3"; a track is
 // "Track 3 · <its title>" when the path named it, "Track 3" when the identity
@@ -507,7 +539,7 @@ func nextMember(w *Work, itemID int64) *store.Item {
 // everything else — bonus material, episodes and parts nobody numbered,
 // books — is just the basename, since a made-up "S00E00" or "Part 0" names
 // nothing.
-func itemLabel(it store.Item) string {
+func ItemLabel(it store.Item) string {
 	name := path.Base(it.ObjectKey)
 	if it.Identity == nil {
 		return name

@@ -408,6 +408,18 @@ func dedupeKeys(works []Work) []Work {
 	return out
 }
 
+// ByItem indexes works by member item id — the way from an item's own
+// document to the work it belongs to (its links.work, its neighbours).
+func ByItem(works []Work) map[int64]*Work {
+	m := map[int64]*Work{}
+	for i := range works {
+		for _, it := range works[i].Items {
+			m[it.ID] = &works[i]
+		}
+	}
+	return m
+}
+
 // ByKey indexes works for /api/works/{key}/items lookups.
 func ByKey(works []Work) map[string]*Work {
 	m := make(map[string]*Work, len(works))

@@ -1,0 +1,179 @@
+{
+  "self": "/api/works/audiobook%3Afrank-herbert-dune-1965",
+  "kind": "work",
+  "title": "Dune",
+  "work_kind": "audiobook",
+  "work_key": "audiobook:frank-herbert-dune-1965",
+  "medium": "audio",
+  "author": "Frank Herbert",
+  "year": 1965,
+  "genres": [],
+  "overview": "",
+  "episode_count": 0,
+  "extra_count": 0,
+  "part_count": 2,
+  "item_count": 2,
+  "representative_item_id": 1,
+  "profile": "chris",
+  "progress": {
+    "status": "active",
+    "fraction": 0.05970149253731343,
+    "text": "part 1 of 2 · 1:20:00",
+    "next": {
+      "href": "/api/items/1",
+      "title": "Part 1"
+    }
+  },
+  "places": [
+    {
+      "token": "0:00",
+      "label": "Chapter 01"
+    },
+    {
+      "token": "40:00",
+      "label": "Chapter 02"
+    },
+    {
+      "token": "1:19:00",
+      "label": "Chapter 03"
+    }
+  ],
+  "members": [
+    {
+      "self": "/api/items/1",
+      "kind": "item",
+      "title": "01 - Part 1.m4b",
+      "id": 1,
+      "medium": "audio",
+      "label": "Part 1",
+      "duration_seconds": 41400,
+      "chapters": [
+        {
+          "start_seconds": 0,
+          "title": "Chapter 01"
+        },
+        {
+          "start_seconds": 2400,
+          "title": "Chapter 02"
+        },
+        {
+          "start_seconds": 4740,
+          "title": "Chapter 03"
+        }
+      ],
+      "links": {
+        "cover": {
+          "href": "/api/items/1/cover"
+        },
+        "work": {
+          "href": "/api/works/audiobook%3Afrank-herbert-dune-1965",
+          "title": "Dune"
+        }
+      },
+      "actions": {
+        "play": {
+          "method": "POST",
+          "href": "/api/items/1/play",
+          "input": {
+            "passage": "passage?",
+            "seek_seconds": "number?"
+          },
+          "label": "▶ Play"
+        },
+        "progress": {
+          "method": "POST",
+          "href": "/api/progress",
+          "input": {
+            "client_id": "string",
+            "item_id": "1",
+            "position_seconds": "number"
+          },
+          "label": "Save the place"
+        }
+      },
+      "unavailable": {
+        "read": {
+          "reason": "an audiobook is played, not read"
+        }
+      }
+    },
+    {
+      "self": "/api/items/2",
+      "kind": "item",
+      "title": "02 - Part 2.m4b",
+      "id": 2,
+      "medium": "audio",
+      "label": "Part 2",
+      "duration_seconds": 39000,
+      "links": {
+        "cover": {
+          "href": "/api/items/2/cover"
+        },
+        "work": {
+          "href": "/api/works/audiobook%3Afrank-herbert-dune-1965",
+          "title": "Dune"
+        }
+      },
+      "actions": {
+        "play": {
+          "method": "POST",
+          "href": "/api/items/2/play",
+          "input": {
+            "passage": "passage?",
+            "seek_seconds": "number?"
+          },
+          "label": "▶ Play"
+        },
+        "progress": {
+          "method": "POST",
+          "href": "/api/progress",
+          "input": {
+            "client_id": "string",
+            "item_id": "2",
+            "position_seconds": "number"
+          },
+          "label": "Save the place"
+        }
+      },
+      "unavailable": {
+        "read": {
+          "reason": "an audiobook is played, not read"
+        }
+      }
+    }
+  ],
+  "links": {
+    "cover": {
+      "href": "/api/items/1/cover"
+    },
+    "items": {
+      "href": "/api/works/audiobook%3Afrank-herbert-dune-1965/items"
+    }
+  },
+  "actions": {
+    "passage": {
+      "method": "GET",
+      "href": "/api/-/passage?work=audiobook%3Afrank-herbert-dune-1965",
+      "input": {
+        "from": "place?",
+        "to": "place?"
+      },
+      "label": "Copy a passage link"
+    },
+    "play": {
+      "method": "POST",
+      "href": "/api/items/1/play",
+      "input": {
+        "passage": "passage?",
+        "seek_seconds": "number?"
+      },
+      "label": "▶ Resume"
+    }
+  },
+  "unavailable": {
+    "read": {
+      "reason": "an audiobook is played, not read"
+    }
+  }
+}
+

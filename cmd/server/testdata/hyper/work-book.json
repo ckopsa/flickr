@@ -1,0 +1,169 @@
+{
+  "self": "/api/works/book%3Ashirley-jackson-the-haunting-of-hill-house-1959",
+  "kind": "work",
+  "title": "The Haunting of Hill House",
+  "work_kind": "book",
+  "work_key": "book:shirley-jackson-the-haunting-of-hill-house-1959",
+  "medium": "text",
+  "author": "Shirley Jackson",
+  "year": 1959,
+  "genres": [],
+  "overview": "",
+  "episode_count": 0,
+  "extra_count": 0,
+  "item_count": 1,
+  "representative_item_id": 3,
+  "profile": "chris",
+  "progress": {
+    "status": "active",
+    "fraction": 0.34,
+    "text": "ch. 7 · 34%"
+  },
+  "places": [
+    {
+      "token": "ch. 1",
+      "label": "Cover"
+    },
+    {
+      "token": "ch. 2",
+      "label": "Title Page"
+    },
+    {
+      "token": "ch. 3",
+      "label": "Chapter One"
+    },
+    {
+      "token": "ch. 4",
+      "label": "Chapter Two"
+    },
+    {
+      "token": "ch. 5",
+      "label": "The Hill"
+    },
+    {
+      "token": "ch. 6",
+      "label": "The Tower"
+    },
+    {
+      "token": "ch. 7",
+      "label": "The Cellar"
+    },
+    {
+      "token": "ch. 8",
+      "label": "Afterword"
+    }
+  ],
+  "members": [
+    {
+      "self": "/api/items/3",
+      "kind": "item",
+      "title": "The Haunting of Hill House",
+      "id": 3,
+      "medium": "text",
+      "label": "The Haunting of Hill House.epub",
+      "chapters": [
+        {
+          "start_seconds": 0,
+          "title": "Cover"
+        },
+        {
+          "start_seconds": 0,
+          "title": "Title Page"
+        },
+        {
+          "start_seconds": 0,
+          "title": "Chapter One"
+        },
+        {
+          "start_seconds": 0,
+          "title": "Chapter Two"
+        },
+        {
+          "start_seconds": 0,
+          "title": "The Hill"
+        },
+        {
+          "start_seconds": 0,
+          "title": "The Tower"
+        },
+        {
+          "start_seconds": 0,
+          "title": "The Cellar"
+        },
+        {
+          "start_seconds": 0,
+          "title": "Afterword"
+        }
+      ],
+      "sections": 8,
+      "links": {
+        "book": {
+          "href": "/api/items/3/book"
+        },
+        "cover": {
+          "href": "/api/items/3/cover"
+        },
+        "work": {
+          "href": "/api/works/book%3Ashirley-jackson-the-haunting-of-hill-house-1959",
+          "title": "The Haunting of Hill House"
+        }
+      },
+      "actions": {
+        "progress": {
+          "method": "POST",
+          "href": "/api/progress",
+          "input": {
+            "client_id": "string",
+            "fraction": "number?",
+            "item_id": "3",
+            "locator": "string?",
+            "page": "number?",
+            "position_seconds": "number?",
+            "section": "number?"
+          },
+          "label": "Save the place"
+        },
+        "read": {
+          "method": "GET",
+          "href": "/api/items/3/book",
+          "label": "Read"
+        }
+      },
+      "unavailable": {
+        "play": {
+          "reason": "a book is read, not played"
+        }
+      }
+    }
+  ],
+  "links": {
+    "cover": {
+      "href": "/api/items/3/cover"
+    },
+    "items": {
+      "href": "/api/works/book%3Ashirley-jackson-the-haunting-of-hill-house-1959/items"
+    }
+  },
+  "actions": {
+    "passage": {
+      "method": "GET",
+      "href": "/api/-/passage?work=book%3Ashirley-jackson-the-haunting-of-hill-house-1959",
+      "input": {
+        "from": "place?",
+        "to": "place?"
+      },
+      "label": "Copy a passage link"
+    },
+    "read": {
+      "method": "GET",
+      "href": "/api/items/3/book",
+      "label": "Read"
+    }
+  },
+  "unavailable": {
+    "play": {
+      "reason": "a book is read, not played"
+    }
+  }
+}
+
