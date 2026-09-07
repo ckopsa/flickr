@@ -1,0 +1,152 @@
+{
+  "self": "/api/items/9",
+  "kind": "item",
+  "title": "The Job",
+  "id": 9,
+  "object_key": "Shows/The Office (2005)/Season 3/S03E23 - The Job.mkv",
+  "file_name": "S03E23 - The Job.mkv",
+  "medium": "video",
+  "label": "S03E23 · The Job",
+  "duration_seconds": 2760,
+  "tech": "1280x720 h264/aac · 2.76 GB",
+  "overview": "Jim and Karen head to New York.",
+  "runtime_minutes": 22,
+  "certification": "TV-14",
+  "cast": [
+    "Steve Carell",
+    "Rainn Wilson",
+    "John Krasinski"
+  ],
+  "added_at": "2026-08-19T12:00:00Z",
+  "identity": {
+    "kind": "episode",
+    "title": "The Office",
+    "year": 2005,
+    "season": 3,
+    "episode": 23
+  },
+  "enrichment": {
+    "v": 3,
+    "tmdb_id": 2316,
+    "title": "The Office",
+    "year": 2005,
+    "overview": "A mockumentary on a group of office workers.",
+    "has_poster": true,
+    "genres": [
+      "Comedy"
+    ],
+    "has_backdrop": true,
+    "runtime_minutes": 22,
+    "certification": "TV-14",
+    "cast": [
+      "Steve Carell",
+      "Rainn Wilson",
+      "John Krasinski"
+    ],
+    "episode_title": "The Job",
+    "episode_overview": "Jim and Karen head to New York.",
+    "has_still": true
+  },
+  "media_info": {
+    "medium": "video",
+    "container": "mkv",
+    "video_codec": "h264",
+    "audio_codec": "aac",
+    "width": 1280,
+    "height": 720,
+    "duration_seconds": 2760,
+    "bitrate_bps": 5200000,
+    "audio_channels": 2
+  },
+  "subtitles": [
+    {
+      "ordinal": "transcript",
+      "language": "en",
+      "title": "Transcript (generated)",
+      "codec": "webvtt",
+      "supported": true,
+      "href": "/api/items/9/subtitles/transcript.vtt"
+    }
+  ],
+  "links": {
+    "backdrop": {
+      "href": "/api/items/9/backdrop"
+    },
+    "poster": {
+      "href": "/api/items/9/poster"
+    },
+    "prev": {
+      "href": "/api/items/8",
+      "title": "Beach Games"
+    },
+    "still": {
+      "href": "/api/items/9/still"
+    },
+    "trickplay": {
+      "href": "/api/items/9/trickplay.json"
+    },
+    "work": {
+      "href": "/api/works/tmdb%3A2316",
+      "title": "The Office"
+    }
+  },
+  "actions": {
+    "identity": {
+      "method": "POST",
+      "href": "/api/items/9/identity",
+      "input": {
+        "author": "string?",
+        "episode": "number?",
+        "kind": "string",
+        "part": "number?",
+        "season": "number?",
+        "title": "string",
+        "track_title": "string?",
+        "year": "number?"
+      },
+      "label": "Fix the identity"
+    },
+    "play": {
+      "method": "POST",
+      "href": "/api/items/9/play",
+      "input": {
+        "passage": "passage?",
+        "seek_seconds": "number?"
+      },
+      "label": "▶ Play"
+    },
+    "progress": {
+      "method": "POST",
+      "href": "/api/progress",
+      "input": {
+        "client_id": "string",
+        "item_id": "9",
+        "position_seconds": "number"
+      },
+      "label": "Save the place"
+    },
+    "reprobe": {
+      "method": "POST",
+      "href": "/api/items/9/reprobe",
+      "label": "Probe this file again"
+    },
+    "watched": {
+      "method": "POST",
+      "href": "/api/items/9/watched",
+      "input": {
+        "client_id": "string?",
+        "watched": "true"
+      },
+      "label": "Mark watched"
+    }
+  },
+  "unavailable": {
+    "enrich": {
+      "reason": "TMDB enrichment is off (TMDB_API_KEY is not set)"
+    },
+    "read": {
+      "reason": "an episode is played, not read"
+    }
+  }
+}
+

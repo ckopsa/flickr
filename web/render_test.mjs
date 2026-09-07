@@ -68,6 +68,7 @@ const cases = [
   { name: 'work (book)', golden: 'work-book', render: d => R.work(d) },
   { name: 'artist', golden: 'artist', render: d => R.artist(d) },
   { name: 'item (film)', golden: 'item-film', render: d => R.item(d, {}) },
+  { name: 'item (episode)', golden: 'item-episode', render: d => R.item(d, {}) },
   { name: 'session (play)', golden: 'session-play', render: d => R.session(d, {}) },
 ];
 

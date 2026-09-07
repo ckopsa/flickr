@@ -506,3 +506,80 @@ func mustSaved(t *testing.T, s *State, profile string) []Saved {
 	}
 	return rows
 }
+
+// A transcript is written once per file and replaced when the file under it
+// changes; deleting the item takes its transcript with it.
+func TestTranscriptRoundtrip(t *testing.T) {
+	l := openTestLibrary(t)
+	if err := l.UpsertBatch([]Item{
+		{ObjectKey: "a.mkv", ETag: "e1"},
+		{ObjectKey: "b.mkv", ETag: "e2"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	items, err := l.ListItems()
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, b := items[0].ID, items[1].ID
+
+	got, err := l.Transcript(a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != nil {
+		t.Fatalf("a file nobody has transcribed has a transcript: %+v", got)
+	}
+
+	made := time.Date(2026, time.September, 5, 3, 15, 0, 0, time.UTC)
+	for _, tr := range []Transcript{
+		{ItemID: a, ETag: "e1", Language: "en", Model: "ggml-base.en.bin", GeneratedAt: made},
+		{ItemID: b, ETag: "e2", Language: "de", Model: "ggml-base.en.bin", GeneratedAt: made},
+	} {
+		if err := l.SetTranscript(tr); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err = l.Transcript(a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got == nil || got.ETag != "e1" || got.Language != "en" || got.Model != "ggml-base.en.bin" {
+		t.Fatalf("transcript = %+v", got)
+	}
+	if !got.GeneratedAt.Equal(made) {
+		t.Errorf("generated at %v, want %v", got.GeneratedAt, made)
+	}
+
+	// The file changed under it: the row is replaced, not doubled.
+	again := made.Add(24 * time.Hour)
+	if err := l.SetTranscript(Transcript{ItemID: a, ETag: "e9", Language: "fr",
+		Model: "ggml-medium.bin", GeneratedAt: again}); err != nil {
+		t.Fatal(err)
+	}
+	all, err := l.Transcripts()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != 2 {
+		t.Fatalf("%d transcript rows, want 2", len(all))
+	}
+	if all[a].ETag != "e9" || all[a].Language != "fr" || !all[a].GeneratedAt.Equal(again) {
+		t.Errorf("re-transcribed row = %+v", all[a])
+	}
+
+	// The object is gone, and so is what was generated from it.
+	if _, err := l.DeleteMissing(map[string]bool{"b.mkv": true}); err != nil {
+		t.Fatal(err)
+	}
+	all, err = l.Transcripts()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := all[a]; ok {
+		t.Error("a deleted item kept its transcript row")
+	}
+	if _, ok := all[b]; !ok {
+		t.Error("a surviving item lost its transcript row")
+	}
+}

@@ -120,8 +120,24 @@ func OpenLibrary(path string) (*Library, error) {
 	if _, err := db.Exec(metaSchema); err != nil {
 		return nil, err
 	}
+	if _, err := db.Exec(transcriptSchema); err != nil {
+		return nil, err
+	}
 	return &Library{db: db}, nil
 }
+
+// transcriptSchema records the generated subtitle track a file with none of
+// its own was given (internal/pipeline's whisper stage). The etag is what
+// the transcript was generated FROM: a file that changed under its id is
+// transcribed again, and one that did not never is.
+const transcriptSchema = `
+	CREATE TABLE IF NOT EXISTS transcripts (
+		item_id INTEGER PRIMARY KEY,
+		etag TEXT NOT NULL,
+		language TEXT NOT NULL DEFAULT '',
+		model TEXT NOT NULL DEFAULT '',
+		generated_at REAL NOT NULL
+	)`
 
 // metaSchema holds named monotonic counters. feed_seq is the single change
 // counter (bumped once per written row, inside the writing transaction);
@@ -390,6 +406,11 @@ func (l *Library) DeleteMissing(present map[string]bool) (int64, error) {
 		if _, err := tx.Exec(`DELETE FROM items WHERE id=?`, id); err != nil {
 			return 0, err
 		}
+		// The generated transcript belonged to that file, not to the id the
+		// next scan may hand to another one.
+		if _, err := tx.Exec(`DELETE FROM transcripts WHERE item_id=?`, id); err != nil {
+			return 0, err
+		}
 	}
 	// Deletions don't leave a row to carry a seq, and per-row tombstones are
 	// more machinery than this feed needs. Instead: stamp the counter value at
@@ -535,6 +556,68 @@ func (l *Library) SetEnrichment(id int64, e *model.Enrichment, ident *model.Iden
 		return err
 	}
 	return tx.Commit()
+}
+
+// Transcript is the generated subtitle track one item was given: what it is
+// in, which model wrote it, when, and the etag of the file it was generated
+// from — the transcription stage re-runs only when that etag has moved.
+type Transcript struct {
+	ItemID      int64     `json:"item_id"`
+	ETag        string    `json:"etag"`
+	Language    string    `json:"language,omitempty"`
+	Model       string    `json:"model,omitempty"`
+	GeneratedAt time.Time `json:"generated_at"`
+}
+
+// SetTranscript records (or replaces) one item's generated transcript. It is
+// not a change to the item, so it bumps no seq: the file the feed describes
+// is the same file it was.
+func (l *Library) SetTranscript(t Transcript) error {
+	_, err := l.db.Exec(`
+		INSERT INTO transcripts (item_id, etag, language, model, generated_at)
+		VALUES (?, ?, ?, ?, ?)
+		ON CONFLICT(item_id) DO UPDATE SET
+			etag=excluded.etag, language=excluded.language,
+			model=excluded.model, generated_at=excluded.generated_at`,
+		t.ItemID, t.ETag, t.Language, t.Model, unixSecs(t.GeneratedAt))
+	return err
+}
+
+// Transcript returns one item's transcript row, or nil when it has none.
+func (l *Library) Transcript(itemID int64) (*Transcript, error) {
+	t := Transcript{ItemID: itemID}
+	var generated float64
+	err := l.db.QueryRow(`SELECT etag, language, model, generated_at FROM transcripts WHERE item_id=?`,
+		itemID).Scan(&t.ETag, &t.Language, &t.Model, &generated)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	t.GeneratedAt = timeAt(generated)
+	return &t, nil
+}
+
+// Transcripts is every transcript row by item id — one query for a stage
+// that has to decide about the whole library.
+func (l *Library) Transcripts() (map[int64]Transcript, error) {
+	rows, err := l.db.Query(`SELECT item_id, etag, language, model, generated_at FROM transcripts`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[int64]Transcript{}
+	for rows.Next() {
+		var t Transcript
+		var generated float64
+		if err := rows.Scan(&t.ItemID, &t.ETag, &t.Language, &t.Model, &generated); err != nil {
+			return nil, err
+		}
+		t.GeneratedAt = timeAt(generated)
+		out[t.ItemID] = t
+	}
+	return out, rows.Err()
 }
 
 // OverrideIdentity persists a user correction; scans will never undo it.
