@@ -11,6 +11,7 @@ package store
 import (
 	"database/sql"
 	"encoding/json"
+	"math"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -39,6 +40,12 @@ type Item struct {
 	ProbeError         string            `json:"probe_error,omitempty"`
 	ProbeVersion       int               `json:"-"`
 	IdentityVersion    int               `json:"-"`
+	// AddedAt is when this file arrived in the library: the object's own
+	// LastModified where the scan's listing pass saw one, the moment of the
+	// insert otherwise. It is stamped ONCE, on insert — a re-probe or a
+	// re-identification is not an arrival, and "recently added" would be a
+	// lie if it moved.
+	AddedAt time.Time `json:"-"`
 	// Seq is the item's change sequence number: every write that touches the
 	// row (upsert, identity refresh, enrichment, sidecar re-attach) stamps it
 	// from a single monotonic counter (meta.feed_seq). The change feed uses it
@@ -83,6 +90,7 @@ func OpenLibrary(path string) (*Library, error) {
 			enrichment TEXT,
 			enrichment_identity TEXT,
 			sidecar_sig TEXT NOT NULL DEFAULT '',
+			added_at REAL NOT NULL DEFAULT 0,
 			updated_at REAL NOT NULL
 		)`)
 	if err != nil {
@@ -99,6 +107,16 @@ func OpenLibrary(path string) (*Library, error) {
 	// deliberately sorts before any real cursor — a first feed fetch without
 	// `since` sees the whole library, which is the correct initial sync.
 	db.Exec(`ALTER TABLE items ADD COLUMN seq INTEGER NOT NULL DEFAULT 0`)
+	// added_at: when the file arrived. A row written before the column
+	// existed has no arrival time to recover — the bucket's LastModified was
+	// never kept — so the whole existing library arrives now, once, at the
+	// migration. Only a successful ALTER stamps: on every later open the
+	// column is already there and the rows keep what they were given.
+	if _, err := db.Exec(`ALTER TABLE items ADD COLUMN added_at REAL NOT NULL DEFAULT 0`); err == nil {
+		if _, err := db.Exec(`UPDATE items SET added_at=?`, unixSecs(time.Now())); err != nil {
+			return nil, err
+		}
+	}
 	if _, err := db.Exec(metaSchema); err != nil {
 		return nil, err
 	}
@@ -138,6 +156,19 @@ func readSeq(q execQueryer, key string) (int64, error) {
 		return 0, nil
 	}
 	return v, err
+}
+
+// unixSecs and timeAt convert between the REAL unix-seconds columns SQLite
+// holds (updated_at has always been one) and Go times, at the millisecond
+// precision those columns are written with. A zero column is no time at all,
+// not 1970.
+func unixSecs(t time.Time) float64 { return float64(t.UnixMilli()) / 1000 }
+
+func timeAt(secs float64) time.Time {
+	if secs == 0 {
+		return time.Time{}
+	}
+	return time.UnixMilli(int64(math.Round(secs * 1000))).UTC()
 }
 
 // FeedSeq returns the current value of the library change counter — the
@@ -180,9 +211,11 @@ func (l *Library) UpsertBatch(items []Item) error {
 		return err
 	}
 	defer tx.Rollback()
+	// added_at is deliberately absent from the DO UPDATE list: an upsert on
+	// an object we already hold is a re-probe, and a file arrives once.
 	stmt, err := tx.Prepare(`
-		INSERT INTO items (object_key, etag, size, media_info, identity, probe_error, probe_version, identity_version, sidecar_sig, seq, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO items (object_key, etag, size, media_info, identity, probe_error, probe_version, identity_version, sidecar_sig, seq, added_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(object_key) DO UPDATE SET
 			etag=excluded.etag,
 			size=excluded.size,
@@ -207,7 +240,11 @@ func (l *Library) UpsertBatch(items []Item) error {
 		if err != nil {
 			return err
 		}
-		if _, err := stmt.Exec(it.ObjectKey, it.ETag, it.Size, mi, id, it.ProbeError, it.ProbeVersion, it.IdentityVersion, it.SidecarSig, seq, now); err != nil {
+		added := now // no LastModified from the bucket: it arrives now
+		if !it.AddedAt.IsZero() {
+			added = unixSecs(it.AddedAt)
+		}
+		if _, err := stmt.Exec(it.ObjectKey, it.ETag, it.Size, mi, id, it.ProbeError, it.ProbeVersion, it.IdentityVersion, it.SidecarSig, seq, added, now); err != nil {
 			return err
 		}
 	}
@@ -372,7 +409,7 @@ func (l *Library) DeleteMissing(present map[string]bool) (int64, error) {
 	return int64(len(gone)), tx.Commit()
 }
 
-const itemColumns = `id, object_key, etag, size, media_info, identity, identity_overridden, enrichment, probe_error, seq`
+const itemColumns = `id, object_key, etag, size, media_info, identity, identity_overridden, enrichment, probe_error, seq, added_at`
 
 func (l *Library) ListItems() ([]Item, error) {
 	rows, err := l.db.Query(`SELECT ` + itemColumns + ` FROM items ORDER BY object_key`)
@@ -419,9 +456,11 @@ func scanItem(rows *sql.Rows) (Item, error) {
 	var it Item
 	var mi, ident, enr sql.NullString
 	var overridden int
-	if err := rows.Scan(&it.ID, &it.ObjectKey, &it.ETag, &it.Size, &mi, &ident, &overridden, &enr, &it.ProbeError, &it.Seq); err != nil {
+	var added float64
+	if err := rows.Scan(&it.ID, &it.ObjectKey, &it.ETag, &it.Size, &mi, &ident, &overridden, &enr, &it.ProbeError, &it.Seq, &added); err != nil {
 		return it, err
 	}
+	it.AddedAt = timeAt(added)
 	it.IdentityOverridden = overridden == 1
 	if mi.Valid {
 		it.MediaInfo = &model.MediaInfo{}

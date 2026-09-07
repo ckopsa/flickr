@@ -5,8 +5,10 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"flickr/internal/model"
+	"flickr/internal/store"
 	"flickr/internal/works"
 )
 
@@ -85,6 +87,113 @@ func TestLibraryOrder(t *testing.T) {
 	}
 }
 
+// arrivedWork is one work in the recently-added table: the same work the
+// order table builds, with member files that arrived on the given days of
+// one January. Day 0 is a file with no arrival time at all — a row written
+// before the library kept one.
+func arrivedWork(key, kind, medium, author string, days ...int) works.Work {
+	w := wk(key, kind, medium, author)
+	for i, d := range days {
+		it := store.Item{ID: int64(i + 1)}
+		if d > 0 {
+			it.AddedAt = time.Date(2026, time.January, d, 12, 0, 0, 0, time.UTC)
+		}
+		w.Items = append(w.Items, it)
+	}
+	return w
+}
+
+// "Recently added" is a re-ordering of the grid's own shelves, and this is
+// its table: what a work's arrival is (its newest file), what an artist's
+// shelf's arrival is (their newest record), how many the row holds, and what
+// happens to a thing that has no arrival time.
+func TestRecentlyAdded(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		n     int
+		works []works.Work
+		want  []string
+	}{
+		{
+			name: "newest first, whatever band the grid put them in",
+			n:    12,
+			works: []works.Work{
+				arrivedWork("book:1984", "book", model.MediumText, "George Orwell", 5),
+				arrivedWork("movie:frozen", "movie", model.MediumVideo, "", 20),
+				arrivedWork("show:atlanta", "show", model.MediumVideo, "", 11),
+			},
+			want: []string{"movie:frozen", "show:atlanta", "book:1984"},
+		},
+		{
+			name: "a show is as new as its newest episode",
+			n:    12,
+			works: []works.Work{
+				arrivedWork("movie:frozen", "movie", model.MediumVideo, "", 10),
+				// An old first season, a new one just added.
+				arrivedWork("show:atlanta", "show", model.MediumVideo, "", 3, 22),
+			},
+			want: []string{"show:atlanta", "movie:frozen"},
+		},
+		{
+			name: "an artist's shelf arrives with their newest record",
+			n:    12,
+			works: []works.Work{
+				arrivedWork("album:radiohead-pablo-honey", "album", model.MediumAudio, "Radiohead", 2),
+				arrivedWork("album:radiohead-kid-a", "album", model.MediumAudio, "Radiohead", 25),
+				arrivedWork("movie:frozen", "movie", model.MediumVideo, "", 10),
+			},
+			want: []string{"Radiohead", "movie:frozen"},
+		},
+		{
+			name: "the row is capped, and the cut is at the far end",
+			n:    2,
+			works: []works.Work{
+				arrivedWork("movie:arrival", "movie", model.MediumVideo, "", 1),
+				arrivedWork("movie:frozen", "movie", model.MediumVideo, "", 30),
+				arrivedWork("show:atlanta", "show", model.MediumVideo, "", 15),
+			},
+			want: []string{"movie:frozen", "show:atlanta"},
+		},
+		{
+			name: "a work with no arrival time is not recently added",
+			n:    12,
+			works: []works.Work{
+				arrivedWork("movie:arrival", "movie", model.MediumVideo, "", 0),
+				arrivedWork("movie:frozen", "movie", model.MediumVideo, "", 4),
+			},
+			want: []string{"movie:frozen"},
+		},
+		{
+			name: "same day: the grid's own order breaks the tie",
+			n:    12,
+			works: []works.Work{
+				arrivedWork("movie:arrival", "movie", model.MediumVideo, "", 7),
+				arrivedWork("movie:frozen", "movie", model.MediumVideo, "", 7),
+				arrivedWork("show:atlanta", "show", model.MediumVideo, "", 7),
+			},
+			// Shows band before films, and films in their own order.
+			want: []string{"show:atlanta", "movie:arrival", "movie:frozen"},
+		},
+		{name: "an empty library has nothing new in it", n: 12},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			order := libraryOrder(tc.works, works.Artists(tc.works))
+			var got []string
+			for _, sh := range recentlyAdded(order, works.ByKey(tc.works), tc.n) {
+				if sh.Artist != nil {
+					got = append(got, sh.Artist.Name)
+					continue
+				}
+				got = append(got, sh.Work.Key)
+			}
+			if strings.Join(got, ", ") != strings.Join(tc.want, ", ") {
+				t.Errorf("recently added = [%s], want [%s]",
+					strings.Join(got, ", "), strings.Join(tc.want, ", "))
+			}
+		})
+	}
+}
+
 // tile is a library tile as a test reads it.
 type tile struct {
 	Self     string   `json:"self"`
@@ -102,9 +211,10 @@ type tile struct {
 }
 
 type libraryDoc struct {
-	Count  int    `json:"count"`
-	Items  []tile `json:"items"`
-	Facets map[string][]struct {
+	Count         int    `json:"count"`
+	Items         []tile `json:"items"`
+	RecentlyAdded []tile `json:"recently_added"`
+	Facets        map[string][]struct {
 		Value string `json:"value"`
 		Count int    `json:"count"`
 	} `json:"facets"`
@@ -181,6 +291,36 @@ func TestLibraryTiles(t *testing.T) {
 	}
 	if dune.Links["artwork"].Href != "/api/items/1/cover" {
 		t.Errorf("an audiobook's picture is its own cover: %q", dune.Links["artwork"].Href)
+	}
+}
+
+// The library document carries what is new as the SAME tiles the grid draws
+// — a row a client can render with the renderer it already has — newest
+// first, over the fixture's own arrival dates.
+func TestLibraryRecentlyAdded(t *testing.T) {
+	_, h := fixtureServer(t)
+	doc := library(t, h, "/api/library?client_id=chris")
+	var got []string
+	for _, tl := range doc.RecentlyAdded {
+		got = append(got, tl.Title)
+	}
+	want := []string{"Radiohead", "Frozen", "The Office", "Dune",
+		"The Haunting of Hill House", "Flatland"}
+	if strings.Join(got, ", ") != strings.Join(want, ", ") {
+		t.Errorf("recently added = [%s], want [%s]",
+			strings.Join(got, ", "), strings.Join(want, ", "))
+	}
+	// The same envelope, not a thinner one: a tile is a tile wherever it is
+	// drawn, so the row needs no renderer of its own.
+	byTitle := map[string]tile{}
+	for _, tl := range doc.Items {
+		byTitle[tl.Title] = tl
+	}
+	for _, tl := range doc.RecentlyAdded {
+		if grid := byTitle[tl.Title]; grid.Self != tl.Self || grid.Tech != tl.Tech ||
+			grid.Subtitle != tl.Subtitle || grid.ItemID != tl.ItemID {
+			t.Errorf("%q: the recently-added tile differs from the grid's", tl.Title)
+		}
 	}
 }
 

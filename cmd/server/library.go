@@ -23,6 +23,7 @@ import (
 	"path"
 	"sort"
 	"strings"
+	"time"
 
 	"flickr/internal/hyper"
 	"flickr/internal/model"
@@ -144,6 +145,14 @@ func tileFor(w *works.Work, subtitle string) *hyper.Envelope {
 		t.Link("backdrop", itemHref(rep.ID)+"/backdrop", "")
 	}
 	return t
+}
+
+// tileOf is one shelf as a tile, whichever of the two subjects it has.
+func tileOf(sh shelf) *hyper.Envelope {
+	if sh.Artist != nil {
+		return artistTile(sh.Artist)
+	}
+	return workTile(sh.Work)
 }
 
 // artistTile is one artist's shelf as the grid draws it: the name, how many
@@ -357,6 +366,66 @@ func plural(n int, noun string) string {
 	return fmt.Sprintf("%d %ss", n, noun)
 }
 
+// ── recently added ──────────────────────────────────────────────────────
+
+// recentlyAddedTiles is how many tiles the "Recently added" row holds.
+const recentlyAddedTiles = 12
+
+// shelfAddedAt is when the newest file behind a tile arrived: a show is as
+// new as its newest episode, and an artist's shelf is as new as their newest
+// record — a new album puts the artist back at the front, which is what a
+// person means by "that's new".
+func shelfAddedAt(sh shelf, byKey map[string]*works.Work) time.Time {
+	var newest time.Time
+	add := func(w *works.Work) {
+		if w == nil {
+			return
+		}
+		for _, it := range w.Items {
+			if it.AddedAt.After(newest) {
+				newest = it.AddedAt
+			}
+		}
+	}
+	add(sh.Work)
+	if sh.Artist != nil {
+		for _, al := range sh.Artist.Albums {
+			add(byKey[al.Key])
+		}
+	}
+	return newest
+}
+
+// recentlyAdded is the grid's own shelves re-ordered by arrival — newest
+// first, at most n — and it is a SELECTION of the same tiles, not a second
+// kind of thing: what is new is a question about the library's order, and
+// the library document is where the order is decided.
+//
+// A shelf whose files predate the arrival column carries no time at all and
+// is left out: a "recently added" row is worth having short, and not worth
+// having wrong. Ties keep the grid's order, so the row is deterministic.
+func recentlyAdded(order []shelf, byKey map[string]*works.Work, n int) []shelf {
+	type dated struct {
+		sh shelf
+		at time.Time
+	}
+	var known []dated
+	for _, sh := range order {
+		if at := shelfAddedAt(sh, byKey); !at.IsZero() {
+			known = append(known, dated{sh, at})
+		}
+	}
+	sort.SliceStable(known, func(i, j int) bool { return known[i].at.After(known[j].at) })
+	if len(known) > n {
+		known = known[:n]
+	}
+	out := make([]shelf, 0, len(known))
+	for _, d := range known {
+		out = append(out, d.sh)
+	}
+	return out
+}
+
 // ── the facets ──────────────────────────────────────────────────────────
 
 // facet is one value a filter offers and how many tiles carry it. It is a
@@ -417,11 +486,12 @@ func (s *server) handleLibrary(w http.ResponseWriter, r *http.Request) {
 	order := libraryOrder(ws, works.Artists(ws))
 	tiles := make([]*hyper.Envelope, 0, len(order))
 	for _, sh := range order {
-		if sh.Artist != nil {
-			tiles = append(tiles, artistTile(sh.Artist))
-			continue
-		}
-		tiles = append(tiles, workTile(sh.Work))
+		tiles = append(tiles, tileOf(sh))
+	}
+	byKey := works.ByKey(ws)
+	recent := make([]*hyper.Envelope, 0, recentlyAddedTiles)
+	for _, sh := range recentlyAdded(order, byKey, recentlyAddedTiles) {
+		recent = append(recent, tileOf(sh))
 	}
 
 	profile := profileOf(r)
@@ -435,6 +505,7 @@ func (s *server) handleLibrary(w http.ResponseWriter, r *http.Request) {
 	}
 	doc.Field("count", len(tiles)).
 		Field("items", tiles).
+		Field("recently_added", recent).
 		Field("facets", map[string][]facet{"genre": genreFacet(order)}).
 		Link("root", "/api/", "flickr").
 		Link("continue", cont, "Continue watching").

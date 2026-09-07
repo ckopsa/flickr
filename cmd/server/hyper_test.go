@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"flickr/internal/model"
 	"flickr/internal/store"
@@ -45,10 +46,19 @@ const (
 	idFlatland  = 12
 )
 
+// arrived is one fixture file's arrival date. Real arrival times come from
+// the bucket, which a test has none of, so the fixture spells them: they are
+// what the `recently_added` row is ordered by, and a golden cannot be
+// written against time.Now().
+func arrived(y int, m time.Month, d int) time.Time {
+	return time.Date(y, m, d, 12, 0, 0, 0, time.UTC)
+}
+
 func fixtureItems() []store.Item {
 	return []store.Item{
 		{
 			ObjectKey: "Audiobooks/Frank Herbert/Dune (1965)/01 - Part 1.m4b",
+			AddedAt:   arrived(2026, time.August, 1),
 			ETag:      "e1", Size: 411000000,
 			Identity: &model.Identity{Kind: "audiobook_part", Title: "Dune", Author: "Frank Herbert", Year: 1965, Part: 1},
 			MediaInfo: &model.MediaInfo{
@@ -63,6 +73,7 @@ func fixtureItems() []store.Item {
 		},
 		{
 			ObjectKey: "Audiobooks/Frank Herbert/Dune (1965)/02 - Part 2.m4b",
+			AddedAt:   arrived(2026, time.August, 2),
 			ETag:      "e2", Size: 390000000,
 			Identity: &model.Identity{Kind: "audiobook_part", Title: "Dune", Author: "Frank Herbert", Year: 1965, Part: 2},
 			MediaInfo: &model.MediaInfo{
@@ -72,6 +83,7 @@ func fixtureItems() []store.Item {
 		},
 		{
 			ObjectKey: "Books/Shirley Jackson/The Haunting of Hill House.epub",
+			AddedAt:   arrived(2026, time.July, 15),
 			ETag:      "e3", Size: 1200000,
 			Identity: &model.Identity{Kind: "book", Title: "The Haunting of Hill House", Author: "Shirley Jackson", Year: 1959},
 			MediaInfo: &model.MediaInfo{
@@ -86,6 +98,7 @@ func fixtureItems() []store.Item {
 		},
 		{
 			ObjectKey: "Movies/Frozen (2013)/Frozen.mkv",
+			AddedAt:   arrived(2026, time.September, 1),
 			ETag:      "e4", Size: 8400000000,
 			Identity: &model.Identity{Kind: "movie", Title: "Frozen", Year: 2013},
 			MediaInfo: &model.MediaInfo{
@@ -108,6 +121,7 @@ func fixtureItems() []store.Item {
 		},
 		{
 			ObjectKey: "Music/Radiohead/OK Computer (1997)/01 Airbag.flac",
+			AddedAt:   arrived(2026, time.June, 10),
 			ETag:      "e5", Size: 34000000,
 			Identity: &model.Identity{Kind: "track", Title: "OK Computer", Author: "Radiohead",
 				Year: 1997, Part: 1, TrackTitle: "Airbag"},
@@ -118,6 +132,7 @@ func fixtureItems() []store.Item {
 		},
 		{
 			ObjectKey: "Music/Radiohead/OK Computer (1997)/02 Paranoid Android.flac",
+			AddedAt:   arrived(2026, time.June, 10),
 			ETag:      "e6", Size: 46000000,
 			Identity: &model.Identity{Kind: "track", Title: "OK Computer", Author: "Radiohead",
 				Year: 1997, Part: 2, TrackTitle: "Paranoid Android"},
@@ -128,6 +143,7 @@ func fixtureItems() []store.Item {
 		},
 		{
 			ObjectKey: "Shows/The Office (2005)/Featurettes/Deleted Scenes.mkv",
+			AddedAt:   arrived(2026, time.August, 20),
 			ETag:      "e7", Size: 900000000,
 			Identity: &model.Identity{Kind: "extra", Title: "The Office", Season: 3, Episode: 22},
 			MediaInfo: &model.MediaInfo{
@@ -137,6 +153,7 @@ func fixtureItems() []store.Item {
 		},
 		{
 			ObjectKey: "Shows/The Office (2005)/Season 3/S03E22 - Beach Games.mkv",
+			AddedAt:   arrived(2026, time.August, 18),
 			ETag:      "e8", Size: 2400000000,
 			Identity: &model.Identity{Kind: "episode", Title: "The Office", Year: 2005, Season: 3, Episode: 22},
 			MediaInfo: &model.MediaInfo{
@@ -154,6 +171,7 @@ func fixtureItems() []store.Item {
 		},
 		{
 			ObjectKey: "Shows/The Office (2005)/Season 3/S03E23 - The Job.mkv",
+			AddedAt:   arrived(2026, time.August, 19),
 			ETag:      "e9", Size: 2760000000,
 			Identity: &model.Identity{Kind: "episode", Title: "The Office", Year: 2005, Season: 3, Episode: 23},
 			MediaInfo: &model.MediaInfo{
@@ -166,6 +184,7 @@ func fixtureItems() []store.Item {
 		// nobody dated (which sorts last, after every dated record).
 		{
 			ObjectKey: "Music/Radiohead/Pablo Honey (1993)/01 You.flac",
+			AddedAt:   arrived(2026, time.June, 5),
 			ETag:      "e10", Size: 29000000,
 			Identity: &model.Identity{Kind: "track", Title: "Pablo Honey", Author: "Radiohead",
 				Year: 1993, Part: 1, TrackTitle: "You"},
@@ -176,6 +195,7 @@ func fixtureItems() []store.Item {
 		},
 		{
 			ObjectKey: "Music/Radiohead/The Bends/01 Planet Telex.flac",
+			AddedAt:   arrived(2026, time.September, 3),
 			ETag:      "e11", Size: 32000000,
 			Identity: &model.Identity{Kind: "track", Title: "The Bends", Author: "Radiohead",
 				Part: 1, TrackTitle: "Planet Telex"},
@@ -188,6 +208,7 @@ func fixtureItems() []store.Item {
 		// counts in spine sections and has no contents list at all.
 		{
 			ObjectKey: "Books/Edwin A. Abbott/Flatland.pdf",
+			AddedAt:   arrived(2026, time.May, 1),
 			ETag:      "e12", Size: 3400000,
 			Identity: &model.Identity{Kind: "book", Title: "Flatland", Author: "Edwin A. Abbott", Year: 1884},
 			MediaInfo: &model.MediaInfo{

@@ -3,6 +3,7 @@ package store
 import (
 	"path/filepath"
 	"testing"
+	"time"
 
 	"flickr/internal/model"
 )
@@ -14,6 +15,99 @@ func openTestLibrary(t *testing.T) *Library {
 		t.Fatal(err)
 	}
 	return l
+}
+
+// A file arrives once. The scan hands the object's own LastModified to the
+// insert; a re-probe of the same object — a new etag, a new probe version, a
+// new media_info — writes everything about the row EXCEPT when it got here.
+func TestAddedAtIsStampedOnce(t *testing.T) {
+	l := openTestLibrary(t)
+	arrived := time.Date(2019, time.March, 4, 9, 30, 0, 0, time.UTC)
+	if err := l.UpsertBatch([]Item{
+		{ObjectKey: "a.mkv", ETag: "e1", ProbeVersion: 4, AddedAt: arrived},
+		{ObjectKey: "b.mkv", ETag: "e2", ProbeVersion: 4}, // the bucket said nothing
+	}); err != nil {
+		t.Fatal(err)
+	}
+	before, err := l.ListItems()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !before[0].AddedAt.Equal(arrived) {
+		t.Errorf("a.mkv added at %v, want %v", before[0].AddedAt, arrived)
+	}
+	if before[1].AddedAt.IsZero() {
+		t.Error("b.mkv has no arrival time; an insert with none arrives now")
+	}
+	// Re-probe: same objects, new etags, and no arrival time offered.
+	if err := l.UpsertBatch([]Item{
+		{ObjectKey: "a.mkv", ETag: "e9", ProbeVersion: 5,
+			MediaInfo: &model.MediaInfo{Container: "mkv", VideoCodec: "h264"}},
+		{ObjectKey: "b.mkv", ETag: "e8", ProbeVersion: 5, AddedAt: time.Now()},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	after, err := l.ListItems()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range after {
+		if !after[i].AddedAt.Equal(before[i].AddedAt) {
+			t.Errorf("%s arrived again: %v, was %v",
+				after[i].ObjectKey, after[i].AddedAt, before[i].AddedAt)
+		}
+	}
+	if after[0].ETag != "e9" {
+		t.Errorf("the re-probe wrote nothing else either: etag %q", after[0].ETag)
+	}
+}
+
+// The migration: a library written before there was an added_at column has
+// no arrival times to recover — the bucket's LastModified was never kept —
+// so the whole of it arrives at the moment of the migration, once.
+func TestAddedAtMigration(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "library.db")
+	old, err := open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := old.Exec(`
+		CREATE TABLE items (
+			id INTEGER PRIMARY KEY,
+			object_key TEXT NOT NULL UNIQUE,
+			etag TEXT NOT NULL,
+			size INTEGER NOT NULL,
+			media_info TEXT,
+			identity TEXT,
+			identity_overridden INTEGER NOT NULL DEFAULT 0,
+			probe_error TEXT NOT NULL DEFAULT '',
+			probe_version INTEGER NOT NULL DEFAULT 0,
+			identity_version INTEGER NOT NULL DEFAULT 0,
+			enrichment TEXT,
+			enrichment_identity TEXT,
+			sidecar_sig TEXT NOT NULL DEFAULT '',
+			updated_at REAL NOT NULL
+		);
+		INSERT INTO items (object_key, etag, size, updated_at) VALUES ('old.mkv', 'e1', 1, 0)`); err != nil {
+		t.Fatal(err)
+	}
+	old.Close()
+
+	before := time.Now()
+	l, err := OpenLibrary(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	items, err := l.ListItems()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("migrated %d items, want 1", len(items))
+	}
+	if at := items[0].AddedAt; at.Before(before.Add(-time.Second)) || at.After(time.Now().Add(time.Second)) {
+		t.Errorf("old.mkv arrived at %v, want the migration time (~%v)", at, before)
+	}
 }
 
 func TestSidecarSigRoundtrip(t *testing.T) {

@@ -18,6 +18,7 @@ import (
 	"path"
 	"strconv"
 	"strings"
+	"time"
 
 	"flickr/internal/hyper"
 	"flickr/internal/model"
@@ -222,6 +223,13 @@ func (s *server) itemEnvelope(it store.Item, wk *works.Work, full bool, position
 		// down a twenty-episode member list they would be twenty copies of
 		// the show's.
 		enrichmentFacts(doc, it.Enrichment)
+		// When this file arrived, so a page can say "added last Tuesday"
+		// without asking a scan log. It is the file's arrival, not the
+		// work's: the library document's `recently_added` is the work-level
+		// answer, derived from these.
+		if !it.AddedAt.IsZero() {
+			doc.Field("added_at", it.AddedAt.UTC().Format(time.RFC3339))
+		}
 		if it.Identity != nil {
 			doc.Field("identity", it.Identity)
 		}
