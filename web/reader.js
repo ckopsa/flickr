@@ -37,13 +37,22 @@
 // takes it as a named theme inside the book's frame; the PDF pane takes
 // it as a class on the container and inverts its canvas in CSS.
 if (!root.ReaderTheme) root.ReaderTheme = (() => {
-  const RULES = {
-    paper: { body: { background: '#f4f1ea', color: '#1c1c1c' } },
-    dark:  { body: { background: '#1b1d24', color: '#d6d6d0' },
-             'p, div, span, li, td, th, h1, h2, h3, h4, h5, h6, blockquote, dt, dd': { color: '#d6d6d0 !important', 'background-color': 'transparent !important' },
-             a: { color: '#8ab4f8 !important' },
-             img: { filter: 'brightness(.85)' } },
-  };
+  // The page's rules for the book's frame. `images` is the BOOK's choice,
+  // read off the session document's `display`: 'printed' leaves pictures
+  // as printed; 'themed' recolours them with the dark page (a diagram
+  // reads on dark; a photo becomes a negative — hence per book).
+  function rules(theme, images) {
+    if (theme !== 'dark') return { body: { background: '#f4f1ea', color: '#1c1c1c' } };
+    const r = {
+      body: { background: '#1b1d24', color: '#d6d6d0' },
+      'p, div, span, li, td, th, h1, h2, h3, h4, h5, h6, blockquote, dt, dd': { color: '#d6d6d0 !important', 'background-color': 'transparent !important' },
+      a: { color: '#8ab4f8 !important' },
+    };
+    r['img, svg, image'] = images === 'themed'
+      ? { filter: 'invert(.91) hue-rotate(180deg)' }
+      : { filter: 'none' };
+    return r;
+  }
   function current() {
     let t = null;
     try { t = localStorage.readerTheme; } catch (e) { /* no storage */ }
@@ -54,8 +63,23 @@ if (!root.ReaderTheme) root.ReaderTheme = (() => {
     try { localStorage.readerTheme = t; } catch (e) { /* no storage */ }
     return t;
   }
-  function apply(c) { if (c) c.classList.toggle('rd-dark', current() === 'dark'); }
-  return { rules: t => RULES[t] || RULES.paper, current, toggle, apply };
+  // Classes on the pane: rd-dark for the page, rd-printed when the book's
+  // pictures stay as printed (the PDF pane's canvas reads it).
+  function apply(c, images) {
+    if (!c) return;
+    c.classList.toggle('rd-dark', current() === 'dark');
+    c.classList.toggle('rd-printed', images === 'printed');
+  }
+  // One stylesheet, by id, in every section of the open book: removed and
+  // re-added on a change, so a toggle never leaves an older rule behind.
+  function inject(contents, theme, images) {
+    try {
+      const old = contents.document.getElementById('flickr-page');
+      if (old) old.remove();
+      contents.addStylesheetRules(rules(theme, images), 'flickr-page');
+    } catch (e) { /* a section not yet attached */ }
+  }
+  return { rules, current, toggle, apply, inject };
 })();
 
   const MISSING = 'The reader library is missing: web/vendor/epub.min.js and web/vendor/jszip.min.js ' +
@@ -88,6 +112,7 @@ if (!root.ReaderTheme) root.ReaderTheme = (() => {
         '<div class="rd-title"></div>' +
         '<div class="rd-readout"></div>' +
         '<button class="rd-theme" title="Paper or dark page">◐</button>' +
+        '<button class="rd-pictures" title="This book\'s pictures on the dark page: as printed, or recoloured with the page">🖼</button>' +
         '<button class="rd-close" title="Close the book">✕ Back</button>' +
       '</div>' +
       '<div class="rd-body">' +
@@ -107,7 +132,7 @@ if (!root.ReaderTheme) root.ReaderTheme = (() => {
       '</div>';
     const q = sel => c.querySelector(sel);
     ui = {
-      theme: q('.rd-theme'),
+      theme: q('.rd-theme'), pictures: q('.rd-pictures'),
       title: q('.rd-title'), readout: q('.rd-readout'), toc: q('.rd-toc'), view: q('.rd-view'),
       msg: q('.rd-msg'), end: q('.rd-end'), endSub: q('.rd-end-sub'),
       prev: q('.rd-prev'), next: q('.rd-next'), tocBtn: q('.rd-toc-btn'), close: q('.rd-close'),
@@ -116,7 +141,8 @@ if (!root.ReaderTheme) root.ReaderTheme = (() => {
     ui.prev.onclick = prev;
     ui.next.onclick = next;
     ui.tocBtn.onclick = () => { ui.toc.hidden = !ui.toc.hidden; };
-    ui.theme.onclick = () => { const t = ReaderTheme.toggle(); if (rendition) rendition.themes.select(t); ReaderTheme.apply(container); };
+    ui.theme.onclick = () => { ReaderTheme.toggle(); applyPage(); };
+    ui.pictures.onclick = setPictures;
     ui.close.onclick = () => opts && opts.onBack && opts.onBack();
     ui.back.onclick = () => opts && opts.onBack && opts.onBack();
     ui.keep.onclick = keepReading;
@@ -209,14 +235,14 @@ if (!root.ReaderTheme) root.ReaderTheme = (() => {
       compareCFI = (a, b) => new root.ePub.CFI().compare(a, b);
       book = root.ePub(bytes, { openAs: 'epub' });
       rendition = book.renderTo(ui.view, { width: '100%', height: '100%', flow: 'paginated', spread: 'none' });
-      // Two pages: paper, and a dark one for the dark UI. Registered as
-      // named themes so a toggle swaps them on the open book; the book's
-      // own colours yield to the page (!important), because a publisher's
-      // black-on-white paragraph rule would otherwise survive the swap.
-      rendition.themes.register('paper', ReaderTheme.rules('paper'));
-      rendition.themes.register('dark', ReaderTheme.rules('dark'));
-      rendition.themes.select(ReaderTheme.current());
-      ReaderTheme.apply(container);
+      // The page: paper, or dark for the dark UI, with the book's own
+      // choice about its pictures (session.display). Injected as one
+      // stylesheet into every section as it loads, and re-injected on a
+      // toggle; the book's own colours yield to the page (!important),
+      // because a publisher's black-on-white paragraph rule would
+      // otherwise survive the swap.
+      rendition.hooks.content.register(c => ReaderTheme.inject(c, ReaderTheme.current(), images()));
+      applyPage();
       rendition.on('relocated', loc => { if (seq === openSeq) onRelocated(loc); });
       rendition.on('displayError', err => { if (seq === openSeq) ui.msg.textContent = 'Could not display: ' + err; });
       // Tap the left/right edge of the page to turn it (links still work).
@@ -430,6 +456,39 @@ if (!root.ReaderTheme) root.ReaderTheme = (() => {
   // leaving it is a write — the server clears it and answers the session as
   // it now is, progress accepted from here on. index.html drops the passage
   // from the route in onKeep; then the current place counts.
+  // The book's choice about its pictures, off the session document.
+  function images() { return (sess && sess.display && sess.display.images) || 'printed'; }
+
+  // Re-read the page's rules into the open book and the pane.
+  function applyPage() {
+    ReaderTheme.apply(container, images());
+    if (rendition) rendition.getContents().forEach(c => ReaderTheme.inject(c, ReaderTheme.current(), images()));
+    if (ui && ui.pictures) {
+      const printed = images() === 'printed';
+      ui.pictures.textContent = printed ? '🖼' : '🎨';
+      ui.pictures.title = printed
+        ? "This book's pictures are shown as printed — tap to recolour them with the dark page"
+        : "This book's pictures are recoloured with the dark page — tap to show them as printed";
+      ui.pictures.hidden = !(sess && sess.actions && sess.actions.set_display);
+    }
+  }
+
+  // The choice is the BOOK's, kept by the server for every profile and
+  // device: post the action, take the answered session, redraw.
+  async function setPictures() {
+    const act = sess && sess.actions && sess.actions.set_display;
+    if (!act) return;
+    const next = images() === 'printed' ? 'themed' : 'printed';
+    try {
+      const r = await fetch(act.href, {
+        method: act.method || 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ images: next }),
+      });
+      if (r.ok) sess = await r.json();
+    } catch (e) { /* the pane keeps the document it has */ }
+    applyPage();
+  }
+
   async function keepReading() {
     const act = sess && sess.actions && sess.actions.keep_reading;
     if (act) {

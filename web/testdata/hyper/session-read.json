@@ -55,6 +55,10 @@
     "to_section": 4,
     "ends_at": "ch:4"
   },
+  "display": {
+    "images": "printed",
+    "chosen": false
+  },
   "links": {
     "back": {
       "href": "/api/items/3",
@@ -89,6 +93,14 @@
         "section": "number?"
       },
       "label": "Save the place"
+    },
+    "set_display": {
+      "method": "POST",
+      "href": "/api/sessions/5e5510f00d00/display",
+      "input": {
+        "images": "themed | printed"
+      },
+      "label": "Pictures on the dark page"
     },
     "stop": {
       "method": "DELETE",

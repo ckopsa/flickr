@@ -275,6 +275,8 @@ func (s *server) readEnvelope(row playSession, item store.Item, wk *works.Work) 
 	doc.Field("locator", s.savedLocator(row)).
 		Field("passage", readPassageOf(row.Passage, item))
 
+	doc.Field("display", s.bookDisplay(item))
+
 	doc.Link("item", itemHref(item.ID), itemTitle(item))
 	doc.Link("back", itemHref(item.ID), itemTitle(item))
 	doc.Link("book", itemHref(item.ID)+"/book", "")
@@ -294,8 +296,71 @@ func (s *server) readEnvelope(row playSession, item store.Item, wk *works.Work) 
 		doc.Unavailable("keep_reading",
 			"no passage is on — this is ordinary reading, and the place is being saved")
 	}
+	doc.Action("set_display", hyper.Action{
+		Method: "POST", Href: base + "/display",
+		Input: map[string]string{"images": "themed | printed"},
+		Label: "Pictures on the dark page",
+	})
 	doc.Action("stop", hyper.Action{
 		Method: "DELETE", Href: base, Label: "Close the book",
 	})
 	return doc
+}
+
+// bookDisplay is how this book's pictures are shown on a dark page, the
+// session's `display` field: {images: themed|printed, chosen: bool}.
+// `themed` recolours them with the page — a diagram reads on dark, a photo
+// turns to a negative; `printed` leaves them as printed. The default is the
+// format's: an EPUB's figures stay printed, because its text is themed on
+// its own and a wrong guess on a photo is worse than a bright diagram; a
+// PDF is one picture of a page, so themed is the only dark page it has.
+// A choice made for the book (SetBookDisplay) stands over the default.
+type bookDisplay struct {
+	Images string `json:"images"`
+	Chosen bool   `json:"chosen"`
+}
+
+func (s *server) bookDisplay(item store.Item) bookDisplay {
+	if s.state != nil {
+		if v, err := s.state.BookDisplay(item.ID); err == nil && v != "" {
+			return bookDisplay{Images: v, Chosen: true}
+		}
+	}
+	if bookFormat(item) == "pdf" {
+		return bookDisplay{Images: "themed"}
+	}
+	return bookDisplay{Images: "printed"}
+}
+
+// handleSetDisplay records how this book's pictures are shown, for the book
+// — every profile and every device — and answers the session.
+func (s *server) handleSetDisplay(w http.ResponseWriter, r *http.Request) {
+	row, ok := s.session(w, r)
+	if !ok {
+		return
+	}
+	if row.Method != methodRead {
+		hyper.WriteProblem(w, hyper.Refuse(http.StatusConflict, "not-a-book",
+			"Only a book has a page to show pictures on", "this session is playing, not reading").
+			WithRemedy("open a book with its read action", nil))
+		return
+	}
+	var in struct {
+		Images string `json:"images"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		hyper.WriteProblem(w, hyper.Refuse(http.StatusBadRequest, "bad-input", "The body is not JSON", err.Error()))
+		return
+	}
+	if in.Images != "themed" && in.Images != "printed" {
+		hyper.WriteProblem(w, hyper.Refuse(http.StatusUnprocessableEntity, "no-such-display",
+			"Pictures are themed or printed", fmt.Sprintf("%q is neither", in.Images)).
+			WithRemedy("send images: themed (recoloured with the dark page) or printed (as printed)", nil))
+		return
+	}
+	if err := s.state.SetBookDisplay(row.ItemID, in.Images); err != nil {
+		hyper.WriteProblem(w, hyper.Refuse(http.StatusInternalServerError, "display-not-saved", "Could not save the choice", err.Error()))
+		return
+	}
+	s.writeSession(w, r, row, http.StatusOK)
 }

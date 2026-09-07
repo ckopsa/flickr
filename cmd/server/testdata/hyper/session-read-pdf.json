@@ -12,6 +12,10 @@
   "page_count": 400,
   "locator": null,
   "passage": null,
+  "display": {
+    "images": "themed",
+    "chosen": false
+  },
   "links": {
     "back": {
       "href": "/api/items/12",
@@ -41,6 +45,14 @@
         "section": "number?"
       },
       "label": "Save the place"
+    },
+    "set_display": {
+      "method": "POST",
+      "href": "/api/sessions/5e5510f00d00/display",
+      "input": {
+        "images": "themed | printed"
+      },
+      "label": "Pictures on the dark page"
     },
     "stop": {
       "method": "DELETE",

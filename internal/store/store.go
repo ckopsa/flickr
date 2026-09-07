@@ -556,10 +556,41 @@ func OpenState(path string) (*State, error) {
 	// that is a clock position. Rows from before the column read as NULL,
 	// which is correct — nothing had a locator to report then.
 	db.Exec(`ALTER TABLE playback_state ADD COLUMN locator TEXT`)
+	// book_display: how a book's pictures are shown on a dark page — a fact
+	// about the book (its figures are diagrams, or scans), so one row per
+	// item, not per profile. Absent means the format's default.
+	if _, err := db.Exec(`
+		CREATE TABLE IF NOT EXISTS book_display (
+			item_id INTEGER PRIMARY KEY,
+			images TEXT NOT NULL,
+			updated_at REAL NOT NULL
+		)`); err != nil {
+		return nil, err
+	}
 	if _, err := db.Exec(metaSchema); err != nil {
 		return nil, err
 	}
 	return &State{db: db}, nil
+}
+
+// BookDisplay is how a book's pictures are shown on a dark page:
+// "themed" (recoloured with the page) or "printed" (left as printed).
+// Empty when nobody has chosen, and the format's default applies.
+func (s *State) BookDisplay(itemID int64) (string, error) {
+	var images string
+	err := s.db.QueryRow(`SELECT images FROM book_display WHERE item_id = ?`, itemID).Scan(&images)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	return images, err
+}
+
+// SetBookDisplay records the choice for one book.
+func (s *State) SetBookDisplay(itemID int64, images string) error {
+	_, err := s.db.Exec(`INSERT INTO book_display (item_id, images, updated_at) VALUES (?, ?, ?)
+		ON CONFLICT(item_id) DO UPDATE SET images = excluded.images, updated_at = excluded.updated_at`,
+		itemID, images, float64(time.Now().UnixNano())/1e9)
+	return err
 }
 
 // ListUsers returns all profile names, oldest first.

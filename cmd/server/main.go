@@ -290,6 +290,7 @@ func (s *server) routes() *http.ServeMux {
 	// keep_reading is keep_watching in the words of the medium (read.go):
 	// one handler, because it is one rule the passage holds either way.
 	mux.HandleFunc("POST /api/sessions/{id}/keep_reading", s.handleKeepWatching)
+	mux.HandleFunc("POST /api/sessions/{id}/display", s.handleSetDisplay)
 	mux.HandleFunc("POST /api/sessions/{id}/next", s.handleSessionNext)
 	mux.HandleFunc("POST /api/sessions/{id}/mark/{kind}", s.handleSessionMark)
 	mux.HandleFunc("GET /api/sessions/{id}/link", s.handleSessionLink)

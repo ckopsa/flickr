@@ -50,6 +50,7 @@
         '<div class="rd-title"></div>' +
         '<div class="rd-readout"></div>' +
         '<button class="rd-theme" title="Paper or dark page">◐</button>' +
+        '<button class="rd-pictures" title="This book on the dark page: inverted with the page, or as printed">🖼</button>' +
         '<button class="rd-close" title="Close the book">✕ Back</button>' +
       '</div>' +
       '<div class="rd-body">' +
@@ -70,7 +71,7 @@
       '</div>';
     const q = sel => c.querySelector(sel);
     ui = {
-      theme: q('.rd-theme'),
+      theme: q('.rd-theme'), pictures: q('.rd-pictures'),
       title: q('.rd-title'), readout: q('.rd-readout'), view: q('.rd-view'), canvas: q('.rd-canvas'),
       msg: q('.rd-msg'), end: q('.rd-end'), endSub: q('.rd-end-sub'),
       prev: q('.rd-prev'), next: q('.rd-next'), pageIn: q('.rd-page-in'), pageOf: q('.rd-page-of'),
@@ -78,8 +79,9 @@
     };
     ui.prev.onclick = prev;
     ui.next.onclick = next;
-    ui.theme.onclick = () => { ReaderTheme.toggle(); ReaderTheme.apply(container); };
-    ReaderTheme.apply(container);
+    ui.theme.onclick = () => { ReaderTheme.toggle(); applyPage(); };
+    ui.pictures.onclick = setPictures;
+    applyPage();
     ui.close.onclick = () => opts && opts.onBack && opts.onBack();
     ui.back.onclick = () => opts && opts.onBack && opts.onBack();
     ui.keep.onclick = keepReading;
@@ -134,6 +136,7 @@
     const seq = ++openSeq;
     teardown();
     sess = s;
+    applyPage();
     opts = o || {};
     build(opts.container);
     if (!ui.canvas) { ui.view.innerHTML = '<canvas class="rd-canvas"></canvas>'; ui.canvas = ui.view.firstChild; }
@@ -317,6 +320,36 @@
   // addresses of its own. A 409 is the server saying a passage is on: an
   // answer, not an error, and the answer is to stop reporting until it is
   // left. Anything else is the network, which is not the reader's business.
+  // A PDF is one picture of a page, so the book's choice (session.display)
+  // is the whole dark page: 'themed' inverts the canvas, 'printed' keeps
+  // the white page under the dark chrome. The choice is the book's, kept
+  // by the server; the pane posts the action and takes the answer.
+  function images() { return (sess && sess.display && sess.display.images) || 'themed'; }
+  function applyPage() {
+    ReaderTheme.apply(container, images());
+    if (ui && ui.pictures) {
+      const printed = images() === 'printed';
+      ui.pictures.textContent = printed ? '🖼' : '🎨';
+      ui.pictures.title = printed
+        ? 'This book is shown as printed — tap to invert it with the dark page'
+        : 'This book is inverted with the dark page — tap to show it as printed';
+      ui.pictures.hidden = !(sess && sess.actions && sess.actions.set_display);
+    }
+  }
+  async function setPictures() {
+    const act = sess && sess.actions && sess.actions.set_display;
+    if (!act) return;
+    const next = images() === 'printed' ? 'themed' : 'printed';
+    try {
+      const r = await fetch(act.href, {
+        method: act.method || 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ images: next }),
+      });
+      if (r.ok) sess = await r.json();
+    } catch (e) { /* the pane keeps the document it has */ }
+    applyPage();
+  }
+
   function postPlace(place) {
     const act = sess && sess.actions && sess.actions.progress;
     if (!act || !act.href) return;
