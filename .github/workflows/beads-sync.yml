@@ -1,0 +1,143 @@
+# Carries beads from a committed JSONL export into the Dolt remote.
+#
+# WHY THIS EXISTS. Issues live in a Dolt database whose remote is the
+# ref refs/dolt/data on this repository. Pushing that ref needs a
+# credential allowed to write outside refs/heads/*, and a restricted
+# agent session does not have one — its pushes to refs/dolt/data are
+# refused with 403 while ordinary branch pushes succeed. So an agent
+# can create and close beads all session, then lose every one of them
+# when its container is reclaimed.
+#
+# It CAN commit a file. So .beads/issues.jsonl becomes the transport:
+# the agent exports and commits, and this workflow — which runs with a
+# credential that may write the ref — carries it the last hop.
+#
+#   agent:  bd dolt pull && bd export -o .beads/issues.jsonl && git push
+#   here:   bd bootstrap && bd import && bd dolt push
+#
+# `bd import` is upsert: new issues are created, existing ones updated.
+#
+# !! THE HAZARD THAT FOLLOWS FROM UPSERT. A stale export does not merely
+# !! fail to add — it REVERTS. If the export was taken from a database
+# !! that predates a change you made directly, importing it writes the
+# !! old field values back over yours. The window is the agent's session,
+# !! so the agent must `bd dolt pull` IMMEDIATELY BEFORE `bd export`,
+# !! never at session start only. Nothing here can enforce that; the
+# !! import cannot tell a deliberate revert from a stale one.
+#
+# Bootstrap-then-import (rather than import into an empty database) is
+# what keeps this additive: the remote's current state arrives first, so
+# beads the export never knew about survive the round trip untouched.
+
+name: beads-sync
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - '.beads/issues.jsonl'
+
+# DELIBERATELY NO workflow_dispatch. A dispatch runs against whatever
+# export happens to be sitting on master, and that file goes stale the
+# moment anyone touches a bead outside an agent session. Since import
+# upserts, a stale dispatch does not no-op — it reverts. Restricting the
+# trigger to a commit that CHANGED the file makes freshness structural:
+# the only export this can ever import is one someone just wrote.
+# To re-run a sync whose push failed, use GitHub's "Re-run jobs" on the
+# original run — it replays that same commit, not today's stale file.
+
+permissions:
+  contents: write
+
+# Never two Dolt pushes at once, and never cancel one mid-flight: the
+# second would race the first's manifest write. Queue instead.
+concurrency:
+  group: beads-sync
+  cancel-in-progress: false
+
+env:
+  # Pinned, not @latest: this is also the cache key, and an unpinned
+  # build would silently change both the binary and the schema it
+  # expects on some unrelated morning.
+  BD_VERSION: v1.2.2
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # bd publishes no release binaries, so this is a CGO build from
+      # source and it is slow — minutes. Cached, it is a few seconds.
+      - name: Cache bd
+        id: cache-bd
+        uses: actions/cache@v4
+        with:
+          path: ~/go/bin/bd
+          key: bd-${{ runner.os }}-${{ runner.arch }}-${{ env.BD_VERSION }}
+
+      - name: Build bd
+        if: steps.cache-bd.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          # dolthub/go-icu-regex needs the ICU headers; without them the
+          # build dies on a missing unicode/uregex.h.
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libicu-dev
+          # NOTE the module path is steveyegge/beads. The gastownhall
+          # path many docs still name fails: the module declares itself
+          # as steveyegge and go refuses the mismatch.
+          go install "github.com/steveyegge/beads/cmd/bd@${BD_VERSION}"
+
+      - name: Authorise the ref write
+        env:
+          # GITHUB_TOKEN first, so the common case needs no secret at
+          # all. If it turns out GitHub refuses refs/dolt/data to the
+          # workflow token, set BEADS_SYNC_TOKEN to a PAT with `repo`
+          # and this picks it up with no other change.
+          TOKEN: ${{ secrets.BEADS_SYNC_TOKEN || secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          git config --global \
+            url."https://x-access-token:${TOKEN}@github.com/".insteadOf \
+            "https://github.com/"
+
+      - name: Import the export and push the ref
+        run: |
+          set -euo pipefail
+          export PATH="$HOME/go/bin:$PATH"
+          bd metrics off >/dev/null 2>&1 || true
+          chmod 700 .beads || true
+
+          before="$(git ls-remote origin refs/dolt/data | cut -f1)"
+          echo "remote refs/dolt/data before: ${before:-<none>}"
+
+          # No database exists on a fresh runner, so bootstrap clones
+          # the remote's current state. Import lands on top of it.
+          bd bootstrap
+          bd import .beads/issues.jsonl
+
+          # The exit code IS authoritative here — a refused push returns
+          # 1. (It also prints "Done" among the error lines, which is
+          # only noise; an earlier version of this file mistook that for
+          # an unreliable exit code and failed on the ref instead. That
+          # was wrong in the other direction: see below.)
+          if ! bd dolt push; then
+            echo "::error::bd dolt push failed — see the output above."
+            echo "If that was HTTP 403, GITHUB_TOKEN may not write refs/dolt/data."
+            echo "Set the BEADS_SYNC_TOKEN secret to a PAT with 'repo' and re-run."
+            exit 1
+          fi
+
+          after="$(git ls-remote origin refs/dolt/data | cut -f1)"
+          echo "remote refs/dolt/data after:  ${after:-<none>}"
+
+          # An unmoved ref after a SUCCESSFUL push is not a failure: it
+          # means the export carried nothing the remote lacked, which is
+          # the normal result of exporting a database that was already in
+          # sync. Failing here would turn the healthy case red.
+          if [ "$before" = "$after" ]; then
+            echo "the remote ref did not move — the export held nothing new."
+          else
+            echo "synced: ${before:-<none>} -> ${after}"
+          fi

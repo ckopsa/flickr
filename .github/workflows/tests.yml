@@ -1,0 +1,87 @@
+# The merge gate: gofmt, vet, build and the Go test suite on every push
+# to master, every pull request, and on demand.
+#
+# ONE JOB, NO MATRIX. The whole suite runs in seconds — the decision,
+# pipeline, scanner and works tests are pure functions over tables —
+# so sharding would cost more in job setup than it saves.
+#
+# NO FFMPEG, NO MINIO. Nothing the tests run shells out: os/exec lives
+# only in runtime paths (internal/pipeline sessions, hardware-accel
+# detection, subtitle and trickplay extraction; the ffprobe call in
+# internal/scanner). pipeline.BuildArgs is tested as job → argv without
+# ever spawning ffmpeg, and scanner.Identify never touches the bucket.
+# A bare Go toolchain is the entire requirement.
+#
+# ── WHICH RUNNER ──────────────────────────────────────────────────────
+#
+# runs-on reads the CI_RUNNER repository variable and falls back to
+# GitHub-hosted. The household's self-hosted runner fleet
+# (github-runner.hcl in the owner's infrastructure repo, label
+# `waymark`) is registered at REPOSITORY scope to ckopsa/waymark, so it
+# cannot pick up jobs from this repository: until the owner registers a
+# runner for ckopsa/flickr and sets CI_RUNNER to its label, these jobs
+# run on ubuntu-latest. The moment that variable exists the jobs move
+# to the fleet — nothing in this file changes.
+#
+# Before pointing CI_RUNNER at a self-hosted label on a PUBLIC
+# repository: a self-hosted runner will execute a stranger's pull
+# request on your LAN. Turn on Settings → Actions → "Require approval
+# for all external contributors" first.
+
+name: tests
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+# A newer push to the same ref makes the older run's verdict moot;
+# cancel it rather than queue behind it.
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # The toolchain version is whatever go.mod says (go 1.26.3), so a
+      # toolchain bump is a one-line change in one place. setup-go's own
+      # cache is off because the actions/cache step below covers both
+      # the module cache and the build cache under one key.
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Cache Go modules and build cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: go-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('go.sum') }}
+          restore-keys: |
+            go-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: gofmt
+        run: |
+          set -euo pipefail
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "::error::these files are not gofmt-clean:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go build
+        run: go build ./...
+
+      - name: go test
+        run: go test -count=1 ./...
