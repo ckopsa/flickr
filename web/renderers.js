@@ -127,19 +127,22 @@
 
   // One tile. The picture is the document's `links.artwork`; a tile with none
   // is a styled text tile, decided here rather than after a 404.
+  //
+  // A tile says a title and ONE line under it — the document's own `subtitle`,
+  // which is words about the thing. What the FILE is (`tech`) is not a reason
+  // to pick a tile, so it lives on the item's page now; the text tile falls
+  // back to it only when the document gave it nothing else to show.
   function card(t, cls) {
     const art = artwork(t);
     const title = t.title || '';
-    const tech = t.tech || '';
     const wrap = art
       ? '<div class="poster-wrap"><img loading="lazy" alt="" src="' + esc(art) + '"></div>'
       : '<div class="poster-wrap text-tile"><div class="tile-title">' + esc(title) +
-        '</div><div class="tile-sub">' + esc(tech) + '</div></div>';
+        '</div><div class="tile-sub">' + esc(t.subtitle || t.tech || '') + '</div></div>';
     return '<div class="' + esc(cls || 'card') + '" data-nav="' + esc(hashFor(t)) + '">' +
       wrap +
       '<div class="c-title">' + esc(title) + '</div>' +
       (t.subtitle ? '<div class="c-sub">' + esc(t.subtitle) + '</div>' : '') +
-      '<div class="c-tech">' + esc(tech) + '</div>' +
       '</div>';
   }
 
@@ -233,8 +236,10 @@
     // `label` is the server's own name for this member in its work — "S03E22 ·
     // Beach Games", "Track 7 · Karma Police", "Part 2" — so nothing is
     // appended to it here.
+    // Under the label goes how long the thing runs, when the document says so
+    // — not what the file is. A row is chosen by what it IS.
     const meta = '<div class="title">' + esc(m.label || m.title || '') + '</div>' +
-      '<div class="meta">' + esc(m.tech || '') + '</div>' +
+      (m.duration_seconds ? '<div class="meta">' + esc(fmtTime(m.duration_seconds)) + '</div>' : '') +
       (m.overview ? '<div class="overview">' + esc(m.overview) + '</div>' : '');
     const cls = 'item' + (still ? ' enriched' : '') + (o.current ? ' current' : '');
     return '<div class="' + cls + '" data-nav="' + esc(itemHash(m.id)) + '">' +
@@ -369,7 +374,6 @@
           '<h2><span id="detail-title">' + esc(doc.title || '') + '</span> ' +
             '<span id="detail-year">' + esc(detailSub(doc, wk)) + '</span></h2>' +
           '<p id="detail-overview"' + (doc.overview ? '' : ' hidden') + '>' + esc(doc.overview || '') + '</p>' +
-          '<div id="detail-tech">' + esc(doc.tech || '') + '</div>' +
           primary(doc) + restControls(doc, drawn) +
           '<div id="detail-chapters">' + chapters.map(ch =>
             '<button data-seek="' + esc(ch.start_seconds) + '">' +
@@ -390,7 +394,39 @@
           '<div id="audio-list">' +
             siblings.map(m => memberRow(m, { current: m.id === doc.id })).join('') +
           '</div></div>'
-        : '');
+        : '') +
+      details(doc);
+  }
+
+  // What the file IS, folded away at the foot of the page: the tech line, the
+  // object it was read from, the identity the key was mapped to, and the probe
+  // itself. Collapsed, because it answers "why does this transcode?" rather
+  // than "what is this?" — and it is the one place that still says any of it.
+  function details(doc) {
+    const rows = [];
+    if (doc.tech) rows.push(['Tech', doc.tech]);
+    const file = doc.object_key || doc.label || '';
+    if (file) rows.push(['File', file]);
+    if (doc.identity && doc.identity.kind) rows.push(['Identity', doc.identity.kind]);
+    for (const r of mediaFacts(doc.media_info)) rows.push(r);
+    if (!rows.length) return '';
+    return '<details id="detail-details"><summary>Details</summary>' +
+      '<dl>' + rows.map(r =>
+        '<dt>' + esc(r[0]) + '</dt><dd>' + esc(r[1]) + '</dd>').join('') + '</dl>' +
+      '</details>';
+  }
+
+  // The probe, said as it came: every field media_info carries, a list said as
+  // how many of it there are. Nothing is named here, so a field the probe
+  // grows shows up without this file learning it.
+  function mediaFacts(info) {
+    if (!info || typeof info !== 'object') return [];
+    return Object.keys(info).map(k => {
+      const v = info[k];
+      if (Array.isArray(v)) return [k.replace(/_/g, ' '), String(v.length)];
+      if (v == null || typeof v === 'object') return null;
+      return [k.replace(/_/g, ' '), String(v)];
+    }).filter(Boolean);
   }
 
   // Back from an episode goes to its show, from a track to its artist's
