@@ -46,8 +46,12 @@
   let scrubbing = false;         // a finger (or a mouse) is dragging the bar
   let tapTimer = null, lastTapAt = 0, rippleTimer = null;
   let idleTimer = null;          // the countdown to a dark room
+  let clipOpen = false;          // the clip bar is up over the scrubber
+  let clipDrag = null;           // { kind, seconds } while a handle is held
+  let clipMinted = null;         // the last link the server minted for it
   const DOUBLE_TAP_MS = 300;     // how long a single tap waits for its twin
   const IDLE_MS = 3000;          // how long a still pointer waits before the chrome goes
+  const CLIP_SECONDS = 30;       // how long a clip is before anything is dragged
 
   // --- capability profiles -----------------------------------------------------
   // What the PLAYING device can take. The dropdown simulates other devices;
@@ -154,8 +158,19 @@
       '</dl></div>' +
       '<div id="transport">' +
         '<div id="scrub"><div class="rail"></div><div class="avail"></div><div class="fill"></div>' +
+          // A clip is made ON the bar it is cut out of: the amber region
+          // between the two marks, and a grip at each end to drag. The chips
+          // under the picture do the same thing with a keyboard.
+          '<div id="clip-range" hidden><div id="clip-region" hidden></div>' +
+            '<div class="clip-handle" id="clip-in" aria-label="Clip start" hidden></div>' +
+            '<div class="clip-handle" id="clip-out" aria-label="Clip end" hidden></div></div>' +
           '<div id="thumb" hidden><div id="thumb-img"></div><div id="thumb-time"></div></div></div>' +
         '<div id="timebar"><span id="t-now">0:00</span><span id="t-total">0:00</span></div>' +
+        // What the clip says, in the server's own words, and the one button
+        // that hands it on.
+        '<div id="clipbar" hidden><span id="clip-sentence"></span>' +
+          '<button id="btn-clip-share">Share</button>' +
+          '<button id="btn-clip-done">Done</button></div>' +
         '<div id="controls">' +
           '<button id="btn-play" title="Play/Pause">⏵</button>' +
           '<button id="btn-back" title="Back 10s">⏪</button>' +
@@ -165,6 +180,7 @@
           '<select id="subs" title="Subtitles" style="display:none"></select>' +
           '<select id="audio" title="Audio track" style="display:none"></select>' +
           '<button id="btn-autoplay"></button>' +
+          '<button id="btn-clip" title="Mark a clip" aria-pressed="false" hidden>✂ Clip</button>' +
           '<button id="btn-pip" title="Picture in picture" aria-label="Picture in picture" hidden>⧉</button>' +
           '<button id="btn-keys" title="Keyboard shortcuts" aria-label="Keyboard shortcuts">?</button>' +
           '<button id="btn-fs" title="Fullscreen" aria-label="Fullscreen">⛶</button>' +
@@ -204,6 +220,7 @@
     document.body.classList.toggle('theatre', !!item && item.medium !== 'audio');
     renderChapters();
     renderMarksOnScrub();
+    paintClip();
     if (session) paintTrace();
     $('t-total').textContent = fmtTime(duration());
     syncPlayButton();
@@ -375,14 +392,16 @@
 
   // Two bound marks on the scrubber: the start and, on the item the `end`
   // applies to, the end. A passage being MADE (the session's marks) takes the
-  // same flags, each shown only on the item it was set in.
+  // same flags, each shown only on the item it was set in — unless the clip
+  // bar is up, and then the handles are those two marks and the flags would
+  // sit under them saying the same thing twice.
   function renderMarksOnScrub() {
     if (!scrub) return;
     scrub.querySelectorAll('.bound').forEach(b => b.remove());
     const dur = duration();
     if (!(dur > 0)) return;
     const id = item && item.id;
-    const m = session && session.marks;
+    const m = clipOpen ? null : (session && session.marks);
     const b = (m && (m.in || m.out))
       ? { t: m.in && m.in.item_id === id ? m.in.seconds : null,
           end: m.out && m.out.item_id === id ? m.out.seconds : null }
@@ -415,6 +434,7 @@
       return;
     }
     hideUpNext();
+    closeClip(); // the marks belonged to the sitting that is ending
     item = itemDoc;
     document.body.classList.toggle('audio-mode', itemDoc.medium === 'audio');
     passage = o.passage || null;
@@ -516,6 +536,7 @@
 
   async function close() {
     hideUpNext();
+    closeClip();
     setPassage(null);
     if (casting()) { castEndSuppressed = true; if (remoteController) remoteController.stop(); }
     else if (video) { video.pause(); video.removeAttribute('src'); video.load(); }
@@ -644,6 +665,165 @@
         body: JSON.stringify(req.body || { seconds: position() }),
       }));
     } catch (e) { /* the session may already be over */ }
+    if (clipOpen) { paintClip(); await refreshClipSentence(); }
+  }
+  // One end of the passage, set at a place this side picked. Where it LANDS is
+  // the server's — the snap to a nearby chapter start, the swap when the two
+  // ends arrive the wrong way round — so the answer is adopted and the bar
+  // repainted from it rather than from the number that was sent.
+  async function postMark(kind, seconds) {
+    const act = R.actionOf(session, 'mark_' + kind);
+    if (!act) return;
+    await mark({ href: act.href, method: act.method || 'POST', body: { seconds } });
+  }
+
+  // --- the clip bar ------------------------------------------------------------
+  //
+  // Marking a clip is a gesture on the scrub bar: two handles at the ends of
+  // an amber region, dragged to where the passage should start and stop. The
+  // marks themselves are the SESSION's — every address here comes off its
+  // mark_in / mark_out / link actions — and the sentence under the bar is the
+  // server's own words for what has been marked.
+
+  function clipAvailable() { return !!R.actionOf(session, 'mark_in'); }
+
+  // Where the two handles sit: the session's marks, each only on the item it
+  // was set in, with the one under the finger following it instead.
+  function clipBounds() {
+    const m = (session && session.marks) || {};
+    const id = item && item.id;
+    const at = mk => (mk && mk.item_id === id && typeof mk.seconds === 'number' ? mk.seconds : null);
+    const b = { in: at(m.in), out: at(m.out) };
+    if (clipDrag) b[clipDrag.kind] = clipDrag.seconds;
+    return b;
+  }
+
+  function paintClip() {
+    const range = element && element.querySelector('#clip-range');
+    if (!range) return;
+    range.hidden = !clipOpen;
+    if ($('clipbar')) $('clipbar').hidden = !clipOpen;
+    syncClipButton();
+    if (!clipOpen) return;
+    const dur = duration();
+    const pct = t => Math.min(100, Math.max(0, dur > 0 ? t / dur * 100 : 0));
+    const b = clipBounds();
+    for (const kind of ['in', 'out']) {
+      const h = $('clip-' + kind);
+      if (!h) continue;
+      h.hidden = b[kind] == null;
+      if (b[kind] == null) continue;
+      h.style.left = pct(b[kind]) + '%';
+      h.title = (kind === 'in' ? 'Clip starts at ' : 'Clip ends at ') + fmtTime(b[kind]);
+    }
+    const region = $('clip-region');
+    if (!region) return;
+    const spans = b.in != null && b.out != null && b.out > b.in;
+    region.hidden = !spans;
+    if (spans) {
+      region.style.left = pct(b.in) + '%';
+      region.style.width = Math.max(0, pct(b.out) - pct(b.in)) + '%';
+    }
+  }
+
+  function syncClipButton() {
+    const btn = $('btn-clip');
+    if (!btn) return;
+    btn.hidden = !clipAvailable();
+    btn.setAttribute('aria-pressed', clipOpen ? 'true' : 'false');
+    btn.classList.toggle('on', clipOpen);
+  }
+
+  // Opening the bar with nothing marked yet marks a clip to drag from: here,
+  // and half a minute on. Both go through the server like any other mark.
+  async function openClip() {
+    if (!clipAvailable()) return;
+    clipOpen = true;
+    renderMarksOnScrub(); // the handles take the flags' place
+    paintClip();
+    // Anything already marked — in this item or, in a run, another one — is a
+    // clip being made, and the bar joins it rather than starting over.
+    const m = (session && session.marks) || {};
+    if (!m.in && !m.out) {
+      const dur = duration();
+      const start = position();
+      await postMark('in', start);
+      await postMark('out', dur > 0 ? Math.min(dur, start + CLIP_SECONDS) : start + CLIP_SECONDS);
+      return; // mark() painted and fetched the sentence on the way out
+    }
+    await refreshClipSentence();
+  }
+  function closeClip() {
+    clipOpen = false;
+    clipDrag = null;
+    clipMinted = null;
+    hideThumb();
+    paintClip();
+    renderMarksOnScrub();
+  }
+  function toggleClip() { clipOpen ? closeClip() : openClip(); }
+
+  // The sentence the server says the clip in, and the link it comes with —
+  // fetched from the session's `link` action, which is the same one the chip
+  // under the picture presses. Until there is an in point the action is not
+  // there, and the document's reason is shown in its place.
+  async function refreshClipSentence() {
+    const el = $('clip-sentence');
+    if (!el) return;
+    clipMinted = null;
+    const act = R.actionOf(session, 'link');
+    if (!act) {
+      el.textContent = R.unavailableReason(session, 'link') || '';
+      syncClipShare();
+      return;
+    }
+    try { clipMinted = await K.api(act.href, { method: act.method || 'GET' }); }
+    catch (e) { clipMinted = null; }
+    el.textContent = (clipMinted && clipMinted.sentence) || '';
+    syncClipShare();
+  }
+  function syncClipShare() {
+    const b = $('btn-clip-share');
+    if (b) b.disabled = !clipMinted;
+  }
+  // The share sheet is the kernel's: the same handing-on a copied link gets,
+  // and the same document — the minted passage, share_href and all.
+  function shareClip() {
+    if (clipMinted) K.share(clipMinted);
+  }
+
+  // A handle under a pointer. The drag is the handle's own, captured, so the
+  // bar underneath neither seeks nor scrubs while it moves; the mark is not
+  // posted until the finger comes off, because it is the server that decides
+  // where it lands.
+  function bindClipHandles() {
+    for (const kind of ['in', 'out']) {
+      const h = element.querySelector('#clip-' + kind);
+      if (!h) continue;
+      h.addEventListener('pointerdown', e => {
+        clipDrag = { kind, seconds: scrubSeconds(e.clientX) };
+        try { h.setPointerCapture(e.pointerId); } catch (err) { /* no capture, no matter */ }
+        e.preventDefault();
+        e.stopPropagation();
+        paintClip();
+        showThumb(e.clientX);
+      });
+      h.addEventListener('pointermove', e => {
+        if (!clipDrag || clipDrag.kind !== kind) return;
+        clipDrag.seconds = scrubSeconds(e.clientX);
+        paintClip();
+        showThumb(e.clientX);
+      });
+      h.addEventListener('pointerup', e => {
+        if (!clipDrag || clipDrag.kind !== kind) return;
+        const at = clipDrag.seconds;
+        clipDrag = null;
+        hideThumb();
+        e.stopPropagation();
+        postMark(kind, at);
+      });
+      h.addEventListener('pointercancel', () => { clipDrag = null; hideThumb(); paintClip(); });
+    }
   }
 
   // --- the run: up next and the advance ----------------------------------------
@@ -982,8 +1162,12 @@
       if (t.id === 'btn-fs') { toggleFullscreen(); return; }
       if (t.id === 'btn-keys') { toggleKeys(); return; }
       if (t.id === 'btn-autoplay') { setAutoplay(!autoplayNext); return; }
+      if (t.id === 'btn-clip') { toggleClip(); return; }
+      if (t.id === 'btn-clip-share') { shareClip(); return; }
+      if (t.id === 'btn-clip-done') { closeClip(); return; }
       if (t.id === 'btn-cast-stop') { stopCasting(); return; }
     });
+    bindClipHandles();
 
     // The chrome comes back for any sign of life over the picture, and the
     // keys are the device's wherever the focus is (the guard is in onKey).

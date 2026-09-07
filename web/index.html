@@ -337,6 +337,23 @@
   #controls .markchip.set button { border-color: #a37a30; color: var(--warn); }
   #controls .markchip.set button:first-child { border-radius: 6px 0 0 6px; background: #2e2616; }
   #controls .markchip.set button:first-child:hover { background: #3a3019; }
+  /* the clip, marked ON the bar: an amber region between two grips, dragged
+     to where the passage starts and stops (player.js). The chips under the
+     picture do the same with a keyboard, and the sentence is the server's. */
+  #clip-range { position: absolute; left: 0; right: 0; top: 0; bottom: 0; z-index: 3; pointer-events: none; }
+  #clip-region { position: absolute; top: 8px; height: 6px; border-radius: 3px; background: var(--warn); opacity: .45; }
+  .clip-handle { position: absolute; top: -1px; width: 16px; height: 24px; margin-left: -8px;
+    border-radius: 4px; background: var(--warn); box-shadow: 0 1px 4px rgba(0,0,0,0.6);
+    pointer-events: auto; cursor: ew-resize; touch-action: none; }
+  .clip-handle::after { content: ''; position: absolute; left: 7px; top: 6px; width: 2px; height: 12px;
+    background: rgba(20,21,26,0.75); }
+  /* a finger has no pixel to spare: the grips grow where one is doing the dragging */
+  @media (pointer: coarse) { .clip-handle { width: 24px; margin-left: -12px; } .clip-handle::after { left: 11px; } }
+  #clipbar { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; margin-top: 8px; font-size: 13px; }
+  #clip-sentence { flex: 1; min-width: 200px; color: var(--warn); }
+  #btn-clip.on, #btn-clip-share { border-color: #a37a30; color: var(--warn); background: #2e2616; }
+  #btn-clip.on:hover, #btn-clip-share:hover { background: #3a3019; }
+  #btn-clip-share[disabled] { opacity: .5; cursor: default; }
   /* the minted link, as text too (a phone with no clipboard API long-presses it) */
   #passage-link { margin-top: 8px; font-size: 12px; color: var(--muted); display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: baseline; }
   #passage-link .copied { color: var(--ok); }

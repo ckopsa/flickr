@@ -600,10 +600,32 @@
     let minted;
     try { minted = await api(href, { method: req.method || 'GET' }); }
     catch (e) { note([e.detail, e.remedyText].filter(Boolean).join(' — ')); return; }
+    await copyMinted(minted);
+  }
+  async function copyMinted(minted) {
     let copied = false;
     try { await navigator.clipboard.writeText(minted.href); copied = true; }
     catch (e) { /* no clipboard API on plain http, or refused: the text is shown anyway */ }
     showMinted(minted, copied);
+  }
+  // Handing a minted passage ON, the way the device it is held in hands things
+  // on: a phone's own share sheet — Messages, Mail, AirDrop — when the browser
+  // has one, and the clipboard when it does not. What is shared is
+  // `share_href`, the spelling that unfurls into a card in a chat; the plain
+  // link is what gets copied, because that is what is written down.
+  async function share(minted) {
+    if (!minted) return;
+    if (navigator.share) {
+      try {
+        await navigator.share({ title: minted.sentence || '', url: minted.share_href || minted.href });
+        showMinted(minted, false);
+        return;
+      } catch (e) {
+        // A dismissed sheet is an answer, not a failure to work around.
+        if (e && e.name === 'AbortError') return;
+      }
+    }
+    await copyMinted(minted);
   }
   function showMinted(minted, copied) {
     const box = $('passage-link'), noteEl = $('passage-link-note');
@@ -1060,7 +1082,7 @@
   const kernel = {
     api, Problem, doc, remember, forget,
     boot, applyRoute, navigate, replaceHash, itemHash,
-    profile: who, showStage, renderSession, closeStage, loadContinue, mint,
+    profile: who, showStage, renderSession, closeStage, loadContinue, mint, share,
     currentRoute: () => currentRoute,
     collapsed: () => collapsed,
     currentWork: () => currentWork,
