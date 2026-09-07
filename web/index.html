@@ -191,6 +191,10 @@
   #upnext-play { margin-top: 10px; margin-right: 8px; background: #2a4a8a; border-color: #3a5da8; }
   #upnext-play:hover { background: #33579e; }
   /* end-of-passage panel: paused at the bound, two ways out */
+  #player-pane { position: relative; }
+  #tap-to-play { position: absolute; left: 50%; top: 32%; transform: translate(-50%, -50%); z-index: 55;
+    font-size: 20px; padding: 14px 26px; border-radius: 999px; background: #2a4a8a; border: 1px solid #3a5da8; color: #fff; cursor: pointer; }
+  #tap-to-play:hover { background: #33579e; }
   #passage-end { position: fixed; right: 24px; bottom: 24px; z-index: 60; background: #1b1d24; border: 1px solid #f0b45c;
     border-radius: 10px; padding: 14px 18px; max-width: 340px; box-shadow: 0 8px 30px rgba(0,0,0,0.6); }
   #passage-end-title { font-size: 14px; font-weight: 600; }
@@ -304,6 +308,9 @@
     <div id="player-pane" hidden>
       <div id="now-playing"></div>
       <video id="video" controls></video>
+      <!-- autoplay refused (a fresh tab, no gesture yet): the one tap the
+           browser wants, said out loud instead of a silent paused player -->
+      <button id="tap-to-play" hidden>▶ Tap to play</button>
       <div id="cast-overlay">▶ Casting to <span id="cast-device"></span></div>
       <div id="scrub"><div class="rail"></div><div class="avail"></div><div class="fill"></div><div id="thumb" hidden><div id="thumb-img"></div><div id="thumb-time"></div></div></div>
       <div id="timebar"><span id="t-now">0:00</span><span id="t-total">0:00</span></div>
@@ -1382,6 +1389,7 @@ function closePlayer() {
   stopSession();
   currentItem = null;
   audioMode(null);
+  $('tap-to-play').hidden = true;
   $('player-pane').hidden = true;
   $('detail-info').hidden = false;
   renderContinueWatching(); // playback session ended: refresh resume points
@@ -1919,22 +1927,35 @@ async function startPlayback(item, seekSeconds) {
   }
   // play() rejects with AbortError if a newer load/stop interrupts it
   // (seek-restart, route change) — that interruption is intentional here.
+  // It rejects with NotAllowedError when the page has had no gesture yet
+  // — a passage link opened in a fresh tab (2026-09-07) — and that one is
+  // said out loud: tryPlay shows the tap the browser wants.
   if (!isHls) {
     video.src = resp.url;
     if (seekSeconds) video.currentTime = seekSeconds;
-    video.play().catch(() => {});
+    tryPlay();
   } else if (Hls.isSupported()) {
     hls = new Hls();
     hls.loadSource(resp.url);
     hls.attachMedia(video);
-    video.play().catch(() => {});
+    tryPlay();
   } else {
     video.src = resp.url;
-    video.play().catch(() => {});
+    tryPlay();
   }
   // subtitles must be re-attached after every (re)load, incl. seek-restarts
   attachLocalTracks(item);
 }
+
+// Autoplay that the browser refuses for want of a gesture is not an
+// error, it is a question — answered by the one tap this button is.
+function tryPlay() {
+  $('tap-to-play').hidden = true;
+  video.play().then(() => { $('tap-to-play').hidden = true; })
+    .catch((e) => { if (e && e.name === 'NotAllowedError') $('tap-to-play').hidden = false; });
+}
+$('tap-to-play').onclick = () => { $('tap-to-play').hidden = true; video.play().catch(() => {}); };
+video.addEventListener('play', () => { $('tap-to-play').hidden = true; });
 
 function seekTo(t) {
   if (!currentItem || method === null) return;
