@@ -60,23 +60,29 @@ This protocol applies when ending a Beads implementation workflow. It is subordi
 
 ## Build & Test
 
-Plain Go, no external services: the tests never shell out (`os/exec`
-only lives in runtime paths — pipeline sessions, hardware-accel
-detection, the scanner's ffprobe call), so no ffmpeg, no MinIO and no
-`.env` are needed to run them.
+Plain Go and a bare `node`, no external services: the tests never shell
+out (`os/exec` only lives in runtime paths — pipeline sessions,
+hardware-accel detection, the scanner's ffprobe call), so no ffmpeg, no
+MinIO and no `.env` are needed to run them. The client's suites need no
+npm and no browser either: the renderers are pure functions over the Go
+goldens.
 
 ```bash
 gofmt -l .             # must print nothing
 go vet ./...
 go build ./...
 go test -count=1 ./...
+node --test web/*_test.mjs   # the client's suites: no npm, no browser
 ```
 
-CI (`.github/workflows/tests.yml`) runs exactly those four steps on
-every push to `master`, every pull request and on demand, and its
-`test` check is the merge gate: a red `test` blocks the merge; fix and
-push rather than waiting. Running the four commands locally before
-pushing is cheap (seconds) and expected. `.github/workflows/
+CI (`.github/workflows/tests.yml`) runs those four steps on every push
+to `master`, every pull request and on demand, then the client's own:
+`node --check` over every `web/*.js`, `node --test web/*_test.mjs`, and
+on a pull request the shell/cache check
+(`scripts/shell-bump-check.sh`). Its `test` check is the merge gate: a
+red `test` blocks the merge; fix and push rather than waiting. Running
+the commands above locally before pushing is cheap (seconds) and
+expected. `.github/workflows/
 beads-sync.yml` carries a committed `.beads/issues.jsonl` into the Dolt
 remote on push to `master` — see the header of that file and the bd
 section above before relying on it.
@@ -89,8 +95,11 @@ the cluster registry, write the Nomad deploy variable). See README
 ## Architecture Overview
 
 - `cmd/server/` — the HTTP server: routes under `/api/...`, serves
-  `web/`, owns the scan schedule, the transcode-session reaper and the
-  post-scan enrichment and trickplay stages.
+  `web/`, owns the scan schedule, the session reaper and the post-scan
+  enrichment and trickplay stages. Its reads answer **documents** — the
+  hypermedia envelope of `internal/hyper` — and `hyper.go`, `library.go`,
+  `session.go`, `read.go`, `route.go`, `passage.go` and `continue.go` are
+  one document kind each.
 - `internal/decision/` — `Decide(media, caps, policy)`: the pure,
   side-effect-free playback decision (direct play / remux / transcode)
   with a trace answering "why did this transcode?" for every verdict.
@@ -105,9 +114,20 @@ the cluster registry, write the Nomad deploy variable). See README
   `internal/model/` — split SQLite storage (`library.db` metadata,
   `state.db` playback positions), TMDB enrichment as a separate
   post-scan stage, the pure works/feed derivation, and the shared types.
-- `web/` — the vanilla-JS single-page UI (`index.html`), Cast receiver
-  page and PWA manifest/service worker; capability presets show the same
-  file direct-playing or transcoding per client.
+- `internal/hyper/` — the envelope every handler answers in: `Envelope`,
+  `Link`, `Action`, `Problem` and the `Doc` builder. `internal/passage/`
+  is the passage grammar, the one implementation of it.
+- `web/` — the vanilla-JS UI, with no build step, in three parts: the
+  **kernel** (`kernel.js` — boot, the hash handed to `GET /api/-/route`,
+  the document cache, the fetch that reads a problem, one delegated click
+  listener), the **renderers** (`renderers.js` — one pure function per
+  document kind, each returning an HTML string) and the **device**
+  (`player.js`, `reader.js`, `pdfreader.js`, `cast.js` — the media
+  element, hls.js, the cast session, the reader's pages, the clock).
+  `index.html` is markup, script tags and one line of logic. Beside them
+  the Cast receiver page and the PWA manifest and service worker;
+  capability presets show the same file direct-playing or transcoding per
+  client.
 
 Start with `README.md`: its numbered list is the design rationale, item
 by item.
@@ -125,6 +145,28 @@ by item.
   separate stage keyed off identity, never folded into it.
 - FFmpeg stays behind `internal/pipeline`; the decision engine is
   hardware-agnostic and encoder choice happens at that boundary.
-- The web UI is one vanilla-JS file (`web/index.html`) with no build
-  step, and `location.hash` is the single source of truth for
-  navigation — change the hash, never the view directly.
+- **The server says what exists and what may be done; the browser renders
+  what it is told and owns the device.** A read answers a document —
+  fields, `links`, `actions` (each with `method`, `href`, an `input`
+  sketch and a `label`) and `unavailable` with a reason in words; a
+  refusal is `application/problem+json` with a `remedy`. Grow the
+  document rather than teaching the client a rule.
+- **A renderer never composes a URL.** Every address it emits is
+  `links[rel].href` or `actions[name].href`, copied out of the document;
+  the client knows `/api/` by heart and nothing else. `web/kernel_test.mjs`
+  and `web/render_test.mjs` grep the source and fail on a second literal,
+  so a new address in `renderers.js` or `player.js` is a test failure, not
+  a review comment. What a renderer may compose is a hash: the hash
+  grammar is the client's, and the server resolves it.
+- `location.hash` is the single source of truth for navigation — change
+  the hash, never the view directly — and the hash is handed to
+  `GET /api/-/route` rather than parsed.
+- The media element is made ONCE and moved between renders; no renderer
+  emits a `<video>`. A document swap must never drop the buffer.
+- `web/sw.js` serves the shell cache-first, so a change to any file in its
+  SHELL list needs a `CACHE` bump in the same commit
+  (`scripts/shell-bump-check.sh` fails the gate otherwise).
+- The client's suites run over the SERVER's goldens
+  (`cmd/server/testdata/hyper/*.json`, copied to `web/testdata/hyper/` and
+  held in step by `cmd/server/goldens_shared_test.go`). Refresh both halves
+  with `go test ./cmd/server -update`.
