@@ -2,7 +2,9 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -196,19 +198,184 @@ func TestRecentlyAdded(t *testing.T) {
 	}
 }
 
+// episodeArrived is one episode file of a show, arrived so many days ago —
+// measured from a `now` the caller holds, because "new" is measured against
+// the clock and a fixture with fixed dates could only ever be old. kind is
+// the identity's ("episode", or "extra" for bonus material).
+func episodeArrived(id int64, show, kind string, season, episode int, now time.Time, daysAgo float64) store.Item {
+	return store.Item{
+		ID:       id,
+		AddedAt:  now.Add(-time.Duration(daysAgo * float64(24*time.Hour))),
+		Identity: &model.Identity{Kind: kind, Title: show, Season: season, Episode: episode},
+	}
+}
+
+// "New episodes" is the shows something landed in this fortnight, and this is
+// its table: what counts as an episode, what the window is measured from, the
+// order the row comes in and how long it is.
+func TestNewEpisodes(t *testing.T) {
+	now := time.Date(2026, time.March, 1, 12, 0, 0, 0, time.UTC)
+	show := func(key string, items ...store.Item) works.Work {
+		w := wk(key, "show", model.MediumVideo, "")
+		w.Items = items
+		return w
+	}
+	for _, tc := range []struct {
+		name  string
+		n     int
+		works []works.Work
+		want  string // "key:count, key:count" — the row, and each show's badge
+	}{
+		{
+			name: "an episode that landed this week makes the show new",
+			n:    12,
+			works: []works.Work{show("show:atlanta",
+				episodeArrived(1, "Atlanta", "episode", 1, 1, now, 40),
+				episodeArrived(2, "Atlanta", "episode", 1, 2, now, 3))},
+			want: "show:atlanta:1",
+		},
+		{
+			name: "a show nothing landed in is not new",
+			n:    12,
+			works: []works.Work{show("show:atlanta",
+				episodeArrived(1, "Atlanta", "episode", 1, 1, now, 15))},
+			want: "",
+		},
+		{
+			name: "a featurette is not an episode",
+			n:    12,
+			works: []works.Work{show("show:atlanta",
+				episodeArrived(1, "Atlanta", "episode", 1, 1, now, 40),
+				episodeArrived(2, "Atlanta", "extra", 1, 1, now, 1))},
+			want: "",
+		},
+		{
+			name: "a whole season at once is counted, not listed twice",
+			n:    12,
+			works: []works.Work{show("show:atlanta",
+				episodeArrived(1, "Atlanta", "episode", 2, 1, now, 2),
+				episodeArrived(2, "Atlanta", "episode", 2, 2, now, 2),
+				episodeArrived(3, "Atlanta", "episode", 2, 3, now, 1))},
+			want: "show:atlanta:3",
+		},
+		{
+			name: "the show whose episode landed last leads",
+			n:    12,
+			works: []works.Work{
+				show("show:atlanta", episodeArrived(1, "Atlanta", "episode", 1, 1, now, 6)),
+				show("show:the-office", episodeArrived(2, "The Office", "episode", 1, 1, now, 2)),
+			},
+			want: "show:the-office:1, show:atlanta:1",
+		},
+		{
+			name: "the row is capped at the far end",
+			n:    1,
+			works: []works.Work{
+				show("show:atlanta", episodeArrived(1, "Atlanta", "episode", 1, 1, now, 6)),
+				show("show:the-office", episodeArrived(2, "The Office", "episode", 1, 1, now, 2)),
+			},
+			want: "show:the-office:1",
+		},
+		{
+			name: "a file that predates the arrival column is not new",
+			n:    12,
+			works: []works.Work{show("show:atlanta",
+				store.Item{ID: 1, Identity: &model.Identity{Kind: "episode", Title: "Atlanta", Season: 1, Episode: 1}})},
+			want: "",
+		},
+		{
+			name:  "a film is never in the row",
+			n:     12,
+			works: []works.Work{arrivedWork("movie:frozen", "movie", model.MediumVideo, "", 1)},
+			want:  "",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			order := libraryOrder(tc.works, works.Artists(tc.works))
+			var got []string
+			for _, sh := range newEpisodes(order, now, tc.n) {
+				n, _ := newEpisodesIn(sh.Work, now)
+				got = append(got, fmt.Sprintf("%s:%d", sh.Work.Key, n))
+			}
+			if strings.Join(got, ", ") != tc.want {
+				t.Errorf("new episodes = [%s], want [%s]", strings.Join(got, ", "), tc.want)
+			}
+		})
+	}
+}
+
+// serverOver stands a server up over a library of the caller's own items.
+// The new-episodes row is measured against the wall clock, so the shared
+// fixture — whose arrival dates are written down — can never carry one: a
+// document-level test needs files that arrived minutes ago.
+func serverOver(t *testing.T, items []store.Item) http.Handler {
+	t.Helper()
+	dir := t.TempDir()
+	library, err := store.OpenLibrary(filepath.Join(dir, "library.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := store.OpenState(filepath.Join(dir, "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := library.UpsertBatch(items); err != nil {
+		t.Fatal(err)
+	}
+	srv := &server{library: library, state: state, policy: model.DefaultPolicy()}
+	return srv.routes()
+}
+
+// The row and the badge as the DOCUMENT carries them: the show whose episode
+// landed yesterday is in `new_episodes`, and its tile in the grid says how
+// many arrived — so the browser badges the poster without counting anything.
+func TestLibraryNewEpisodesDocument(t *testing.T) {
+	now := time.Now()
+	h := serverOver(t, []store.Item{
+		{ObjectKey: "Shows/Atlanta/S01E01.mkv", ETag: "a1", AddedAt: now.Add(-40 * 24 * time.Hour),
+			Identity:  &model.Identity{Kind: "episode", Title: "Atlanta", Year: 2016, Season: 1, Episode: 1},
+			MediaInfo: &model.MediaInfo{Medium: model.MediumVideo, Container: "mkv", VideoCodec: "h264", AudioCodec: "aac", DurationSeconds: 1500}},
+		{ObjectKey: "Shows/Atlanta/S01E02.mkv", ETag: "a2", AddedAt: now.Add(-24 * time.Hour),
+			Identity:  &model.Identity{Kind: "episode", Title: "Atlanta", Year: 2016, Season: 1, Episode: 2},
+			MediaInfo: &model.MediaInfo{Medium: model.MediumVideo, Container: "mkv", VideoCodec: "h264", AudioCodec: "aac", DurationSeconds: 1500}},
+		{ObjectKey: "Movies/Arrival (2016)/Arrival.mkv", ETag: "a3", AddedAt: now.Add(-24 * time.Hour),
+			Identity:  &model.Identity{Kind: "movie", Title: "Arrival", Year: 2016},
+			MediaInfo: &model.MediaInfo{Medium: model.MediumVideo, Container: "mkv", VideoCodec: "h264", AudioCodec: "aac", DurationSeconds: 6000}},
+	})
+	doc := library(t, h, "/api/library")
+
+	var row []string
+	for _, tl := range doc.NewEpisodes {
+		row = append(row, fmt.Sprintf("%s:%d", tl.Title, tl.NewEpisodes))
+	}
+	if strings.Join(row, ", ") != "Atlanta:1" {
+		t.Errorf("new episodes = [%s]; only the show, and only the episode that just landed",
+			strings.Join(row, ", "))
+	}
+	for _, tl := range doc.Items {
+		if tl.Title == "Atlanta" && tl.NewEpisodes != 1 {
+			t.Errorf("the grid's own tile carries no badge: %+v", tl)
+		}
+		if tl.Title == "Arrival" && tl.NewEpisodes != 0 {
+			t.Errorf("a film wears an episode badge: %+v", tl)
+		}
+	}
+}
+
 // tile is a library tile as a test reads it.
 type tile struct {
-	Self     string   `json:"self"`
-	Kind     string   `json:"kind"`
-	Title    string   `json:"title"`
-	WorkKind string   `json:"work_kind"`
-	Subtitle string   `json:"subtitle"`
-	Tech     string   `json:"tech"`
-	Genres   []string `json:"genres"`
-	ItemID   int64    `json:"item_id"`
-	Search   string   `json:"search"`
-	Band     string   `json:"band"`
-	Links    map[string]struct {
+	Self        string   `json:"self"`
+	Kind        string   `json:"kind"`
+	Title       string   `json:"title"`
+	WorkKind    string   `json:"work_kind"`
+	Subtitle    string   `json:"subtitle"`
+	Tech        string   `json:"tech"`
+	Genres      []string `json:"genres"`
+	ItemID      int64    `json:"item_id"`
+	Search      string   `json:"search"`
+	Band        string   `json:"band"`
+	NewEpisodes int      `json:"new_episodes"`
+	Links       map[string]struct {
 		Href string `json:"href"`
 	} `json:"links"`
 }
@@ -221,6 +388,7 @@ type libraryDoc struct {
 	} `json:"bands"`
 	Items         []tile `json:"items"`
 	RecentlyAdded []tile `json:"recently_added"`
+	NewEpisodes   []tile `json:"new_episodes"`
 	Facets        map[string][]struct {
 		Value string `json:"value"`
 		Count int    `json:"count"`

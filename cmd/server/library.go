@@ -191,7 +191,11 @@ func tileFor(w *works.Work, subtitle string) *hyper.Envelope {
 // the band it belongs to on it: a row draws the tiles that name it, and the
 // "recently added" row carries the band along, so a tile out of its row
 // still knows where it came from.
-func tileOf(sh shelf) *hyper.Envelope {
+//
+// `now` is the clock the "3 new" badge is measured against: a show whose
+// episodes have just arrived says so on its own tile, wherever that tile is
+// drawn, so the grid badges it without asking a second question.
+func tileOf(sh shelf, now time.Time) *hyper.Envelope {
 	var t *hyper.Envelope
 	if sh.Artist != nil {
 		t = artistTile(sh.Artist)
@@ -200,6 +204,9 @@ func tileOf(sh shelf) *hyper.Envelope {
 	}
 	if sh.Band != "" {
 		t.Field("band", sh.Band)
+	}
+	if n, _ := newEpisodesIn(sh.Work, now); n > 0 {
+		t.Field("new_episodes", n)
 	}
 	return t
 }
@@ -475,6 +482,67 @@ func recentlyAdded(order []shelf, byKey map[string]*works.Work, n int) []shelf {
 	return out
 }
 
+// ── new episodes ────────────────────────────────────────────────────────
+
+// newEpisodeWindow is how long an episode counts as new. A fortnight, because
+// that is the span a person means by "did the new one land?" — long enough to
+// hold last week's episode and the one before it, short enough that a row of
+// new episodes is a row of episodes nobody has seen yet.
+const newEpisodeWindow = 14 * 24 * time.Hour
+
+// newEpisodeTiles is how many shows the row holds.
+const newEpisodeTiles = 12
+
+// newEpisodesIn is how many EPISODES of one show arrived inside the window,
+// and when the newest of them did. Bonus material is not an episode — a
+// featurette added on Tuesday does not make a show new — and a file with no
+// arrival time at all counts as old, the way the recently-added row treats
+// one. Anything that is not a show has no answer to give.
+func newEpisodesIn(w *works.Work, now time.Time) (int, time.Time) {
+	if w == nil || w.Kind != "show" {
+		return 0, time.Time{}
+	}
+	cut := now.Add(-newEpisodeWindow)
+	n, newest := 0, time.Time{}
+	for _, it := range w.Items {
+		if identityKind(it) != "episode" || !it.AddedAt.After(cut) {
+			continue
+		}
+		n++
+		if it.AddedAt.After(newest) {
+			newest = it.AddedAt
+		}
+	}
+	return n, newest
+}
+
+// newEpisodes is the "New episodes" row: the shows with an episode inside the
+// window, the show whose newest one landed last at the front, at most n. Like
+// recentlyAdded it is a SELECTION of the grid's own shelves — the same tiles,
+// each already carrying its count — so the row is one more ordering of the
+// library rather than a second kind of thing. Ties keep the grid's order.
+func newEpisodes(order []shelf, now time.Time, n int) []shelf {
+	type dated struct {
+		sh shelf
+		at time.Time
+	}
+	var fresh []dated
+	for _, sh := range order {
+		if count, at := newEpisodesIn(sh.Work, now); count > 0 {
+			fresh = append(fresh, dated{sh, at})
+		}
+	}
+	sort.SliceStable(fresh, func(i, j int) bool { return fresh[i].at.After(fresh[j].at) })
+	if len(fresh) > n {
+		fresh = fresh[:n]
+	}
+	out := make([]shelf, 0, len(fresh))
+	for _, d := range fresh {
+		out = append(out, d.sh)
+	}
+	return out
+}
+
 // ── the facets ──────────────────────────────────────────────────────────
 
 // facet is one value a filter offers and how many tiles carry it. It is a
@@ -533,15 +601,20 @@ func (s *server) handleLibrary(w http.ResponseWriter, r *http.Request) {
 		hyper.WriteProblem(w, serverProblem(err))
 		return
 	}
+	now := time.Now()
 	order := libraryOrder(ws, works.Artists(ws))
 	tiles := make([]*hyper.Envelope, 0, len(order))
 	for _, sh := range order {
-		tiles = append(tiles, tileOf(sh))
+		tiles = append(tiles, tileOf(sh, now))
 	}
 	byKey := works.ByKey(ws)
 	recent := make([]*hyper.Envelope, 0, recentlyAddedTiles)
 	for _, sh := range recentlyAdded(order, byKey, recentlyAddedTiles) {
-		recent = append(recent, tileOf(sh))
+		recent = append(recent, tileOf(sh, now))
+	}
+	fresh := make([]*hyper.Envelope, 0, newEpisodeTiles)
+	for _, sh := range newEpisodes(order, now, newEpisodeTiles) {
+		fresh = append(fresh, tileOf(sh, now))
 	}
 
 	profile := profileOf(r)
@@ -557,6 +630,7 @@ func (s *server) handleLibrary(w http.ResponseWriter, r *http.Request) {
 		Field("bands", bandsOf(order)).
 		Field("items", tiles).
 		Field("recently_added", recent).
+		Field("new_episodes", fresh).
 		Field("facets", map[string][]facet{"genre": genreFacet(order)}).
 		Link("root", "/api/", "flickr").
 		Link("continue", cont, "Continue watching").

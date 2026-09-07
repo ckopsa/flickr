@@ -242,6 +242,32 @@ test('recently added is the first row, above the bands', () => {
   assert.ok(!R.library(bare, {}).includes('id="recent-row"'));
 });
 
+// What just landed comes next, and the count rides the tile: the fixture
+// library's episodes arrived months ago, so the row the server writes is
+// empty and the tiles are put here by hand — the same tiles, with the field
+// the derivation adds when a show is new.
+test('new episodes is a row of its own, under what arrived lately', () => {
+  const doc = golden('library');
+  const show = Object.assign({}, doc.items.find(t => t.work_kind === 'show'), { new_episodes: 3 });
+  const html = R.library(Object.assign({}, doc, {
+    items: doc.items.map(t => t.work_kind === 'show' ? show : t),
+    new_episodes: [show],
+  }), {});
+
+  assert.ok(html.indexOf('id="recent-row"') < html.indexOf('id="new-row"'));
+  assert.ok(html.indexOf('id="new-row"') < html.indexOf('data-band='));
+  const row = html.split('id="new-row"')[1].split('</section>')[0];
+  assert.deepEqual(cardTitles(row), [unesc(R.esc(show.title))]);
+  assert.match(row, /<h3>New episodes<\/h3>/);
+  assert.match(row, /class="new-badge">3 new</);
+
+  // The badge is the document's count, not the row's: the same tile in the
+  // grid wears it too, and a tile without one wears nothing.
+  assert.equal(html.match(/class="new-badge"/g).length, 2);
+  assert.ok(!R.library(doc, {}).includes('new-badge'));
+  assert.ok(!R.library(doc, {}).includes('id="new-row"'));
+});
+
 // Search filters INSIDE the sections, and a section it empties disappears
 // rather than standing as a heading over nothing.
 test('a section the search empties is not drawn', () => {

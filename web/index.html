@@ -111,6 +111,12 @@
   .poster-wrap.loaded img { opacity: 1; }
   @keyframes shimmer { from { background-position: 150% 0; } to { background-position: -150% 0; } }
   .poster-wrap.text-tile { display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 8px; padding: 12px; text-align: center; background: linear-gradient(160deg, #232633, #191b22); }
+  /* "3 new" in the corner of a show's poster: the count the document put on
+     the tile, drawn over the picture rather than under the title, so a full
+     grid still reads at a glance. */
+  .new-badge { position: absolute; top: 6px; right: 6px; z-index: 1;
+    background: #d1584a; color: #fff; font-size: 11px; font-weight: 700;
+    padding: 2px 7px; border-radius: 999px; letter-spacing: .02em; }
   .text-tile .tile-title { font-size: 14px; font-weight: 600; color: #c5c8d4; word-break: break-word; }
   .text-tile .tile-sub { font-size: 11px; color: var(--muted); }
   .card .c-title { font-size: 13px; margin-top: 8px; font-weight: 600; line-height: 1.3; }

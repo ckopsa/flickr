@@ -149,9 +149,14 @@
   function card(t, cls) {
     const art = artwork(t);
     const title = t.title || '';
+    // The corner of the poster: how many episodes of this show have just
+    // arrived. The count is the document's own (`new_episodes`), so nothing
+    // here decides what "new" is — a tile without one wears no badge.
+    const badge = t.new_episodes > 0
+      ? '<span class="new-badge">' + esc(t.new_episodes + ' new') + '</span>' : '';
     const wrap = art
-      ? '<div class="poster-wrap"><img loading="lazy" alt="" src="' + esc(art) + '"></div>'
-      : '<div class="poster-wrap text-tile"><div class="tile-title">' + esc(title) +
+      ? '<div class="poster-wrap"><img loading="lazy" alt="" src="' + esc(art) + '">' + badge + '</div>'
+      : '<div class="poster-wrap text-tile">' + badge + '<div class="tile-title">' + esc(title) +
         '</div><div class="tile-sub">' + esc(t.subtitle || t.tech || '') + '</div></div>';
     // A tile is a div, so the keyboard would walk straight past it: tabindex
     // puts it in the tab order and the role says what activating it does.
@@ -214,6 +219,12 @@
     const recent = ((doc && doc.recently_added) || []).filter(t => matches(t, state));
     if (recent.length) {
       html += bandSection('Recently added', recent, 'band-row', ' id="recent-row"');
+    }
+    // Then the shows something landed in this fortnight — the server's own
+    // selection again, each tile already carrying the count its badge draws.
+    const fresh = ((doc && doc.new_episodes) || []).filter(t => matches(t, state));
+    if (fresh.length) {
+      html += bandSection('New episodes', fresh, 'band-row', ' id="new-row"');
     }
     const named = {};
     for (const b of (doc.bands || [])) {
