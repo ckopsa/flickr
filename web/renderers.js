@@ -1,7 +1,7 @@
 // flickr — the renderers: one per document kind, each a PURE FUNCTION of the
 // envelope (docs/hypermedia.md §The client).
 //
-//   library   the grid, its genre chips and its search box
+//   library   the grid, its genre chips and the count the header's search filtered
 //   work      the show's episode list, the album's or audiobook's pane, the book's
 //   artist    one name's shelf of records
 //   item      the detail pane
@@ -182,8 +182,9 @@
     return '<div id="lib-note"' + (s.note ? '' : ' hidden') + '>' + esc(s.note || '') + '</div>' +
       genreRow(doc, s) +
       '<div id="cw" hidden></div>' +
+      // The search box is the header's — it outlives this render, so the count
+      // is all the bar carries.
       '<div id="lib-bar">' +
-        '<input type="text" id="search" placeholder="Search titles…" value="' + esc(s.q || '') + '">' +
         '<span id="lib-count">' + (grid.count ? esc(grid.count + ' title' + (grid.count === 1 ? '' : 's')) : '') + '</span>' +
       '</div>' +
       '<div id="grid">' + grid.html + '</div>';

@@ -300,7 +300,7 @@ probe found no count). Audio plays (design note 14) and text reads (15, 16).
 ```sh
 cp .env.example .env   # fill in MinIO credentials
 go run ./cmd/server
-# open http://localhost:8080, hit "Scan library"
+# open http://localhost:8080, then ⚙ settings → "Scan library"
 ```
 
 Requires `ffmpeg`/`ffprobe` on PATH. Media files are read straight from MinIO

@@ -143,15 +143,17 @@
     mount(R.library(libraryDoc, libState));
     libState.note = '';
     paintContinue();
-    const box = $('search');
-    if (box) {
-      box.oninput = () => {
-        libState.q = box.value.trim().toLowerCase();
-        const grid = R.libraryGrid(libraryDoc, libState);
-        $('grid').innerHTML = grid.html;
-        $('lib-count').textContent = grid.count ? grid.count + ' title' + (grid.count === 1 ? '' : 's') : '';
-      };
-    }
+  }
+
+  // The search box is the header's and outlives every render, so typing in it
+  // repaints the grid in place rather than the whole view.
+  function filterLibrary() {
+    const grid = $('grid');
+    if (!grid) return; // not on the library: the box is hidden there anyway
+    libState.q = $('search').value.trim().toLowerCase();
+    const g = R.libraryGrid(libraryDoc, libState);
+    grid.innerHTML = g.html;
+    $('lib-count').textContent = g.count ? g.count + ' title' + (g.count === 1 ? '' : 's') : '';
   }
 
   function paintContinue() {
@@ -228,6 +230,9 @@
     const r = await fetchRoute(hash);
     if (seq !== routeSeq) return;
     currentRoute = r;
+    // The search box filters the library's tiles, so it is up on the library
+    // and nowhere else.
+    $('search').hidden = r.view !== 'library';
 
     if (r.problem) {
       // A refusal is an answer: its sentence goes on the library view, which
@@ -480,6 +485,22 @@
     await applyRoute();
   }
 
+  // --- the settings panel ------------------------------------------------------
+  //
+  // The engineering controls — which client to play as, the scan, what the
+  // encoder chose — behind a gear, because they are not what a viewer came
+  // for. The autoplay-next toggle is the device's: the panel only asks the
+  // Player for the setting and hands it back, so the transport row's own
+  // button keeps working.
+  function paintAutoplay() {
+    $('settings-autoplay').textContent =
+      'Autoplay next: ' + (root.Player.autoplay() ? 'on' : 'off');
+  }
+  function openSettings() {
+    paintAutoplay();
+    $('settings').hidden = false;
+  }
+
   // --- the scan ----------------------------------------------------------------
 
   async function scan() {
@@ -580,6 +601,11 @@
     $('gate-create').onclick = () => createProfile($('gate-name').value);
     $('gate-name').onkeydown = e => { if (e.key === 'Enter') createProfile($('gate-name').value); };
     $('scan').onclick = scan;
+    $('search').oninput = filterLibrary;
+    $('gear').onclick = openSettings;
+    $('settings-close').onclick = () => { $('settings').hidden = true; };
+    $('settings').onclick = e => { if (e.target.id === 'settings') $('settings').hidden = true; };
+    $('settings-autoplay').onclick = () => { root.Player.setAutoplay(!root.Player.autoplay()); paintAutoplay(); };
 
     // The shell is cache-first (sw.js), so the first visit after a deploy runs
     // the OLD index.html while the new worker installs behind it. When a new

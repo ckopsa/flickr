@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>flickr — media PoC</title>
+<title>flickr</title>
 <meta name="theme-color" content="#14151a">
 <link rel="manifest" href="/manifest.json">
 <link rel="icon" href="/icon-192.png" type="image/png">
@@ -22,6 +22,9 @@
   body { margin: 0; font-family: system-ui, sans-serif; background: #14151a; color: var(--fg); }
   header { padding: 12px 20px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; border-bottom: 1px solid #2a2c33; }
   header h1 { font-size: 16px; margin: 0 auto 0 0; font-weight: 600; }
+  /* the search box lives in the header now, and is only up on the library */
+  #search { width: 260px; max-width: 40vw; }
+  #gear { font-size: 15px; line-height: 1; padding: 6px 10px; }
   button, select, input[type=text] { background: #23252d; color: inherit; border: 1px solid #3a3d47; border-radius: 6px; padding: 6px 12px; font-size: 13px; }
   button, select { cursor: pointer; }
   button:hover { background: #2c2f38; }
@@ -39,9 +42,20 @@
   #gate-note { font-size: 11px; color: var(--muted); margin-top: 12px; }
   #profile-chip { background: #1e2c42; color: var(--accent); border-color: #2a3d5c; border-radius: 12px; }
 
+  /* the settings panel, behind the gear: the same box as the profile gate.
+     Everything in it is an engineering control, which is why it is not on
+     every screen any more. */
+  #settings { position: fixed; inset: 0; background: rgba(10,11,14,0.92); z-index: 100; display: flex; align-items: center; justify-content: center; }
+  #settings-box { background: #1b1d24; border: 1px solid #2a2c33; border-radius: 12px; padding: 24px 28px; max-width: 460px; width: 92%; }
+  #settings-box h2 { margin: 0 0 18px; font-size: 18px; font-weight: 600; }
+  .set-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 14px; }
+  .set-row > label { font-size: 12px; color: var(--muted); }
+  .set-row.end { justify-content: flex-end; margin-bottom: 0; }
+  #scan-status { font-size: 12px; color: var(--muted); }
+  #hw { font-size: 11px; padding: 2px 8px; border-radius: 10px; background: #1e2c42; color: var(--accent); cursor: help; }
+
   /* library grid */
   #lib-bar { display: flex; gap: 10px; align-items: center; padding: 16px 20px 0; }
-  #search { width: 260px; max-width: 60vw; }
   #lib-count { font-size: 12px; color: var(--muted); }
   #grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 16px; padding: 16px 20px 30px; }
   .card { cursor: pointer; }
@@ -299,8 +313,6 @@
     header, #view, #stage { padding-inline: 12px; }
     header { padding-block: 8px; gap: 8px; }
     header h1 { font-size: 14px; }
-    header h1 span { display: none; }  /* the subtitle is the first thing to go */
-    header select { max-width: 100%; }
     #lib-bar { flex-wrap: wrap; padding-top: 12px; }
     #search { width: 100%; max-width: none; }
     #grid { grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 12px; }
@@ -343,21 +355,47 @@
 </style>
 </head>
 <body>
+<!-- the header is the name, the search box and who is watching. The search
+     box filters the library and only the library, so the kernel hides it
+     wherever it would filter nothing. -->
 <header>
-  <h1>flickr <span style="color:var(--muted);font-weight:400">— media server PoC</span></h1>
+  <h1>flickr</h1>
+  <input type="text" id="search" placeholder="Search titles…" hidden>
   <button id="profile-chip" title="Switch profile">…</button>
-  <label style="font-size:12px;color:var(--muted)">Play as:</label>
-  <select id="profile">
-    <option value="browser">This browser (detected)</option>
-    <option value="chromecast1">Chromecast v1 (h264/1080p only)</option>
-    <option value="chromecastUltra">Chromecast Ultra (4K, hevc/vp9, HDR)</option>
-    <option value="tv4k">4K HDR TV (hevc, hdr10)</option>
-    <option value="cellular">Phone on cellular (3 Mbps cap)</option>
-  </select>
-  <button id="scan">Scan library</button>
-  <span id="scan-status" style="font-size:12px;color:var(--muted)"></span>
-  <span id="hw" title="" style="font-size:11px;padding:2px 8px;border-radius:10px;background:#1e2c42;color:var(--accent);cursor:help"></span>
+  <button id="gear" title="Settings" aria-label="Settings">⚙</button>
 </header>
+
+<!-- settings: the capability preset, the scan, what the encoder chose and the
+     autoplay-next toggle. Engineering controls, one gear away rather than on
+     every screen. #profile is still the id player.js reads caps() from. -->
+<div id="settings" hidden>
+  <div id="settings-box">
+    <h2>Settings</h2>
+    <div class="set-row">
+      <label for="profile">Play as</label>
+      <select id="profile">
+        <option value="browser">This browser (detected)</option>
+        <option value="chromecast1">Chromecast v1 (h264/1080p only)</option>
+        <option value="chromecastUltra">Chromecast Ultra (4K, hevc/vp9, HDR)</option>
+        <option value="tv4k">4K HDR TV (hevc, hdr10)</option>
+        <option value="cellular">Phone on cellular (3 Mbps cap)</option>
+      </select>
+    </div>
+    <div class="set-row">
+      <button id="settings-autoplay"></button>
+    </div>
+    <div class="set-row">
+      <button id="scan">Scan library</button>
+      <span id="scan-status"></span>
+    </div>
+    <div class="set-row">
+      <span id="hw" title=""></span>
+    </div>
+    <div class="set-row end">
+      <button id="settings-close">Close</button>
+    </div>
+  </div>
+</div>
 
 <!-- profile gate: who is watching. The names are GET (root.links.profiles)
      and a new one is root.actions.create_profile; kernel.js fills the box. -->

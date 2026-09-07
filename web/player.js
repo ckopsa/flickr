@@ -906,6 +906,9 @@
   root.Player = {
     init, attach, invoke, play, playFrom, close, holdSession,
     goTo, advance, cancelUpNext: hideUpNext,
+    // The setting is the device's; the settings panel hosts a second switch
+    // for it, so it is read and set through here rather than duplicated.
+    setAutoplay, autoplay: () => autoplayNext,
     setBaseUrl: u => { baseUrl = u; },
     playingItem: () => (item ? item.id : null),
     passage: () => passage,
