@@ -69,14 +69,15 @@ writing bare maps.
 
 | Document | Address | Carries | Actions |
 |---|---|---|---|
-| root | `GET /api/` | profile, links to library, continue, artists, scan, system | `scan` |
+| root | `GET /api/` | profile, links to library, search, continue, artists, scan, system | `scan` |
 | library | `GET /api/library` | tiles in server order — shows, films, artist shelves, audio works, books; genre facets; each tile a link + artwork | — |
 | work | `GET /api/works/{key}` | the work's fields, `members` in order (each an item envelope, with its chapters or sections), `places` (chapter/episode/section tokens **with labels**), the profile's progress | `play` (representative or next unfinished), `read` (a book), `passage` (mint a link from `from`/`to`) |
 | item | `GET /api/items/{id}` | `media_info`, chapters, subtitles, artwork links, `links.work`/`prev`/`next` | `play`, `read`, `progress`, `identity`, `reprobe`, `enrich` |
 | session | `GET /api/sessions/{id}` | `url`, `method`, the decision trace, `passage` (`t`, `end`, `until`, resolved item ids), `ends_at` | `progress` (refused while a passage is on), `keep_watching`, `stop`, `next` (the up-next document), `mark_in`, `mark_out`, `link` |
 | artist | `GET /api/artists/{name}` | albums in year order, cover | — |
+| search | `GET /api/search?q=…` | `groups` (works, episodes, tracks, parts, books), each a headed list of hits — a work's own tile, or a member with its label, its work and its artwork | — |
 | continue | `GET /api/continue` | entries as item envelopes with the resume position and the work link | per entry: `resume` |
-| route | `GET /api/-/route?hash=…` | `view` (`library` \| `work` \| `artist` \| `item`), the `document` to render, `passage` (resolved, or null), `autoplay` | — |
+| route | `GET /api/-/route?hash=…` | `view` (`library` \| `work` \| `artist` \| `item` \| `search`), the `document` to render, `passage` (resolved, or null), `autoplay` | — |
 | passage | `GET /api/-/passage?…` | a minted link and its sentence (`S03E22 2:22 – 14:14 of Beach Games`) | — |
 
 `GET /api/items` and `GET /api/works` remain as flat lists for the
@@ -86,7 +87,7 @@ feed and for tools; the browser stops reading them.
 
 The hash stays human — `#/show/The%20Office?ep=S03E22&t=142&end=854`,
 `#/item/2090?t=142&end=854`, `#/item/2332?from=ch:3&to=ch:3`,
-`#/artist/Radiohead`, `#/` — and every link minted so far keeps
+`#/artist/Radiohead`, `#/search/beach%20games`, `#/` — and every link minted so far keeps
 working. But the client no longer parses it beyond splitting the hash:
 it asks `GET /api/-/route?hash=<hash>` and renders the answer. The
 server resolves an episode code against the show's members, a text

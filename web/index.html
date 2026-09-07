@@ -131,6 +131,8 @@
 
   /* show (episode list) view */
   #show-title { margin: 14px 20px 6px; font-size: 18px; }
+  /* the results page: the same headed rows the library draws */
+  #search-title { margin: 14px 0 6px; font-size: 18px; }
   #show-progress, #lib-note { margin: 0 20px 8px; font-size: 13px; }
   /* where you are in the show is a fact about it, said under the title in
      the same grey as every other one; only the route's refusal is a warning */
@@ -551,12 +553,13 @@
 </style>
 </head>
 <body>
-<!-- the header is the name, the search box and who is watching. The search
-     box filters the library and only the library, so the kernel hides it
-     wherever it would filter nothing. -->
+<!-- the header is the name, the search box and who is watching. Typing
+     filters the library's tiles as it goes; once the typing settles the whole
+     shelf is searched, which is a route of its own (#/search/<q>). The kernel
+     hides the box wherever neither would do anything. -->
 <header>
   <h1>flickr</h1>
-  <input type="text" id="search" placeholder="Search titles…" hidden>
+  <input type="text" id="search" placeholder="Search the library…" hidden>
   <button id="profile-chip" title="Switch profile">…</button>
   <button id="gear" title="Settings" aria-label="Settings">⚙</button>
 </header>

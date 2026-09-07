@@ -2,6 +2,7 @@
 // envelope (docs/hypermedia.md §The client).
 //
 //   library   the banded rows, their headings and the genre chips
+//   search    the same tiles, in the groups the search answered
 //   work      the show's episode list, the album's or audiobook's pane, the book's
 //   artist    one name's shelf of records
 //   item      the detail pane
@@ -85,6 +86,9 @@
   function itemHash(id, query) { return '#/item/' + id + (query || ''); }
   function showHash(title) { return '#/show/' + encodeURIComponent(title); }
   function artistHash(name) { return '#/artist/' + encodeURIComponent(name); }
+  // What was searched for is IN the address, so a page of results is a place
+  // a person can send somebody rather than a gesture they have to repeat.
+  function searchHash(q) { return '#/search/' + encodeURIComponent(q); }
   // Where a tile goes when it is tapped: an artist's shelf, a show's episode
   // list, or the member the tile opens at (`item_id` — the film itself, track
   // one, the book).
@@ -278,6 +282,28 @@
       genreRow(doc, s) +
       '<div id="cw" hidden></div>' +
       '<div id="grid">' + libraryGrid(doc, s).html + '</div>';
+  }
+
+  // --- search ------------------------------------------------------------------
+
+  // The results: a headed row per group the document names, in the document's
+  // own order, each drawn with the very tile the library draws — a hit is a
+  // work or a member, and both already say where they go. Nothing is grouped,
+  // counted or sorted here, and a group the server left out is a heading that
+  // is never drawn.
+  function search(doc) {
+    if (!doc) return '';
+    const q = doc.query || '';
+    const head = backTo('#/', 'Library') +
+      '<h2 id="search-title">' + esc(q ? 'Results for \u201c' + q + '\u201d' : 'Search') + '</h2>';
+    const groups = (doc.groups || []).filter(g => (g.items || []).length);
+    if (!groups.length) {
+      return head + '<div id="empty">Nothing in the library matches.</div>';
+    }
+    return head + '<div id="search-results">' +
+      groups.map(g => bandSection(g.title, g.items, 'band-grid',
+        ' data-group="' + esc(g.key) + '"')).join('') +
+      '</div>';
   }
 
   // --- continue ----------------------------------------------------------------
@@ -907,9 +933,9 @@
   }
 
   const api = {
-    library, libraryGrid, hero, work, artist, item, session, continueShelf,
+    library, libraryGrid, hero, work, artist, item, session, continueShelf, search,
     card, memberRow, control, restControls, trace, identityForm,
-    esc, fmtTime, fmtRuntime, hashFor, itemHash, showHash, artistHash,
+    esc, fmtTime, fmtRuntime, hashFor, itemHash, showHash, artistHash, searchHash,
     idIn,
     linkHref: href, actionOf: action, unavailableReason: why, artworkOf: artwork,
     SILENT_ACTIONS: SILENT,

@@ -1,0 +1,154 @@
+{
+  "self": "/api/search?q=the",
+  "kind": "search",
+  "title": "Search",
+  "query": "the",
+  "count": 5,
+  "groups": [
+    {
+      "key": "works",
+      "title": "Titles",
+      "count": 2,
+      "items": [
+        {
+          "self": "/api/works/album%3Aradiohead-the-bends",
+          "kind": "work",
+          "title": "The Bends",
+          "work_kind": "album",
+          "medium": "audio",
+          "author": "Radiohead",
+          "subtitle": "Radiohead",
+          "tech": "album · flac · 4:19",
+          "item_id": 11,
+          "search": "the bends radiohead 01 planet telex.flac",
+          "links": {
+            "artwork": {
+              "href": "/api/items/11/cover"
+            },
+            "self": {
+              "href": "/api/works/album%3Aradiohead-the-bends",
+              "title": "The Bends"
+            }
+          }
+        },
+        {
+          "self": "/api/works/tmdb%3A2316",
+          "kind": "work",
+          "title": "The Office",
+          "work_kind": "show",
+          "medium": "video",
+          "year": 2005,
+          "subtitle": "1 season · 2 episodes · 1 extra",
+          "tech": "1280x720 h264/aac",
+          "genres": [
+            "Comedy"
+          ],
+          "item_id": 8,
+          "search": "the office s03e22 - beach games.mkv",
+          "links": {
+            "artwork": {
+              "href": "/api/items/8/poster"
+            },
+            "backdrop": {
+              "href": "/api/items/8/backdrop"
+            },
+            "self": {
+              "href": "/api/works/tmdb%3A2316",
+              "title": "The Office"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "key": "episodes",
+      "title": "Episodes",
+      "count": 2,
+      "items": [
+        {
+          "self": "/api/items/8",
+          "kind": "item",
+          "title": "Beach Games",
+          "item_id": 8,
+          "label": "S03E22 · Beach Games",
+          "work_key": "tmdb:2316",
+          "subtitle": "The Office",
+          "links": {
+            "artwork": {
+              "href": "/api/items/8/still"
+            },
+            "self": {
+              "href": "/api/items/8",
+              "title": "Beach Games"
+            },
+            "work": {
+              "href": "/api/works/tmdb%3A2316",
+              "title": "The Office"
+            }
+          }
+        },
+        {
+          "self": "/api/items/9",
+          "kind": "item",
+          "title": "The Job",
+          "item_id": 9,
+          "label": "S03E23 · The Job",
+          "work_key": "tmdb:2316",
+          "subtitle": "The Office",
+          "links": {
+            "artwork": {
+              "href": "/api/items/9/still"
+            },
+            "self": {
+              "href": "/api/items/9",
+              "title": "The Job"
+            },
+            "work": {
+              "href": "/api/works/tmdb%3A2316",
+              "title": "The Office"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "key": "books",
+      "title": "Books",
+      "count": 1,
+      "items": [
+        {
+          "self": "/api/items/3",
+          "kind": "item",
+          "title": "The Haunting of Hill House",
+          "item_id": 3,
+          "label": "The Haunting of Hill House",
+          "work_key": "book:shirley-jackson-the-haunting-of-hill-house-1959",
+          "links": {
+            "artwork": {
+              "href": "/api/items/3/cover"
+            },
+            "self": {
+              "href": "/api/items/3",
+              "title": "The Haunting of Hill House"
+            },
+            "work": {
+              "href": "/api/works/book%3Ashirley-jackson-the-haunting-of-hill-house-1959",
+              "title": "The Haunting of Hill House"
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "links": {
+    "library": {
+      "href": "/api/library",
+      "title": "Library"
+    },
+    "root": {
+      "href": "/api/",
+      "title": "flickr"
+    }
+  }
+}
+

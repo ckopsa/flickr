@@ -28,6 +28,10 @@
       "href": "/api/scan",
       "title": "Scan status"
     },
+    "search": {
+      "href": "/api/search",
+      "title": "Search"
+    },
     "system": {
       "href": "/api/system",
       "title": "System"

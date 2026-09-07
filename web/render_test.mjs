@@ -59,6 +59,7 @@ function flat(doc) { return JSON.stringify(doc); }
 const cases = [
   { name: 'library', golden: 'library', render: d => R.library(d, {}) },
   { name: 'continue', golden: 'continue', render: d => R.continueShelf(d) },
+  { name: 'search', golden: 'search', render: d => R.search(d) },
   { name: 'work (show)', golden: 'work-show', render: d => R.work(d) },
   { name: 'work (album)', golden: 'work-album', render: d => R.work(d) },
   { name: 'work (audiobook)', golden: 'work-audiobook', render: d => R.work(d) },
@@ -216,6 +217,43 @@ test('every tile is focusable and says what activating it does', () => {
     }
   }
   assert.ok(seen >= 3, 'no tiles were checked');
+});
+
+// The groups are the document's, so the rows are too: one per group it
+// answered, under the heading it gave, holding the hits it listed.
+test('the results are the groups the search answered, in its order', () => {
+  const doc = golden('search');
+  const html = R.search(doc);
+
+  const headings = [...html.matchAll(/<section class="band"[^>]*>\s*<h3>([^<]*)</g)].map(m => unesc(m[1]));
+  assert.deepEqual(headings, doc.groups.map(g => g.title));
+  for (const g of doc.groups) {
+    const section = html.split('data-group="' + g.key + '"')[1].split('</section>')[0];
+    assert.deepEqual(cardTitles(section), g.items.map(en => unesc(R.esc(en.title))));
+  }
+  // What was searched for is said back, and the way out is the library.
+  assert.ok(html.includes(R.esc(doc.query)));
+  assert.ok(html.includes('data-nav="#/"'));
+});
+
+// A hit opens the thing it names: a show by its title, a member by its id —
+// both spelled by the same function a library tile is.
+test('a result opens the route its kind spells', () => {
+  const doc = golden('search');
+  const byTitle = {};
+  for (const g of doc.groups) for (const en of g.items) byTitle[en.title] = R.hashFor(en);
+  assert.equal(byTitle['The Office'], '#/show/The%20Office');
+  assert.equal(byTitle['Beach Games'], '#/item/8');
+  assert.equal(byTitle['The Bends'], '#/item/11');
+});
+
+test('a search that matches nothing says so, and is still a page', () => {
+  const doc = golden('search');
+  const empty = Object.assign({}, doc, { count: 0, groups: [] });
+  const html = R.search(empty);
+  assert.ok(html.includes('id="empty"'));
+  assert.ok(!html.includes('class="band"'), 'no heading stands over nothing');
+  assert.ok(html.includes('data-nav="#/"'), 'the way back is still there');
 });
 
 test('the genre chip and the search box only filter', () => {

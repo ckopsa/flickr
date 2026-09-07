@@ -83,6 +83,13 @@ func TestResolveRoute(t *testing.T) {
 			hash: "#/item/12?from=pct%3A0.5&to=ch%3A4", view: "item", self: "/api/items/12",
 			passage:  `{"from":"pct:0.5","to":"ch:4","from_page":201}`,
 			autoplay: true},
+		{name: "a search", hash: "#/search/beach", view: "search",
+			self: "/api/search?q=beach", passage: "null"},
+		{name: "a search whose words have spaces in them",
+			hash: "#/search/beach%20games", view: "search",
+			self: "/api/search?q=beach+games", passage: "null"},
+		{name: "a search nothing matches is still a search", hash: "#/search/ninjago",
+			view: "search", self: "/api/search?q=ninjago", passage: "null"},
 		{name: "an artist", hash: "#/artist/Radiohead",
 			view: "artist", self: "/api/artists/Radiohead", passage: "null"},
 		{name: "an artist, matched case-insensitively and spelled their way",
@@ -160,6 +167,8 @@ func targetSelf(t *testing.T, target routeTarget) string {
 		return artistEnvelope(target.Artist).Self()
 	case "item":
 		return itemHref(target.Item.ID)
+	case "search":
+		return searchHref(target.Query)
 	}
 	return libraryEnvelope().Self()
 }
@@ -220,6 +229,14 @@ func TestRouteDocument(t *testing.T) {
 		doc.Document.Links["library"].Href != "/api/library" || doc.Passage != nil {
 		t.Errorf("library = %s %+v", doc.View, doc.Document)
 	}
+	// A search is a route like any other: the words are in the address, so
+	// the results page can be sent to somebody.
+	doc, _ = fetch("#/search/beach")
+	if doc.View != "search" || doc.Document.Self != "/api/search?q=beach" ||
+		doc.Document.Kind != "search" {
+		t.Errorf("search = %s %+v", doc.View, doc.Document)
+	}
+
 	doc, _ = fetch("#/artist/Radiohead")
 	if doc.View != "artist" || doc.Document.Self != "/api/artists/Radiohead" ||
 		doc.Document.Title != "Radiohead" || doc.Document.Links["artist"].Href == "" {

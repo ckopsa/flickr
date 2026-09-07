@@ -73,6 +73,9 @@ func (s *server) handleRootDoc(w http.ResponseWriter, r *http.Request) {
 	doc.
 		// The shelf every other document's remedy points back to.
 		Link("library", "/api/library", "Library").
+		// Everything the shelf holds, by one substring: the words ride as
+		// `?q=`, and the client reaches it by the hash its box spells.
+		Link("search", "/api/search", "Search").
 		Link("continue", cont, "Continue watching").
 		Link("artists", "/api/artists", "Artists").
 		Link("works", "/api/works", "Works").

@@ -208,10 +208,54 @@
   // The search box is the header's and outlives every render, so typing in it
   // repaints the banded sections in place rather than the whole view.
   function filterLibrary() {
-    const grid = $('grid');
-    if (!grid) return; // not on the library: the box is hidden there anyway
+    // The filter is kept in step with the box even off the library, so coming
+    // back to the grid draws what the box says rather than what it said last.
     libState.q = $('search').value.trim().toLowerCase();
+    const grid = $('grid');
+    if (!grid) return; // not on the library: there is nothing to repaint
     grid.innerHTML = R.libraryGrid(libraryDoc, libState).html;
+  }
+
+  // --- search ------------------------------------------------------------------
+  //
+  // Typing filters the tiles that are ON SCREEN as it goes, which is instant
+  // and finds a title. It cannot find an episode by its name or a track by
+  // its own: neither is on a tile. So once the typing settles — or on Enter,
+  // which means now — the whole library is searched, and that is a ROUTE
+  // (#/search/<q>), resolved by the server like every other: a page of
+  // results is somewhere a person can be sent.
+  const searchSettleMs = 300;
+  const searchMinChars = 2;
+  let searchTimer = null;
+
+  function onSearchInput() {
+    filterLibrary();
+    if (searchTimer) clearTimeout(searchTimer);
+    searchTimer = setTimeout(runSearch, searchSettleMs);
+  }
+
+  function onSearchKey(e) {
+    if (e.key !== 'Enter') return;
+    if (searchTimer) clearTimeout(searchTimer);
+    runSearch();
+  }
+
+  // One letter is not a search worth leaving the library for, and refining
+  // one is not a second page: the first search is navigated to and every
+  // keystroke after it REPLACES that entry, so Back goes where the person
+  // came from rather than back through every prefix they typed. Emptying the
+  // box while the results are up is leaving them.
+  function runSearch() {
+    searchTimer = null;
+    const q = $('search').value.trim();
+    const onResults = (location.hash || '').startsWith('#/search/');
+    if (q.length < searchMinChars) {
+      if (onResults) replaceHash('#/');
+      return;
+    }
+    const hash = R.searchHash(q);
+    if (onResults) replaceHash(hash);
+    else navigate(hash);
   }
 
   function paintContinue() {
@@ -292,9 +336,9 @@
     const r = await fetchRoute(hash);
     if (seq !== routeSeq) return;
     currentRoute = r;
-    // The search box filters the library's tiles, so it is up on the library
-    // and nowhere else.
-    $('search').hidden = r.view !== 'library';
+    // The search box filters the library's tiles and searches the whole
+    // shelf, so it is up on those two views and nowhere else.
+    $('search').hidden = r.view !== 'library' && r.view !== 'search';
 
     if (r.problem) {
       // A refusal is an answer: its sentence goes on the library view, which
@@ -327,6 +371,18 @@
       currentItem = null;
       showStage(false);
       mount(R.artist(shelf));
+      pendingAutoplay = pendingPlay = null;
+      return;
+    }
+    if (r.view === 'search') {
+      // Arrived by link rather than by typing: the box says what is being
+      // searched for, so refining it carries on from there.
+      const q = (r.document && r.document.query) || '';
+      if ($('search').value.trim() !== q) $('search').value = q;
+      currentWork = null;
+      currentItem = null;
+      showStage(false);
+      mount(R.search(r.document));
       pendingAutoplay = pendingPlay = null;
       return;
     }
@@ -737,7 +793,8 @@
     $('gate-create').onclick = () => createProfile($('gate-name').value);
     $('gate-name').onkeydown = e => { if (e.key === 'Enter') createProfile($('gate-name').value); };
     $('scan').onclick = scan;
-    $('search').oninput = filterLibrary;
+    $('search').oninput = onSearchInput;
+    $('search').onkeydown = onSearchKey;
     $('gear').onclick = openSettings;
     $('settings-close').onclick = () => { $('settings').hidden = true; };
     $('settings').onclick = e => { if (e.target.id === 'settings') $('settings').hidden = true; };

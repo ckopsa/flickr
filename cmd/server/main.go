@@ -258,6 +258,7 @@ func (s *server) routes() *http.ServeMux {
 	mux.HandleFunc("GET /api/items/{id}", s.handleItemDoc)
 	mux.HandleFunc("GET /api/works/{key}", s.handleWorkDoc)
 	mux.HandleFunc("GET /api/library", s.handleLibrary)
+	mux.HandleFunc("GET /api/search", s.handleSearch)
 	mux.HandleFunc("GET /api/artists/{name}", s.handleArtistDoc)
 	mux.HandleFunc("GET /api/-/route", s.handleRouteDoc)
 	mux.HandleFunc("GET /api/items", s.handleListItems)
