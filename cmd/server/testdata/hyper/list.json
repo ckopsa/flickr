@@ -60,6 +60,9 @@
         "self": {
           "href": "/api/works/tmdb%3A109445",
           "title": "Frozen"
+        },
+        "trickplay": {
+          "href": "/api/items/4/trickplay.json"
         }
       },
       "actions": {
