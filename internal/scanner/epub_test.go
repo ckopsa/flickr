@@ -3,7 +3,9 @@ package scanner
 import (
 	"archive/zip"
 	"bytes"
+	"errors"
 	"reflect"
+	"strings"
 	"testing"
 
 	"flickr/internal/model"
@@ -203,5 +205,76 @@ func TestProbeEpubRejectsBrokenPackages(t *testing.T) {
 	junk := bytes.NewReader([]byte("this is not an epub"))
 	if _, err := ProbeEpub(junk, junk.Size()); err == nil {
 		t.Error("plain bytes: expected an error")
+	}
+}
+
+// The cover is named two ways across EPUB generations; both resolve to the
+// same zip member, and a package that names none says so distinctly from a
+// broken package.
+func TestEpubCover(t *testing.T) {
+	const jpeg = "\xff\xd8\xff\xe0fake-jpeg"
+	epub3 := `<?xml version="1.0"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0">
+  <metadata/>
+  <manifest>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+    <item id="cov" href="images/cover.jpg" media-type="image/jpeg" properties="cover-image"/>
+  </manifest>
+  <spine><itemref idref="ch1"/></spine>
+</package>`
+	epub2 := `<?xml version="1.0"?>
+<package xmlns="http://www.idpf.org/2007/opf" xmlns:opf="http://www.idpf.org/2007/opf" version="2.0">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:title>T</dc:title>
+    <meta name="cover" content="cover-id"/>
+  </metadata>
+  <manifest>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+    <item id="cover-id" href="images/cover.jpg" media-type="image/jpeg"/>
+  </manifest>
+  <spine><itemref idref="ch1"/></spine>
+</package>`
+	// content= holding the href instead of the id, and no media-type: the
+	// extension names the type.
+	epub2Href := strings.NewReplacer(`content="cover-id"`, `content="images/cover.jpg"`,
+		` media-type="image/jpeg"`, ``).Replace(epub2)
+	// A pointer to a member the zip does not carry.
+	dangling := strings.ReplaceAll(epub2, "images/cover.jpg", "images/missing.jpg")
+
+	for _, tc := range []struct {
+		name, opf string
+		want      string // media type; "" = ErrNoCover
+	}{
+		{"epub3 properties", epub3, "image/jpeg"},
+		{"epub2 meta by id", epub2, "image/jpeg"},
+		{"epub2 meta by href, type from extension", epub2Href, "image/jpeg"},
+		{"no cover named", bareOPF, ""},
+		{"dangling pointer", dangling, ""},
+	} {
+		r := buildEpub(t, map[string]string{
+			"META-INF/container.xml": containerXMLDoc,
+			"OEBPS/content.opf":      tc.opf,
+			"OEBPS/ch1.xhtml":        "<html/>",
+			"OEBPS/images/cover.jpg": jpeg,
+		})
+		data, mt, err := EpubCover(r, r.Size())
+		if tc.want == "" {
+			if !errors.Is(err, ErrNoCover) {
+				t.Errorf("%s: err = %v, want ErrNoCover", tc.name, err)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("%s: %v", tc.name, err)
+			continue
+		}
+		if string(data) != jpeg || mt != tc.want {
+			t.Errorf("%s: got %d bytes, %q; want the cover bytes, %q", tc.name, len(data), mt, tc.want)
+		}
+	}
+
+	// Not a book at all is an error, not "no cover".
+	if _, _, err := EpubCover(bytes.NewReader([]byte("nope")), 4); err == nil || errors.Is(err, ErrNoCover) {
+		t.Errorf("garbage: err = %v, want a zip error", err)
 	}
 }

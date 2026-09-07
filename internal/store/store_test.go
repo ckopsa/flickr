@@ -251,3 +251,62 @@ func TestNeedingEnrichmentVersion(t *testing.T) {
 		t.Errorf("needing enrichment: %v (want old.mkv + never.mkv only)", got)
 	}
 }
+
+// A text place rides the row as a locator; a clock write clears it; a
+// database from before the column migrates and reads NULL locators as nil.
+func TestStatePlace(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.db")
+	// Pre-locator schema, with a row, as an older server left it.
+	old, err := open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := old.Exec(`CREATE TABLE playback_state (
+		item_id INTEGER NOT NULL, client_id TEXT NOT NULL,
+		position_seconds REAL NOT NULL, updated_at REAL NOT NULL,
+		PRIMARY KEY (item_id, client_id))`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := old.Exec(`INSERT INTO playback_state VALUES (1, 'kid', 42, 1000)`); err != nil {
+		t.Fatal(err)
+	}
+	old.Close()
+
+	s, err := OpenState(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := s.GetPosition(1, "kid")
+	if err != nil || p.PositionSeconds != 42 || p.Locator != nil {
+		t.Fatalf("migrated row: %+v, %v", p, err)
+	}
+	if p, err := s.GetPosition(9, "kid"); err != nil || p.PositionSeconds != 0 || p.Locator != nil {
+		t.Fatalf("absent row: %+v, %v", p, err)
+	}
+
+	loc := &model.Locator{CFI: "epubcfi(/6/14!/4/2/1:0)", Section: 7, Fraction: 0.34}
+	if err := s.SetPlace(2, "kid", 0, loc); err != nil {
+		t.Fatal(err)
+	}
+	p, err = s.GetPosition(2, "kid")
+	if err != nil || p.Locator == nil || *p.Locator != *loc || p.PositionSeconds != 0 {
+		t.Fatalf("placed row: %+v, %v", p, err)
+	}
+	all, err := s.PositionsFor("kid")
+	if err != nil || len(all) != 2 {
+		t.Fatalf("PositionsFor: %v, %v", all, err)
+	}
+	for _, q := range all {
+		if (q.ItemID == 2) != (q.Locator != nil) {
+			t.Errorf("locator on the wrong row: %+v", q)
+		}
+	}
+	// A later clock write on the same row clears the place.
+	if err := s.SetPosition(2, "kid", 12); err != nil {
+		t.Fatal(err)
+	}
+	if p, _ := s.GetPosition(2, "kid"); p.Locator != nil || p.PositionSeconds != 12 {
+		t.Errorf("after clock write: %+v", p)
+	}
+}

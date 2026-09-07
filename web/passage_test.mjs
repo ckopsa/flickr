@@ -7,7 +7,9 @@ import passage from './passage.js';
 const { splitHash, parsePassage, passageQuery, isTimedPassage,
         passageEndAt, passageEnded, runContinues, passageForNext,
         parseEpisodeCode, findEpisode, resolveShowPassage,
-        markTime, snapToChapter, markBounds, clearMark, marksOn, markPassage, passageLink } = passage;
+        markTime, snapToChapter, markBounds, clearMark, marksOn, markPassage, passageLink,
+        parseLocator, formatLocator, sectionFromCFI, locatorSection,
+        isTextPassage, textPassageEnded } = passage;
 
 // a full passage record with every field null except the overrides
 const P = o => ({ t: null, end: null, until: null, untilEp: null, ep: null, from: null, to: null, ...o });
@@ -310,4 +312,106 @@ test('passageLink builds the absolute item form with the grammar\'s spelling', (
   assert.equal(passageLink('http://localhost:8099/', M({ end: 900, endItem: 58 })), null);
   assert.equal(passageLink('http://localhost:8099/', null), null);
   assert.equal(markPassage(null), null);
+});
+
+// --- text locators -----------------------------------------------------------
+
+test('parseLocator reads the three spellings and nothing else', () => {
+  assert.deepEqual(parseLocator('cfi:epubcfi(/6/14!/4/2/1:0)'), { kind: 'cfi', cfi: 'epubcfi(/6/14!/4/2/1:0)' });
+  assert.deepEqual(parseLocator('epubcfi(/6/14!/4/2)'), { kind: 'cfi', cfi: 'epubcfi(/6/14!/4/2)' }); // bare, as progress reports it
+  assert.deepEqual(parseLocator('ch:7'), { kind: 'ch', n: 7 });
+  assert.deepEqual(parseLocator('CH:7'), { kind: 'ch', n: 7 });
+  assert.deepEqual(parseLocator('pct:0.34'), { kind: 'pct', f: 0.34 });
+  assert.deepEqual(parseLocator('pct:1'), { kind: 'pct', f: 1 });
+  assert.deepEqual(parseLocator('pct:0'), { kind: 'pct', f: 0 });
+  assert.deepEqual(parseLocator('pct:.5'), { kind: 'pct', f: 0.5 });
+  assert.deepEqual(parseLocator(' ch:3 '), { kind: 'ch', n: 3 });
+  for (const bad of ['ch:0', 'ch:-1', 'ch:3.5', 'ch:', 'pct:1.5', 'pct:-0.1', 'pct:abc', 'cfi:nope',
+                     'ch03', 'page:12', '', null, undefined, 'cfi:']) {
+    assert.equal(parseLocator(bad), null, `${bad} should not parse`);
+  }
+});
+
+test('formatLocator is the canonical spelling and round-trips', () => {
+  for (const s of ['cfi:epubcfi(/6/14!/4/2/1:0)', 'ch:7', 'pct:0.34']) {
+    assert.equal(formatLocator(parseLocator(s)), s);
+  }
+  assert.equal(formatLocator(parseLocator('epubcfi(/6/2!/4)')), 'cfi:epubcfi(/6/2!/4)');
+  assert.equal(formatLocator(parseLocator('CH:7')), 'ch:7');
+  assert.equal(formatLocator(null), null);
+  assert.equal(formatLocator({ kind: 'nonsense' }), null);
+});
+
+test('sectionFromCFI reads the spine step like the server does', () => {
+  assert.equal(sectionFromCFI('epubcfi(/6/14!/4/2/1:0)'), 7);
+  assert.equal(sectionFromCFI('epubcfi(/6/14[ch07]!/4/2/1:0)'), 7);
+  assert.equal(sectionFromCFI('epubcfi(/6/2!/4/2)'), 1);
+  assert.equal(sectionFromCFI(' epubcfi(/6/40!/4) '), 20);
+  assert.equal(sectionFromCFI('epubcfi(/6/13!/4)'), null); // odd: not an element step
+  assert.equal(sectionFromCFI('epubcfi(/6)'), null);
+  assert.equal(sectionFromCFI('/6/14!/4'), null);
+  assert.equal(sectionFromCFI(''), null);
+  assert.equal(sectionFromCFI(null), null);
+});
+
+test('locatorSection lands every kind in a 1-based section, clamped', () => {
+  assert.equal(locatorSection(parseLocator('ch:3'), 12), 3);
+  assert.equal(locatorSection(parseLocator('ch:99'), 12), 12);
+  assert.equal(locatorSection(parseLocator('pct:0'), 12), 1);
+  assert.equal(locatorSection(parseLocator('pct:0.5'), 12), 7);
+  assert.equal(locatorSection(parseLocator('pct:1'), 12), 12);
+  assert.equal(locatorSection(parseLocator('cfi:epubcfi(/6/14!/4/2)'), 12), 7);
+  assert.equal(locatorSection(parseLocator('cfi:epubcfi(/6/14!/4/2)'), 3), 3);
+  assert.equal(locatorSection(parseLocator('cfi:epubcfi(/6)'), 12), null);
+  assert.equal(locatorSection(parseLocator('ch:3'), 0), null);
+  assert.equal(locatorSection(null, 12), null);
+});
+
+test('isTextPassage: from or to, and never a timed one', () => {
+  assert.equal(isTextPassage(parsePassage('from=ch:3&to=ch:4')), true);
+  assert.equal(isTextPassage(parsePassage('from=ch:3')), true);
+  assert.equal(isTextPassage(parsePassage('to=pct:0.5')), true);
+  assert.equal(isTextPassage(parsePassage('t=10&end=20')), false);
+  assert.equal(isTextPassage(parsePassage('until=9')), false);
+  assert.equal(isTextPassage(null), false);
+  // the two grammars ride the same query without meeting
+  const p = parsePassage('from=ch:3&to=ch:4');
+  assert.equal(isTimedPassage(p), false);
+  assert.equal(passageQuery(p), '?from=ch%3A3&to=ch%3A4');
+  assert.deepEqual(parsePassage(passageQuery(p)), p);
+});
+
+// a fake CFI order for the predicate: compares the spine step, then the
+// rest lexically — enough to stand in for epub.js's EpubCFI.compare
+const cmp = (a, b) => {
+  const sa = sectionFromCFI(a), sb = sectionFromCFI(b);
+  if (sa !== sb) return sa < sb ? -1 : 1;
+  return a < b ? -1 : a > b ? 1 : 0;
+};
+const at = o => ({ cfi: 'epubcfi(/6/8!/4/2)', section: 4, pct: 0.3, atEnd: false, ...o });
+
+test('textPassageEnded: a ch bound is inclusive, points are reached at or after', () => {
+  const ch4 = parseLocator('ch:4');
+  assert.equal(textPassageEnded(ch4, at({ section: 3 }), cmp), false);
+  assert.equal(textPassageEnded(ch4, at({ section: 4 }), cmp), false); // still inside chapter 4
+  assert.equal(textPassageEnded(ch4, at({ section: 5 }), cmp), true);
+  const half = parseLocator('pct:0.5');
+  assert.equal(textPassageEnded(half, at({ pct: 0.49 }), cmp), false);
+  assert.equal(textPassageEnded(half, at({ pct: 0.5 }), cmp), true);
+  assert.equal(textPassageEnded(half, at({ pct: NaN }), cmp), false);
+  assert.equal(textPassageEnded(half, at({ pct: null }), cmp), false);
+  const point = parseLocator('cfi:epubcfi(/6/8!/4/6)');
+  assert.equal(textPassageEnded(point, at({ cfi: 'epubcfi(/6/8!/4/2)' }), cmp), false);
+  assert.equal(textPassageEnded(point, at({ cfi: 'epubcfi(/6/8!/4/6)' }), cmp), true);
+  assert.equal(textPassageEnded(point, at({ cfi: 'epubcfi(/6/10!/4/2)' }), cmp), true);
+  assert.equal(textPassageEnded(point, at({ cfi: 'epubcfi(/6/8!/4/8)' }), undefined), false); // no order, no verdict
+  assert.equal(textPassageEnded(point, at({}), () => { throw new Error('bad cfi'); }), false);
+});
+
+test('textPassageEnded: the book ending ends any passage, nothing else fires on nothing', () => {
+  assert.equal(textPassageEnded(parseLocator('ch:99'), at({ section: 12, atEnd: true }), cmp), true);
+  assert.equal(textPassageEnded(parseLocator('pct:1'), at({ pct: 0.98, atEnd: true }), cmp), true);
+  assert.equal(textPassageEnded(null, at({ atEnd: true }), cmp), false);
+  assert.equal(textPassageEnded(parseLocator('ch:4'), null, cmp), false);
+  assert.equal(textPassageEnded(parseLocator('ch:4'), at({ section: undefined }), cmp), false);
 });

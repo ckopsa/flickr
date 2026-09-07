@@ -815,3 +815,85 @@ func TestItemLabelTrack(t *testing.T) {
 		}
 	}
 }
+
+func placed(itemID int64, cfi string, section int, frac, updated float64) store.Position {
+	return store.Position{ItemID: itemID, UpdatedAt: updated,
+		Locator: &model.Locator{CFI: cfi, Section: section, Fraction: frac}}
+}
+
+// The fraction law's text unit: a book's progress is the stored fraction and
+// its text names the section and the percentage.
+func TestWorkProgressBook(t *testing.T) {
+	bk := Build([]store.Item{book(10, "Books/A/T.epub", "A", "T", 0)})
+	w := &bk[0]
+	for _, tc := range []struct {
+		name     string
+		pos      map[int64]store.Position
+		fraction float64
+		text     string
+		status   string
+	}{
+		{"no locator yet", map[int64]store.Position{10: pos(10, 30, 7)}, 0, "", "active"},
+		{"placed", map[int64]store.Position{10: placed(10, "epubcfi(/6/14!/4/2/1:0)", 7, 0.34, 7)}, 0.34, "ch. 7 · 34%", "active"},
+		{"rounds to whole percent", map[int64]store.Position{10: placed(10, "x", 2, 0.4551, 7)}, 0.4551, "ch. 2 · 46%", "active"},
+		{"section unknown", map[int64]store.Position{10: placed(10, "x", 0, 0.5, 7)}, 0.5, "50%", "active"},
+		{"finished at nine tenths", map[int64]store.Position{10: placed(10, "x", 12, 0.9, 7)}, 0.9, "ch. 12 · 90%", "finished"},
+		{"clamped above one", map[int64]store.Position{10: placed(10, "x", 12, 1.7, 7)}, 1, "ch. 12 · 100%", "finished"},
+		{"clamped below zero", map[int64]store.Position{10: placed(10, "x", 1, -0.2, 7)}, 0, "ch. 1 · 0%", "active"},
+	} {
+		p, ok := WorkProgress(w, tc.pos)
+		if !ok {
+			t.Fatalf("%s: expected progress", tc.name)
+		}
+		if p.Fraction != tc.fraction || p.ProgressText != tc.text || p.Status != tc.status || p.UpdatedAt != 7 {
+			t.Errorf("%s: %+v, want fraction %v text %q status %s", tc.name, p, tc.fraction, tc.text, tc.status)
+		}
+	}
+
+	// Two copies of one book merge into one work: the most recent row places
+	// the reader, whatever the other says.
+	two := Build([]store.Item{book(10, "Books/A/T.epub", "A", "T", 0), book(11, "Books/A/T (copy).epub", "A", "T", 0)})
+	p, _ := WorkProgress(&two[0], map[int64]store.Position{
+		10: placed(10, "x", 3, 0.2, 5), 11: placed(11, "y", 9, 0.7, 9),
+	})
+	if p.Fraction != 0.7 || p.ProgressText != "ch. 9 · 70%" || p.UpdatedAt != 9 {
+		t.Errorf("merged copies: %+v", p)
+	}
+}
+
+// The resume list keeps a book by its locator, drops one finished or barely
+// opened, and hands the client the fraction since seconds mean nothing.
+func TestContinueListText(t *testing.T) {
+	ws := Build([]store.Item{
+		book(10, "Books/A/Reading.epub", "A", "Reading", 0),
+		book(11, "Books/A/Glanced.epub", "A", "Glanced", 0),
+		book(12, "Books/A/Done.epub", "A", "Done", 0),
+		book(13, "Books/A/Unplaced.epub", "A", "Unplaced", 0),
+		book(14, "Books/A/Second Page.epub", "A", "Second Page", 0),
+		withDuration(movie(1, "Movies/F.mkv", "F", 2000), 6000),
+	})
+	got := ContinueList(ws, []store.Position{
+		placed(10, "epubcfi(/6/8!/4/2)", 4, 0.31, 100),  // reading
+		placed(11, "epubcfi(/6/2!/4/2)", 1, 0, 90),      // opened to the cover: noise
+		placed(12, "epubcfi(/6/40!/4/2)", 20, 0.95, 80), // finished: gone
+		pos(13, 30, 70), // a pre-reader row: seconds, no locator; kept as before
+		placed(14, "epubcfi(/6/4!/4/2)", 2, 0, 60), // second section at 0%: a place
+		pos(1, 600, 50), // a film, for ordering
+	}, 20)
+	var ids []int64
+	for _, e := range got {
+		ids = append(ids, e.ItemID)
+	}
+	if want := []int64{10, 13, 14, 1}; !reflect.DeepEqual(ids, want) {
+		t.Fatalf("ids = %v, want %v", ids, want)
+	}
+	if e := got[0]; e.Fraction != 0.31 || e.Label != "Reading.epub" || e.Title != "Reading" || e.PositionSeconds != 0 || e.DurationSeconds != 0 {
+		t.Errorf("book entry: %+v", e)
+	}
+	if e := got[3]; e.Fraction != 0 || e.PositionSeconds != 600 {
+		t.Errorf("film entry must not carry a fraction: %+v", e)
+	}
+	if b, _ := json.Marshal(got[3]); strings.Contains(string(b), "fraction") {
+		t.Errorf("fraction must be omitted for clock entries: %s", b)
+	}
+}

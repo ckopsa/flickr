@@ -104,9 +104,9 @@ a handful of architectural decisions (see design notes below):
    spine, TOC) that yields one `chapter` per spine item and a `sections`
    count. Identification gained the `Audiobooks/`, `Music/` and `Books/`
    grammars (see *Library layout*), and works gained `medium`, `author`,
-   and the `audiobook`/`album`/`book` kinds. Text does not play: the play
-   endpoints answer 415 for it and the grid hides books until the reader
-   lands; trickplay skips audio and text alike (no frames to draw).
+   and the `audiobook`/`album`/`book` kinds. Audio plays (14) and text is
+   read, not played (15): the play endpoints answer 415 for text, and
+   trickplay skips audio and text alike (no frames to draw).
 14. **Audio plays through the same pipeline, minus the picture** — an audio
    item takes its own branch of the pure `Decide`: the container, codec,
    channel and bitrate questions are asked, the video ones (codec,
@@ -144,6 +144,27 @@ a handful of architectural decisions (see design notes below):
    album nobody filed under an artist keeps a tile of its own. No playlists,
    no shuffle, no lyrics: the unit is the record, and the order is the
    record's.
+15. **Text reads in a reader, and a place in a text is a locator** — a
+   book is opened from `GET /api/items/{id}/book` (the epub bytes off the
+   bucket, range-capable) by a reader pane on epub.js, vendored under
+   `web/vendor/` with JSZip and precached by the service worker, so the
+   LAN-only engine loads nothing from the internet at read time. The pane
+   shows the prober's TOC (`media_info.chapters`, one per spine item), pages,
+   and reports where the reader is as an EPUB **CFI** plus the book's own
+   **percentage**: `playback_state` gained a nullable `locator TEXT` column
+   beside `position_seconds`, holding `{"cfi","section","fraction"}` as
+   JSON — the same row, a different unit. `section` is the 1-based spine
+   position; the client sends it, or the server reads it off the CFI's
+   spine step (`epubcfi(/6/14!…)` → 14/2 = 7). The fraction law gets its
+   text unit: a book's `progress` is the stored fraction and its
+   `progress_text` is `ch. 7 · 34%`; finished at ≥ 0.9 like everything
+   else; the continue row keeps a book by its locator and hands the client
+   the `fraction`. Text passages (`?from=…&to=…`, see *Deep links*) obey
+   the three passage rules unchanged: open at `from`, stop at `to` with
+   *End of the passage*, write nothing. A book's cover — the image its OPF
+   names — is extracted once on first request into `data/covers/<id>.jpg`
+   and served by the same `GET /api/items/{id}/cover` an audio item's
+   attached picture is (14); tiles ask `/cover` for every non-video item. PDF is its own bead.
 
 ## Library layout
 
@@ -194,9 +215,10 @@ Vocabulary, from file to work:
 Progress follows the shape: an audiobook's fraction is time heard over the
 sum of its parts' durations (earlier parts count whole), its text reads
 `part 3 of 12 · 41:10`; a single chaptered file reads
-`ch. 7 · 1:19:22 / 11:30:00`; a book reports a position but no fraction or
-text until the reader bead adds a locator. Audio plays (design note 14);
-text does not yet — the EPUB reader is bead flickr-9au.
+`ch. 7 · 1:19:22 / 11:30:00`; a book's fraction is the percentage the reader
+reports with its locator, its text `ch. 7 · 34%` (a row written before the
+reader existed still reads as a position without a place). Audio plays
+(design note 14) and text reads (15).
 
 ## Run
 
@@ -219,7 +241,7 @@ locally except HLS segments in `data/streams/`.
 | `GET /api/works` | library as works: movies, whole shows, audiobooks, albums, books (+ stray files), title-sorted, each with `work_key`, `kind`, `medium`, `author`, counts, and a `representative_item_id` for artwork |
 | `GET /api/works/{key}/items` | one work's member items (episodes in season/episode order, parts and tracks in part order, each track with its `identity.track_title`); 404 for unknown keys |
 | `GET /api/artists` | the album works shelved by artist: `name`, `album_count`, `albums` in year order (`work_key`, `title`, `year`, `track_count`, `representative_item_id`), and the artist's own `representative_item_id` — the item whose `/cover` is the picture; name-sorted, `[]` without music |
-| `GET /api/continue?client_id=NAME` | a profile's resume list: most-recent first, max 20, finished (≥90%) and <5 s positions excluded, one entry per work |
+| `GET /api/continue?client_id=NAME` | a profile's resume list: most-recent first, max 20, finished (≥90%) and <5 s positions excluded, one entry per work; a book entry carries `fraction` instead of a meaningful seconds/duration pair |
 | `GET /api/feed/media?since=CURSOR` | change feed: works changed since the cursor with per-audience progress; response carries the next cursor (`l<n>.s<n>`); no `since` = everything |
 | `POST /api/items/{id}/decision` | dry-run: decision + trace, no side effects; audio items take the audio branch (415 for text — books are read, not streamed) |
 | `POST /api/items/{id}/play` | decide and act: presigned URL (direct) or HLS session (transcode, audio-only for audio items); 415 for text |
@@ -230,11 +252,13 @@ locally except HLS segments in `data/streams/`.
 | `GET /api/items/{id}/poster` | cached TMDB poster (image/jpeg, 404 if absent) |
 | `GET /api/items/{id}/cover` | an audio item's embedded cover art, extracted with ffmpeg on first request and cached in `data/covers/`; falls back to the poster route, 404 when neither exists |
 | `GET /api/items/{id}/still` | cached TMDB episode still (image/jpeg, 404 if absent) |
+| `GET /api/items/{id}/book` | a text item's bytes for the reader (`application/epub+zip`, Range requests honoured); 415 for anything that is not text |
+| `GET /api/items/{id}/cover` | the item's own cover art: a book's OPF cover image, extracted once into `data/covers/`; 404 when the book names none, 415 for video (whose artwork is the poster) |
 | `GET /api/items/{id}/trickplay.json` | scrub-preview sprite index (404 if not generated) |
 | `GET /api/items/{id}/trickplay/{n}.jpg` | sprite sheet n |
 | `POST /api/items/{id}/trickplay` | force-generate sprites for one item (synchronous) |
 | `DELETE /api/sessions/{id}` | stop a transcode session (idle sessions are auto-reaped) |
-| `POST/GET /api/progress` | playback position per (item, client) |
+| `POST/GET /api/progress` | playback position per (item, client): `position_seconds` for video/audio; for text also `locator` (an EPUB CFI), `fraction` (0..1, the book's own percentage; 400 outside that range) and optional `section` (1-based spine index, derived from the CFI when omitted). GET returns the text fields only when the row holds a locator |
 | `GET/POST /api/users` | list / idempotently create profile names (clients use the name as `client_id`) |
 | `POST /api/telemetry` | append any JSON object to `data/telemetry.jsonl`; always 200 |
 
@@ -267,7 +291,8 @@ item route:
 ```
 #/item/<id>?t=<start_seconds>&end=<end_seconds>
            &until=<item_id>           optional: an episode RUN
-           ?from=<locator>&to=<locator>  text passages (future epub reader)
+#/item/<id>?from=<locator>&to=<locator>
+                                      a TEXT passage: a run of a book
 #/show/<title>?ep=S02E05&t=…&end=…[&until=S02E07]
                                       the same, addressed by episode code
 ```
@@ -278,9 +303,18 @@ item route:
   through the episodes and stops after the item with that id. `t` applies to
   the first item only; `end`, if given, applies within the last item —
   omit it to let that episode play out.
-- `from` / `to` are locators for text passages. They are parsed and carried
-  through the route today so the grammar is one thing; the player gives them
-  no behaviour until the reader lands.
+- `from` / `to` are **locators** for text passages, three spellings of a
+  place in a book: `cfi:<epub cfi>` (a point, the form the reader's own
+  progress speaks — a bare `epubcfi(…)` is accepted as the same), `ch:<n>`
+  (the n-th spine section, 1-based, as `media_info.chapters` lists them) or
+  `pct:<0..1>` (the book's own percentage). The reader opens at `from` and
+  stops at `to`. A `ch:<n>` bound is inclusive — the passage runs through
+  section n and ends when the reader would turn into n+1, the way `until`
+  plays its episode out; `cfi:` and `pct:` bounds are points, reached when
+  the page shown starts at or after them. The book ending ends any passage.
+  Either bound alone is fine (`from` alone: start there, read on; `to`
+  alone: from the beginning to there). A `to` before a `from` of the same
+  spelling is dropped like an `end` before `t`.
 - The show form is for a minter that knows a show's link and a person's
   spelling of an episode but no item ids: `ep=S02E05` (any case) names the
   episode, `until=S02E07` names the last episode of a run. It is resolved
@@ -295,6 +329,9 @@ Examples:
 #/item/51?t=4740&end=5070              the scene from 1:19:00 to 1:24:30 of item 51
 #/item/58?t=120&until=59               episodes 58 and 59, skipping 58's first two minutes
 #/show/Ninjago?ep=S02E05&until=S02E06  the same run, spelled by show and episode
+#/item/77?from=ch%3A3&to=ch%3A4        chapters 3 and 4 of book 77
+#/item/77?from=pct%3A0.4&to=cfi%3Aepubcfi(%2F6%2F14!%2F4%2F2)
+                                       from 40% of the book to a marked place in section 7
 ```
 
 Three rules hold for every passage session:
@@ -337,10 +374,19 @@ up-next has moved to a later one makes a run: the link carries
 player closes or another work starts. Nothing is stored: a passage is its
 URL, and the household's day planner is where it is kept.
 
-`web/passage.js` holds the grammar (`parsePassage`, `passageQuery`), the end
-predicate and the marking logic (`snapToChapter`, `markBounds`,
-`passageLink`) as pure functions; `node --test web/passage_test.mjs` runs
-their tests without a build step.
+The reader keeps the same three rules for a text passage: it opens at
+`from` (never at the saved locator), shows *End of the passage* on reaching
+`to` and refuses to turn further, and reports no place while the passage is
+on — its position leaves through the same `saveProgress()` gate the player
+uses, which is closed while a passage is set. **Keep reading** and **Back**
+are the same two ways out.
+
+`web/passage.js` holds the grammar (`parsePassage`, `passageQuery`, and for
+text `parseLocator`, `sectionFromCFI`, `locatorSection`), both end
+predicates (`passageEnded`, `textPassageEnded`) and the marking logic
+(`snapToChapter`, `markBounds`, `passageLink`) as pure functions; `node
+--test web/passage_test.mjs` runs their tests without a build step.
+`web/reader.js` resolves locators against the open book.
 
 ## Casting
 
@@ -382,3 +428,6 @@ go test ./...
 Decision-engine tests cover the canonical matrix cases (e.g. 4K HEVC HDR10 +
 h264-only client → tone-mapped, downscaled h264 transcode); pipeline tests
 pin the FFmpeg argv contract (filter order, seek-before-input, copy paths).
+The works tests table the fraction law for every shape, books included
+(`ch. 7 · 34%`); the store tests migrate a pre-locator `state.db`; and
+`node --test web/passage_test.mjs` covers the passage and locator grammar.

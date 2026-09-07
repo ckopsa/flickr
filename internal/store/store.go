@@ -552,6 +552,10 @@ func OpenState(path string) (*State, error) {
 	// seq: change-feed sequence for playback rows, its own counter in this
 	// database's meta table (state.db and library.db never share a tx).
 	db.Exec(`ALTER TABLE playback_state ADD COLUMN seq INTEGER NOT NULL DEFAULT 0`)
+	// locator: a place in a text (model.Locator as JSON), NULL for every row
+	// that is a clock position. Rows from before the column read as NULL,
+	// which is correct — nothing had a locator to report then.
+	db.Exec(`ALTER TABLE playback_state ADD COLUMN locator TEXT`)
 	if _, err := db.Exec(metaSchema); err != nil {
 		return nil, err
 	}
@@ -583,7 +587,24 @@ func (s *State) CreateUser(name string) error {
 	return err
 }
 
+// SetPosition records a clock position (video, audio): the row's locator is
+// cleared, since a place in a text and a place on a clock are one place.
 func (s *State) SetPosition(itemID int64, clientID string, pos float64) error {
+	return s.SetPlace(itemID, clientID, pos, nil)
+}
+
+// SetPlace records where a profile is in an item: a clock position and, for
+// text, the locator (stored as JSON in the locator column; NULL when nil).
+// One upsert either way — the row is the place, whatever its unit.
+func (s *State) SetPlace(itemID int64, clientID string, pos float64, loc *model.Locator) error {
+	var locator any
+	if loc != nil {
+		b, err := json.Marshal(loc)
+		if err != nil {
+			return err
+		}
+		locator = string(b)
+	}
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
@@ -594,40 +615,43 @@ func (s *State) SetPosition(itemID int64, clientID string, pos float64) error {
 		return err
 	}
 	if _, err := tx.Exec(`
-		INSERT INTO playback_state (item_id, client_id, position_seconds, seq, updated_at)
-		VALUES (?, ?, ?, ?, ?)
+		INSERT INTO playback_state (item_id, client_id, position_seconds, locator, seq, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?)
 		ON CONFLICT(item_id, client_id) DO UPDATE SET
 			position_seconds=excluded.position_seconds,
+			locator=excluded.locator,
 			seq=excluded.seq,
 			updated_at=excluded.updated_at`,
-		itemID, clientID, pos, seq, float64(time.Now().UnixMilli())/1000); err != nil {
+		itemID, clientID, pos, locator, seq, float64(time.Now().UnixMilli())/1000); err != nil {
 		return err
 	}
 	return tx.Commit()
 }
 
-func (s *State) GetPosition(itemID int64, clientID string) (float64, error) {
-	var pos float64
-	err := s.db.QueryRow(`SELECT position_seconds FROM playback_state WHERE item_id=? AND client_id=?`,
-		itemID, clientID).Scan(&pos)
-	if err == sql.ErrNoRows {
-		return 0, nil
+// GetPosition returns the profile's row for the item, or the zero Position
+// (0 seconds, nil locator) when there is none.
+func (s *State) GetPosition(itemID int64, clientID string) (Position, error) {
+	ps, err := s.queryPositions(` WHERE item_id=? AND client_id=?`, itemID, clientID)
+	if err != nil || len(ps) == 0 {
+		return Position{}, err
 	}
-	return pos, err
+	return ps[0], nil
 }
 
 // Position is one playback-state row: where one profile (client_id) is in
-// one item, plus the change seq the feed cursors on.
+// one item, plus the change seq the feed cursors on. Locator is set only for
+// text, where the place is a CFI and a fraction rather than seconds.
 type Position struct {
 	ItemID          int64
 	ClientID        string
 	PositionSeconds float64
+	Locator         *model.Locator
 	UpdatedAt       float64
 	Seq             int64
 }
 
 func (s *State) queryPositions(where string, args ...any) ([]Position, error) {
-	rows, err := s.db.Query(`SELECT item_id, client_id, position_seconds, updated_at, seq FROM playback_state`+where, args...)
+	rows, err := s.db.Query(`SELECT item_id, client_id, position_seconds, locator, updated_at, seq FROM playback_state`+where, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -635,8 +659,15 @@ func (s *State) queryPositions(where string, args ...any) ([]Position, error) {
 	var out []Position
 	for rows.Next() {
 		var p Position
-		if err := rows.Scan(&p.ItemID, &p.ClientID, &p.PositionSeconds, &p.UpdatedAt, &p.Seq); err != nil {
+		var loc sql.NullString
+		if err := rows.Scan(&p.ItemID, &p.ClientID, &p.PositionSeconds, &loc, &p.UpdatedAt, &p.Seq); err != nil {
 			return nil, err
+		}
+		if loc.Valid && loc.String != "" {
+			p.Locator = &model.Locator{}
+			if err := json.Unmarshal([]byte(loc.String), p.Locator); err != nil {
+				return nil, err
+			}
 		}
 		out = append(out, p)
 	}

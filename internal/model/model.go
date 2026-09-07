@@ -5,6 +5,8 @@
 // they can play; the server never hardcodes device-model knowledge.
 package model
 
+import "strings"
+
 const CapabilitySchemaVersion = 1
 
 // Medium is the broad class of a media file — what kind of player it needs
@@ -77,6 +79,50 @@ type Document struct {
 	Title    string `json:"title,omitempty"`
 	Creator  string `json:"creator,omitempty"`
 	Language string `json:"language,omitempty"`
+}
+
+// Locator is a place in a text — what position_seconds is to a film. A book
+// has no clock, so the reader reports the EPUB CFI of the page it shows,
+// the 1-based spine section that page is in (the "chapter" of the progress
+// text; 0 = unknown) and the book's own percentage as a fraction in [0,1].
+// It is stored as one JSON value in playback_state.locator, beside
+// position_seconds, and is nil for anything that is not text.
+type Locator struct {
+	CFI      string  `json:"cfi,omitempty"`
+	Section  int     `json:"section,omitempty"`
+	Fraction float64 `json:"fraction"`
+}
+
+// SectionFromCFI reads the spine position out of an EPUB CFI without any
+// knowledge of the book: the step after the package's spine element names
+// the itemref as an even child index, so "epubcfi(/6/14[ch07]!/4/2/1:0)" is
+// itemref 14/2 = the 7th spine item (1-based). Returns 0 when the string is
+// not a CFI with a spine step. The section a client sends explicitly wins
+// over this; it is the fallback for a client that reports only the CFI.
+func SectionFromCFI(cfi string) int {
+	s, ok := strings.CutPrefix(strings.TrimSpace(cfi), "epubcfi(/")
+	if !ok {
+		return 0
+	}
+	// Skip the first step (the spine element within the package document).
+	i := strings.IndexByte(s, '/')
+	if i < 0 {
+		return 0
+	}
+	n := 0
+	for _, c := range s[i+1:] {
+		if c < '0' || c > '9' {
+			break
+		}
+		n = n*10 + int(c-'0')
+		if n > 1<<20 {
+			return 0
+		}
+	}
+	if n < 2 || n%2 != 0 {
+		return 0
+	}
+	return n / 2
 }
 
 // AudioTrack is one audio stream. Default carries ffprobe's
