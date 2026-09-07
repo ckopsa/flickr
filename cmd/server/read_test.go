@@ -371,3 +371,43 @@ func TestReadSessionGolden(t *testing.T) {
 		})
 	}
 }
+
+// A book's pictures on a dark page are the book's choice, not a device's:
+// the format's default until somebody chooses, then that choice for every
+// profile and every reader — and a play session has no page to choose for.
+func TestBookDisplayIsTheBooksChoice(t *testing.T) {
+	_, h := fixtureServer(t)
+	epub := reading(t, h, idHillHouse, nil)
+	if d, _ := epub["display"].(map[string]any); d["images"] != "printed" || d["chosen"] != false {
+		t.Fatalf("an EPUB's default display = %v", epub["display"])
+	}
+	pdf := reading(t, h, idFlatland, nil)
+	if d, _ := pdf["display"].(map[string]any); d["images"] != "themed" || d["chosen"] != false {
+		t.Fatalf("a PDF's default display = %v", pdf["display"])
+	}
+
+	act, _ := epub["actions"].(map[string]any)["set_display"].(map[string]any)
+	if act == nil || act["href"] != epub["self"].(string)+"/display" {
+		t.Fatalf("set_display = %v", act)
+	}
+	w := post(t, h, act["href"].(string), map[string]any{"images": "themed"})
+	if w.Code != http.StatusOK {
+		t.Fatalf("set_display = %d: %s", w.Code, w.Body)
+	}
+	if d, _ := decode(t, w)["display"].(map[string]any); d["images"] != "themed" || d["chosen"] != true {
+		t.Errorf("the answered session's display = %v", d)
+	}
+	// Another profile, another session: the same book, the same choice.
+	again := reading(t, h, idHillHouse, map[string]any{"client_id": "sam"})
+	if d, _ := again["display"].(map[string]any); d["images"] != "themed" || d["chosen"] != true {
+		t.Errorf("the choice did not stand for the book: %v", again["display"])
+	}
+
+	w = post(t, h, act["href"].(string), map[string]any{"images": "sepia"})
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Errorf("a display that is neither = %d: %s", w.Code, w.Body)
+	}
+	if ct := w.Header().Get("Content-Type"); ct != "application/problem+json" {
+		t.Errorf("content-type = %q", ct)
+	}
+}

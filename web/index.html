@@ -142,7 +142,10 @@
      colour figure keeps its hues while the paper goes dark */
   .rd-dark .rd-view { background: #1b1d24; }
   .rd-dark .rd-canvas { background: #1b1d24; filter: invert(.91) hue-rotate(180deg); }
-  .rd-theme { font-size: 16px; line-height: 1; }
+  /* the book's own choice (session.display): as printed keeps a PDF's page white
+     under the dark chrome — a scan inverted would be a negative */
+  .rd-dark.rd-printed .rd-canvas { background: #fff; filter: none; }
+  .rd-theme, .rd-pictures { font-size: 16px; line-height: 1; }
   .rd-page { font-size: 13px; color: #9a9daa; white-space: nowrap; font-variant-numeric: tabular-nums; }
   .rd-page-in { width: 64px; font-size: 13px; padding: 4px 6px; border-radius: 6px; border: 1px solid #2a2c33; background: #14151a; color: inherit; }
   .rd-end button { margin-top: 10px; margin-right: 8px; }
