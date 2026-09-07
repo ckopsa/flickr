@@ -106,6 +106,10 @@ func TestPlaceOf(t *testing.T) {
 		{"fraction above one", progressInput{Locator: "x", Fraction: f(1.2)}, nil, true},
 		{"fraction below zero", progressInput{Locator: "x", Fraction: f(-0.1)}, nil, true},
 		{"negative section", progressInput{Locator: "x", Section: -1}, nil, true},
+		// A PDF's place: the page and its fraction, no CFI, no section.
+		{"page + fraction", progressInput{Page: 213, Fraction: f(0.5325)}, &model.Locator{Page: 213, Fraction: 0.5325}, false},
+		{"page alone", progressInput{Page: 1}, &model.Locator{Page: 1}, false},
+		{"negative page", progressInput{Page: -3, Fraction: f(0.1)}, nil, true},
 	} {
 		got, err := placeOf(tc.in)
 		if tc.bad {
@@ -139,6 +143,21 @@ func TestSectionFromCFI(t *testing.T) {
 	} {
 		if got := model.SectionFromCFI(cfi); got != want {
 			t.Errorf("SectionFromCFI(%q) = %d, want %d", cfi, got, want)
+		}
+	}
+}
+
+// The reader is handed a text item's bytes as the type its library expects:
+// pdf.js wants application/pdf, epub.js application/epub+zip; the extension
+// decides, case-insensitively, the way the scan admitted the file.
+func TestBookContentType(t *testing.T) {
+	for _, tc := range []struct{ key, want string }{
+		{"Books/A/B.epub", "application/epub+zip"},
+		{"Books/A/B.pdf", "application/pdf"},
+		{"Books/A/B.PDF", "application/pdf"},
+	} {
+		if got := bookContentType(tc.key); got != tc.want {
+			t.Errorf("bookContentType(%q) = %q, want %q", tc.key, got, tc.want)
 		}
 	}
 }

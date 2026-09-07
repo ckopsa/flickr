@@ -10,11 +10,12 @@
 //                            episodes and stops after the item with that id
 //                            (`end` then applies within that last item)
 //     ?from=<locator>&to=<locator>
-//                            a TEXT passage: the reader (reader.js) opens at
-//                            from and stops at to. A locator is cfi:<epub
-//                            cfi>, ch:<n> (1-based spine section) or
-//                            pct:<0..1>; the grammar and the end predicate
-//                            are the text-locator functions below
+//                            a TEXT passage: the reader (reader.js, or
+//                            pdfreader.js for a PDF) opens at from and stops
+//                            at to. A locator is cfi:<epub cfi>, ch:<n>
+//                            (1-based spine section), pct:<0..1> or pg:<n>
+//                            (a PDF's 1-based page); the grammar and the end
+//                            predicate are the text-locator functions below
 //   #/show/<title>?ep=S02E05&t=…&end=…[&until=S02E07]
 //                            the same passage addressed by show and episode
 //                            code, for a minter that knows no item ids; it
@@ -269,12 +270,14 @@
   }
 
   // --- text locators ---------------------------------------------------------
-  // A text passage's bounds are LOCATORS, three spellings of a place in a
-  // book: 'cfi:<epub cfi>' (a point, as the reader itself reports it),
+  // A text passage's bounds are LOCATORS, four spellings of a place in a
+  // book: 'cfi:<epub cfi>' (a point, as the EPUB reader itself reports it),
   // 'ch:<n>' (the n-th spine section, 1-based, the way media_info.chapters
-  // lists them) or 'pct:<0..1>' (the book's own percentage). A bare
+  // lists them), 'pct:<0..1>' (the book's own percentage) or 'pg:<n>' (the
+  // n-th page of a PDF, 1-based, as the PDF reader reports it). A bare
   // 'epubcfi(…)' is read as a cfi locator too — the reader's progress speaks
-  // that form. Anything else is no locator.
+  // that form. Anything else is no locator. cfi and ch mean nothing to a
+  // PDF and pg nothing to an EPUB: the reader that gets one ignores it.
   function parseLocator(s) {
     if (s == null) return null;
     const v = String(s).trim();
@@ -284,7 +287,7 @@
     if (i < 0) return null;
     const kind = v.slice(0, i).toLowerCase(), rest = v.slice(i + 1);
     if (kind === 'cfi') return /^epubcfi\(.*\)$/.test(rest) ? { kind, cfi: rest } : null;
-    if (kind === 'ch') return /^[1-9]\d*$/.test(rest) ? { kind, n: Number(rest) } : null;
+    if (kind === 'ch' || kind === 'pg') return /^[1-9]\d*$/.test(rest) ? { kind, n: Number(rest) } : null;
     if (kind === 'pct') return /^(0(\.\d+)?|1(\.0+)?|\.\d+)$/.test(rest) ? { kind, f: Number(rest) } : null;
     return null;
   }
@@ -294,6 +297,7 @@
     if (loc.kind === 'cfi') return 'cfi:' + loc.cfi;
     if (loc.kind === 'ch') return 'ch:' + loc.n;
     if (loc.kind === 'pct') return 'pct:' + loc.f;
+    if (loc.kind === 'pg') return 'pg:' + loc.n;
     return null;
   }
   // The 1-based spine section a CFI points into, read off its spine step:
@@ -309,7 +313,8 @@
   // The spine section (1-based) a locator lands in, for a book of `sections`
   // spine items: ch is itself, pct is proportional (1 lands in the last
   // section), cfi is read off the string; clamped into [1, sections]. null
-  // when it cannot be told, or the book has no sections.
+  // when it cannot be told (a page says nothing about sections), or the book
+  // has no sections.
   function locatorSection(loc, sections) {
     if (!loc || !(sections > 0)) return null;
     let n = null;
@@ -327,9 +332,12 @@
   }
   // The reader's end predicate. `to` is a parsed locator; `pos` is where the
   // reader is — { cfi, section (1-based), pct (0..1), atEnd } for the page
-  // shown. A 'ch:n' bound is INCLUSIVE: the passage runs through section n
-  // and ends once the reader is past it, the way an episode run's `until`
-  // plays the named episode out. 'cfi' and 'pct' bounds are points, reached
+  // shown, plus { page (1-based) } from the PDF reader. A 'ch:n' bound is
+  // INCLUSIVE: the passage runs through section n and ends once the reader
+  // is past it, the way an episode run's `until` plays the named episode
+  // out. A 'pg:n' bound is inclusive too, and a page is its own last page:
+  // the passage ends once page n is the page shown — it stays on view, the
+  // reader just turns no further. 'cfi' and 'pct' bounds are points, reached
   // when the shown page starts at or after them. The book ending ends any
   // passage. compareCFI orders two CFI strings (-1/0/1) and comes from the
   // reader (epub.js's EpubCFI.compare); without it a cfi bound never fires.
@@ -337,6 +345,7 @@
     if (!to || !pos) return false;
     if (pos.atEnd) return true;
     if (to.kind === 'ch') return typeof pos.section === 'number' && pos.section > to.n;
+    if (to.kind === 'pg') return typeof pos.page === 'number' && pos.page >= to.n;
     if (to.kind === 'pct') return typeof pos.pct === 'number' && Number.isFinite(pos.pct) && pos.pct >= to.f;
     if (to.kind === 'cfi') {
       if (typeof pos.cfi !== 'string' || typeof compareCFI !== 'function') return false;

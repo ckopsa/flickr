@@ -56,8 +56,9 @@ const IdentityVersion = 5
 // mediumExts is the admitted-extension table: which object keys the scan
 // picks up at all, and which medium each one is. Everything else in the
 // bucket (artwork, .nfo files, checksums) is ignored, as it always was.
-// .pdf is deliberately absent: a PDF has no reading order to project into
-// sections and needs its own renderer — a later bead admits it.
+// Text is an EPUB or a PDF; the two are probed and read differently (a
+// spine of sections against a run of pages) but are the same medium and the
+// same kind of tile.
 var mediumExts = map[string]string{
 	// video: the original set, unchanged
 	".mkv": model.MediumVideo, ".mp4": model.MediumVideo, ".m4v": model.MediumVideo,
@@ -68,7 +69,7 @@ var mediumExts = map[string]string{
 	".flac": model.MediumAudio, ".opus": model.MediumAudio, ".ogg": model.MediumAudio,
 	".aac": model.MediumAudio, ".wav": model.MediumAudio,
 	// text
-	".epub": model.MediumText,
+	".epub": model.MediumText, ".pdf": model.MediumText,
 }
 
 // mediumOf reports an object key's medium from its extension, or "" when the
@@ -381,11 +382,12 @@ func (s *Scanner) probeStream(ctx context.Context, objectKey string) (*model.Med
 	return Probe(ctx, u.String(), objectKey)
 }
 
-// probeText downloads an EPUB to a temporary file and reads its package
-// metadata. A zip needs random access (central directory at the end, then
-// each member), which a streamed object cannot give; a temp file turns one
-// sequential download into a ReaderAt and is gone before the function
-// returns.
+// probeText downloads a text file to a temporary file and reads what it says
+// about itself. Both text formats want random access — a zip's central
+// directory sits at the end, then each member; a PDF's cross-reference sits
+// at the end, then each object — which a streamed object cannot give; a temp
+// file turns one sequential download into a ReaderAt and is gone before the
+// function returns.
 func (s *Scanner) probeText(ctx context.Context, objectKey string) (*model.MediaInfo, error) {
 	f, size, err := s.fetchTemp(ctx, objectKey)
 	if err != nil {
@@ -393,14 +395,35 @@ func (s *Scanner) probeText(ctx context.Context, objectKey string) (*model.Media
 	}
 	defer os.Remove(f.Name())
 	defer f.Close()
-	return ProbeEpub(f, size)
+	return ProbeText(f, size, objectKey)
 }
 
-// ReadEpubCover downloads a text object and returns its cover image and
+// ProbeText probes a text file by its extension: .pdf through ProbePDF,
+// everything else (the only other admitted text extension is .epub) through
+// ProbeEpub.
+func ProbeText(r io.ReaderAt, size int64, objectKey string) (*model.MediaInfo, error) {
+	if IsPDF(objectKey) {
+		return ProbePDF(r, size)
+	}
+	return ProbeEpub(r, size)
+}
+
+// IsPDF reports whether an object key names a PDF — the one text format that
+// is not an EPUB, read page by page rather than section by section.
+func IsPDF(objectKey string) bool {
+	return strings.EqualFold(path.Ext(objectKey), ".pdf")
+}
+
+// ReadTextCover downloads a text object and returns its cover image and
 // media type, the way probing reads its package (a zip wants the whole
-// file). ErrNoCover when the book names none. The server caches the result
+// file). ErrNoCover when the book names none — which a PDF never does: it
+// has no manifest to name one, and its first page is the reader's to draw,
+// so the answer comes without a download. The server caches the result
 // under data/covers/, so this runs once per book.
-func (s *Scanner) ReadEpubCover(ctx context.Context, objectKey string) ([]byte, string, error) {
+func (s *Scanner) ReadTextCover(ctx context.Context, objectKey string) ([]byte, string, error) {
+	if IsPDF(objectKey) {
+		return nil, "", ErrNoCover
+	}
 	f, size, err := s.fetchTemp(ctx, objectKey)
 	if err != nil {
 		return nil, "", err
@@ -418,7 +441,7 @@ func (s *Scanner) fetchTemp(ctx context.Context, objectKey string) (*os.File, in
 		return nil, 0, fmt.Errorf("get: %w", err)
 	}
 	defer obj.Close()
-	f, err := os.CreateTemp("", "flickr-epub-*")
+	f, err := os.CreateTemp("", "flickr-text-*")
 	if err != nil {
 		return nil, 0, err
 	}
@@ -704,7 +727,8 @@ var extrasDirs = map[string]bool{
 //     artist, Title the ALBUM (the work), Part the track number and
 //     TrackTitle the name after it ("Title").
 //   - Books/<Author>/<Title>.epub and Books/<Author>/<Title>/<file>.epub are
-//     kind "book", the title from the file or the directory respectively.
+//     kind "book", the title from the file or the directory respectively
+//     (.pdf the same: the extension is not part of the grammar).
 //
 // A trailing "(Year)" on the title splits off into Year in all three, and
 // anything under a category that fits none of these shapes still resolves to

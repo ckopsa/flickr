@@ -771,9 +771,11 @@ func (s *server) handleStopSession(w http.ResponseWriter, r *http.Request) {
 }
 
 // progressInput is a POST /api/progress body. Video and audio send seconds;
-// the reader sends the text fields — the CFI of the page it shows, the
-// book's own percentage, and the 1-based spine section (derived from the CFI
-// when omitted) — and the row keeps whichever unit was sent last.
+// the reader sends the text fields — for an EPUB the CFI of the page it
+// shows, the book's own percentage, and the 1-based spine section (derived
+// from the CFI when omitted); for a PDF the 1-based page and the same
+// fraction (page over page count) — and the row keeps whichever unit was
+// sent last.
 type progressInput struct {
 	ItemID   int64    `json:"item_id"`
 	ClientID string   `json:"client_id"`
@@ -781,6 +783,7 @@ type progressInput struct {
 	Locator  string   `json:"locator"`
 	Fraction *float64 `json:"fraction"`
 	Section  int      `json:"section"`
+	Page     int      `json:"page"`
 }
 
 // progressOutput is GET /api/progress: the seconds always, the text fields
@@ -790,18 +793,19 @@ type progressOutput struct {
 	Locator         string   `json:"locator,omitempty"`
 	Fraction        *float64 `json:"fraction,omitempty"`
 	Section         int      `json:"section,omitempty"`
+	Page            int      `json:"page,omitempty"`
 }
 
 // placeOf turns the text fields of a progress write into a Locator — nil
 // when none was sent, so the write is a plain clock position. A fraction
-// outside [0,1] or a negative section is a client error; a locator string
-// that is not a CFI is stored as sent (the reader owns that grammar), just
-// without a derived section.
+// outside [0,1], a negative section or a negative page is a client error; a
+// locator string that is not a CFI is stored as sent (the reader owns that
+// grammar), just without a derived section.
 func placeOf(in progressInput) (*model.Locator, error) {
-	if in.Locator == "" && in.Fraction == nil && in.Section == 0 {
+	if in.Locator == "" && in.Fraction == nil && in.Section == 0 && in.Page == 0 {
 		return nil, nil
 	}
-	loc := &model.Locator{CFI: in.Locator, Section: in.Section}
+	loc := &model.Locator{CFI: in.Locator, Section: in.Section, Page: in.Page}
 	if in.Fraction != nil {
 		f := *in.Fraction
 		if !(f >= 0 && f <= 1) { // also rejects NaN
@@ -811,6 +815,9 @@ func placeOf(in progressInput) (*model.Locator, error) {
 	}
 	if loc.Section < 0 {
 		return nil, fmt.Errorf("section %d out of range (want a 1-based spine index)", loc.Section)
+	}
+	if loc.Page < 0 {
+		return nil, fmt.Errorf("page %d out of range (want a 1-based page number)", loc.Page)
 	}
 	if loc.Section == 0 {
 		loc.Section = model.SectionFromCFI(loc.CFI)
@@ -847,15 +854,27 @@ func (s *server) handleGetProgress(w http.ResponseWriter, r *http.Request) {
 	out := progressOutput{PositionSeconds: p.PositionSeconds}
 	if p.Locator != nil {
 		f := p.Locator.Fraction
-		out.Locator, out.Fraction, out.Section = p.Locator.CFI, &f, p.Locator.Section
+		out.Locator, out.Fraction, out.Section, out.Page = p.Locator.CFI, &f, p.Locator.Section, p.Locator.Page
 	}
 	writeJSON(w, out)
 }
 
+// bookContentType is the media type the reader is handed a text item's bytes
+// as: application/pdf for a PDF, application/epub+zip for the rest — by
+// extension, the same rule that admitted the file to the scan.
+func bookContentType(objectKey string) string {
+	if scanner.IsPDF(objectKey) {
+		return "application/pdf"
+	}
+	return "application/epub+zip"
+}
+
 // handleBook streams a text item's bytes to the reader. The MinIO object is
 // a seekable reader, so http.ServeContent answers Range requests (and
-// If-Modified-Since) itself and only the bytes asked for leave the bucket.
-// 415 for anything that is not text — a film is not a book to open.
+// If-Modified-Since) itself and only the bytes asked for leave the bucket —
+// which is how pdf.js reads a PDF: the cross-reference first, then the
+// objects of the page shown. 415 for anything that is not text — a film is
+// not a book to open.
 func (s *server) handleBook(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
@@ -882,7 +901,7 @@ func (s *server) handleBook(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, 502, fmt.Errorf("object %s: %w", item.ObjectKey, err))
 		return
 	}
-	w.Header().Set("Content-Type", "application/epub+zip")
+	w.Header().Set("Content-Type", bookContentType(item.ObjectKey))
 	http.ServeContent(w, r, path.Base(item.ObjectKey), st.LastModified, obj)
 }
 
@@ -1144,7 +1163,7 @@ func (s *server) ensureCover(ctx context.Context, id int64) bool {
 		}
 		return true
 	case model.MediumText:
-		data, _, err := s.scanner.ReadEpubCover(ctx, item.ObjectKey)
+		data, _, err := s.scanner.ReadTextCover(ctx, item.ObjectKey)
 		if errors.Is(err, scanner.ErrNoCover) {
 			return remember(err)
 		}

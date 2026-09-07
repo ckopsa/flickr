@@ -280,6 +280,11 @@ func TestIdentifyAudioAndText(t *testing.T) {
 			"Books/Ursula K. Le Guin/The Left Hand of Darkness/left-hand.epub",
 			model.Identity{Kind: "book", Author: "Ursula K. Le Guin", Title: "The Left Hand of Darkness"},
 		},
+		// A PDF is a book by the same grammar: the extension is not read.
+		{
+			"Books/Donald Knuth/The TeXbook (1984).pdf",
+			model.Identity{Kind: "book", Author: "Donald Knuth", Title: "The TeXbook", Year: 1984},
+		},
 		// A leading number on a book's filename is part of its title, not a
 		// part number: "1984" is the book.
 		{
@@ -350,7 +355,8 @@ func TestMediumOf(t *testing.T) {
 		{"Audiobooks/A/B/01.m4b", model.MediumAudio},
 		{"Music/A/B/01.flac", model.MediumAudio},
 		{"Books/A/B.epub", model.MediumText},
-		{"Books/A/B.pdf", ""}, // a later bead
+		{"Books/A/B.pdf", model.MediumText},
+		{"Books/A/B.PDF", model.MediumText},
 		{"Movies/Cars/poster.jpg", ""},
 		{"Movies/Cars/Cars.en.srt", ""}, // sidecars are matched separately
 	} {

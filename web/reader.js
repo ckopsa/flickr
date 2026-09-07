@@ -9,6 +9,9 @@
 //   Reader.isOpen(id)         is this item open in the pane?
 //   Reader.passage()          the passage record the pane was opened with
 // Everything else — the book, the TOC, paging, the readout — lives here.
+// Reader is a facade over two panes sharing one container: this file's EPUB
+// pane, and the PDF pane in pdfreader.js, which a .pdf item is handed to
+// (see the bottom of this file). Both keep the contract above.
 //
 // Position leaves through opts.onPlace({ locator, fraction, section }), which
 // index.html routes into saveProgress(): the one gate for /api/progress, closed
@@ -25,7 +28,7 @@
   const PLACE_DELAY_MS = 800;   // debounce for position reports (a page turn per second is bursty)
   const LOCATION_CHARS = 1024;  // epub.js location granularity (chars per location)
 
-  let container = null, ui = null;
+  let container = null, ui = null, keysBound = false;
   let item = null, opts = null, book = null, rendition = null, compareCFI = null;
   let passage = null;           // the route passage the pane was opened with; null = normal reading
   let from = null, to = null;   // its bounds, parsed
@@ -38,7 +41,10 @@
   // --- the pane ---------------------------------------------------------------
 
   function build(c) {
-    if (ui && container === c) return;
+    // Built once per container — unless the PDF pane has since taken the
+    // container over, in which case this pane's elements are detached and
+    // are built anew.
+    if (ui && container === c && ui.title.isConnected) return;
     container = c;
     c.innerHTML =
       '<div class="rd-bar">' +
@@ -75,7 +81,7 @@
     ui.close.onclick = () => opts && opts.onBack && opts.onBack();
     ui.back.onclick = () => opts && opts.onBack && opts.onBack();
     ui.keep.onclick = keepReading;
-    document.addEventListener('keydown', onKey);
+    if (!keysBound) { document.addEventListener('keydown', onKey); keysBound = true; }
   }
 
   function onKey(e) {
@@ -210,7 +216,7 @@
   }
 
   function isOpen(id) {
-    return !!(ui && item && !container.hidden && (id == null || item.id === id));
+    return !!(ui && item && !container.hidden && ui.title.isConnected && (id == null || item.id === id));
   }
 
   // --- locations and the fraction --------------------------------------------
@@ -370,5 +376,35 @@
     if (lastLocation) onRelocated(lastLocation);
   }
 
-  root.Reader = { open, close, isOpen, passage: () => passage };
+  // --- the facade -------------------------------------------------------------
+  // A .pdf item is read page by page in the PDF pane (pdfreader.js); every
+  // other text item is an EPUB and opens here. The two share the container,
+  // so opening one closes the other, and index.html asks the facade, never
+  // a pane. A PDF with no PDF pane loaded gets one sentence, not an epub.js
+  // error about a zip.
+  function isPDF(it) {
+    const key = String(it && it.object_key || '');
+    return /\.pdf$/i.test(key) || !!(it && it.media_info && it.media_info.container === 'pdf');
+  }
+  function pdfPane() { return root.PDFReader || null; }
+  root.Reader = {
+    open(it, o) {
+      if (!isPDF(it)) {
+        if (pdfPane()) pdfPane().close();
+        return open(it, o);
+      }
+      close();
+      if (pdfPane()) return pdfPane().open(it, o);
+      item = it;
+      opts = o || {};
+      build(opts.container);
+      container.hidden = false;
+      ui.title.textContent = titleOf(it);
+      fail('The PDF pane is missing: web/pdfreader.js did not load.');
+      return undefined;
+    },
+    close() { close(); if (pdfPane()) pdfPane().close(); },
+    isOpen(id) { return isOpen(id) || !!(pdfPane() && pdfPane().isOpen(id)); },
+    passage() { return pdfPane() && pdfPane().isOpen() ? pdfPane().passage() : passage; },
+  };
 })(typeof window !== 'undefined' ? window : this);

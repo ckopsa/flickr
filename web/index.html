@@ -133,6 +133,11 @@
     border-radius: 10px; padding: 14px 18px; max-width: 340px; box-shadow: 0 8px 30px rgba(0,0,0,0.6); }
   .rd-end-title { font-size: 14px; font-weight: 600; }
   .rd-end-sub { font-size: 12px; color: #9a9daa; margin-top: 4px; }
+  /* the PDF pane (pdfreader.js): one page on a canvas, fit to the width, scrolled when taller */
+  .rd-pdf { overflow: auto; background: #3a3b40; padding: 6px; }
+  .rd-canvas { display: block; margin: 0 auto; background: #fff; box-shadow: 0 2px 12px rgba(0,0,0,0.5); }
+  .rd-page { font-size: 13px; color: #9a9daa; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .rd-page-in { width: 64px; font-size: 13px; padding: 4px 6px; border-radius: 6px; border: 1px solid #2a2c33; background: #14151a; color: inherit; }
   .rd-end button { margin-top: 10px; margin-right: 8px; }
   .rd-keep { background: #2a4a8a; border-color: #3a5da8; }
   .rd-keep:hover { background: #33579e; }
@@ -352,9 +357,14 @@
 <!-- the audio pane: audiobooks and albums through the same player -->
 <script src="audio.js"></script>
 <!-- the reader pane for text items: epub.js + JSZip vendored (LAN-only, no
-     CDN at read time), then reader.js; index.html hooks in via openReader() -->
+     CDN at read time), then reader.js; index.html hooks in via openReader().
+     pdf.js is an ES module that leaves `pdfjsLib` on window: a module script
+     runs after the page is parsed, and pdfreader.js looks the global up only
+     when a PDF is opened. reader.js is the facade over both panes. -->
 <script src="vendor/jszip.min.js"></script>
 <script src="vendor/epub.min.js"></script>
+<script type="module" src="vendor/pdf.min.mjs"></script>
+<script src="pdfreader.js"></script>
 <script src="reader.js"></script>
 <script>
 // ---------------------------------------------------------------------------
@@ -482,7 +492,7 @@ function displayTitle(it) {
 }
 function techLine(it) {
   const mi = it.media_info;
-  return `${fmtRes(mi)} · ${fmtSize(it.size)}${mi?.chapters?.length ? ` · ${mi.chapters.length} ch` : ''}`;
+  return `${fmtRes(mi)} · ${fmtSize(it.size)}${mi?.chapters?.length ? ` · ${mi.chapters.length} ch` : ''}${mi?.page_count ? ` · ${mi.page_count} p.` : ''}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -1310,6 +1320,7 @@ function renderDetail(item) {
   const mi = item.media_info;
   $('detail-tech').textContent = [
     mi?.container, fmtRes(mi), fmtSize(item.size),
+    mi?.page_count ? mi.page_count + ' pages' : null,
     mi?.duration_seconds ? fmtTime(mi.duration_seconds) : null,
     mi?.bitrate_bps ? (mi.bitrate_bps / 1e6).toFixed(1) + ' Mbps' : null,
     mi?.audio_channels ? mi.audio_channels + 'ch' : null,
@@ -1564,11 +1575,13 @@ function saveProgress(positionSeconds, place) {
 }
 
 // ---------------------------------------------------------------------------
-// text: the reader pane (reader.js). A book is read, not played, but it keeps
-// the player's contract: currentItem marks the pane open so a route change
+// text: the reader pane (reader.js; a .pdf goes to pdfreader.js behind the
+// same Reader facade). A book is read, not played, but it keeps the
+// player's contract: currentItem marks the pane open so a route change
 // closes it (closePlayer → Reader.close), `passage` gates saveProgress exactly
 // as for video, and the place is reported through saveProgress with a
-// locator instead of seconds. routePassage is the route's from/to (or null).
+// locator (an EPUB's CFI, or a PDF's page) instead of seconds. routePassage
+// is the route's from/to (or null).
 // ---------------------------------------------------------------------------
 function isText(it) { return it?.media_info?.medium === 'text'; }
 function openReader(item, routePassage) {

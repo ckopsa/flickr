@@ -43,7 +43,9 @@ type Progress struct {
 // audiobook reads like a movie. Finished at ≥ 0.9.
 // Books: the reader reports a locator — the page's CFI, its section and the
 // book's own percentage — and that fraction IS the progress ("ch. 7 · 34%",
-// 0.34; see bookProgress). A row without a locator (written before the
+// 0.34; see bookProgress). A PDF's locator is a page: "p. 213 / 400" and
+// page over the probed page count, or "p. 213" and the reader's own fraction
+// when the count is unknown. A row without a locator (written before the
 // reader existed) is a position acknowledged but not placed: fraction 0,
 // text "", status "active".
 func WorkProgress(w *Work, positions map[int64]store.Position) (Progress, bool) {
@@ -62,7 +64,7 @@ func WorkProgress(w *Work, positions map[int64]store.Position) (Progress, bool) 
 	}
 
 	if w.Kind == "book" {
-		return bookProgress(have, updated), true
+		return bookProgress(w, have, updated), true
 	}
 	if (w.Kind == "audiobook" || w.Kind == "album") && w.PartCount+w.TrackCount > 1 {
 		if pr, ok := partsProgress(w, positions, updated); ok {
@@ -142,12 +144,14 @@ func WorkProgress(w *Work, positions map[int64]store.Position) (Progress, bool) 
 }
 
 // bookProgress is the text derivation. A book has no clock, so the most
-// recent row's locator carries the fraction directly — the book's own
-// percentage as the reader measured it — and the text names the section
-// (1-based spine order, "ch.") and the percentage: "ch. 7 · 34%", or "34%"
-// alone when the section is unknown. Finished at ≥ 0.9 like every other
-// work. Without a locator the position is acknowledged but not placed.
-func bookProgress(have []store.Position, updated float64) Progress {
+// recent row's locator carries the place directly — the book's own
+// percentage as the reader measured it, or for a PDF the page — and the text
+// names the section (1-based spine order, "ch.") and the percentage: "ch. 7
+// · 34%", or "34%" alone when the section is unknown; for a PDF the page
+// over the count: "p. 213 / 400", or "p. 213" when the probe found no count.
+// Finished at ≥ 0.9 like every other work. Without a locator the position is
+// acknowledged but not placed.
+func bookProgress(w *Work, have []store.Position, updated float64) Progress {
 	best := have[0]
 	for _, p := range have[1:] {
 		if p.UpdatedAt > best.UpdatedAt {
@@ -157,17 +161,48 @@ func bookProgress(have []store.Position, updated float64) Progress {
 	if best.Locator == nil {
 		return Progress{Status: "active", UpdatedAt: updated}
 	}
-	frac := clamp01(best.Locator.Fraction)
+	it := itemOf(w, best.ItemID)
+	frac := textFraction(it, best.Locator)
 	status := "active"
 	if frac >= watchedAt {
 		status = "finished"
 	}
-	return Progress{Status: status, Fraction: frac, ProgressText: bookText(best.Locator), UpdatedAt: updated}
+	return Progress{Status: status, Fraction: frac, ProgressText: bookText(best.Locator, pageCountOf(it)), UpdatedAt: updated}
 }
 
-// bookText is "ch. <section> · <pct>%", or "<pct>%" when the section is
-// unknown; the percentage is rounded to the nearest whole number.
-func bookText(loc *model.Locator) string {
+// textFraction is a text place as a fraction of the work: a page over the
+// probed page count when the locator is a page and the count is known —
+// the server's own arithmetic, so a stale count in the row never wins over
+// the library's — else the fraction the reader reported, clamped.
+func textFraction(it *store.Item, loc *model.Locator) float64 {
+	if loc == nil {
+		return 0
+	}
+	if count := pageCountOf(it); loc.Page > 0 && count > 0 {
+		return fraction(float64(loc.Page), float64(count))
+	}
+	return clamp01(loc.Fraction)
+}
+
+// pageCountOf is the item's probed page count; 0 for anything but a PDF
+// whose page tree the probe could read.
+func pageCountOf(it *store.Item) int {
+	if it == nil || it.MediaInfo == nil {
+		return 0
+	}
+	return it.MediaInfo.PageCount
+}
+
+// bookText is "p. <page> / <count>" (or "p. <page>" without a count) for a
+// paged locator; else "ch. <section> · <pct>%", or "<pct>%" when the section
+// is unknown; the percentage is rounded to the nearest whole number.
+func bookText(loc *model.Locator, pageCount int) string {
+	if loc.Page > 0 {
+		if pageCount > 0 {
+			return fmt.Sprintf("p. %d / %d", loc.Page, pageCount)
+		}
+		return fmt.Sprintf("p. %d", loc.Page)
+	}
 	pct := fmt.Sprintf("%d%%", int(clamp01(loc.Fraction)*100+0.5))
 	if loc.Section > 0 {
 		return fmt.Sprintf("ch. %d · %s", loc.Section, pct)
@@ -382,14 +417,15 @@ func ContinueList(works []Work, positions []store.Position, max int) []ContinueE
 		w, it := itemWork[p.ItemID], items[p.ItemID]
 		dur := itemDuration(*it)
 		if p.Locator != nil {
-			// A text place: the fraction is the whole story. A finished book
-			// has nothing to advance to.
-			if p.Locator.Fraction >= watchedAt {
+			// A text place: the fraction is the whole story (a page over the
+			// count for a PDF). A finished book has nothing to advance to.
+			frac := textFraction(it, p.Locator)
+			if frac >= watchedAt {
 				continue
 			}
 			out = append(out, ContinueEntry{
 				ItemID: it.ID, WorkKey: key, Title: w.Title, Label: itemLabel(*it),
-				DurationSeconds: dur, Fraction: clamp01(p.Locator.Fraction), UpdatedAt: p.UpdatedAt,
+				DurationSeconds: dur, Fraction: frac, UpdatedAt: p.UpdatedAt,
 			})
 			continue
 		}
@@ -434,12 +470,12 @@ func ContinueList(works []Work, positions []store.Position, max int) []ContinueE
 
 // resumable says whether a playback row is a place anyone wants back: a
 // clock position of at least minResumeSeconds, or a text locator past the
-// opening — any fraction at all, or any section after the first (the cover,
-// the title page). Opening a book and closing it on its cover is the text
-// version of a three-second misclick.
+// opening — any fraction at all, or any section or page after the first (the
+// cover, the title page). Opening a book and closing it on its cover is the
+// text version of a three-second misclick.
 func resumable(p store.Position) bool {
 	if p.Locator != nil {
-		return p.Locator.Fraction > 0 || p.Locator.Section > 1
+		return p.Locator.Fraction > 0 || p.Locator.Section > 1 || p.Locator.Page > 1
 	}
 	return p.PositionSeconds >= minResumeSeconds
 }
