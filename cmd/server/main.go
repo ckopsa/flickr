@@ -64,6 +64,11 @@ type server struct {
 // trickplayDir is where per-item sprite-sheet sets live (data/trickplay/<id>/).
 const trickplayDir = "data/trickplay"
 
+// coversDir is where an audio item's embedded cover art is cached
+// (data/covers/<id>.jpg), extracted on first request; <id>.none records a
+// file that was asked and has no picture, so it is not asked again.
+const coversDir = "data/covers"
+
 func main() {
 	loadDotEnv(".env")
 	endpoint := envOr("MINIO_ENDPOINT", "192.168.1.40:9000")
@@ -150,6 +155,7 @@ func main() {
 	mux.HandleFunc("POST /api/items/{id}/enrich", srv.handleEnrich)
 	mux.HandleFunc("GET /api/items/{id}/subtitles/{file}", srv.handleSubtitle)
 	mux.HandleFunc("GET /api/items/{id}/poster", srv.handlePoster)
+	mux.HandleFunc("GET /api/items/{id}/cover", srv.handleCover)
 	mux.HandleFunc("GET /api/items/{id}/still", srv.handleStill)
 	mux.HandleFunc("GET /api/items/{id}/trickplay.json", srv.handleTrickplayIndex)
 	mux.HandleFunc("GET /api/items/{id}/trickplay/{file}", srv.handleTrickplaySheet)
@@ -426,11 +432,10 @@ func (s *server) itemAndDecision(w http.ResponseWriter, r *http.Request) (*store
 		httpErr(w, 409, fmt.Errorf("item has no media info (probe failed: %s)", item.ProbeError))
 		return nil, nil, nil, false
 	}
-	// The decision engine reasons about video streams; asked about an
-	// audiobook or a book it would order a transcode of a file that has no
-	// picture. Audio playback and the reader arrive in their own beads.
-	if m := item.MediaInfo.MediumOrVideo(); m != model.MediumVideo {
-		httpErr(w, 415, fmt.Errorf("%s items do not play yet (medium %q)", m, m))
+	// A book has no stream to decide about: the reader (bead flickr-9au)
+	// opens it, not the player. Audio items take the audio branch of Decide.
+	if m := item.MediaInfo.MediumOrVideo(); m == model.MediumText {
+		httpErr(w, 415, fmt.Errorf("text items do not play (medium %q) — they are read, not streamed", m))
 		return nil, nil, nil, false
 	}
 	var in decisionInput
@@ -498,7 +503,7 @@ func (s *server) handlePlay(w http.ResponseWriter, r *http.Request) {
 		// Seeking into a stream whose audio must be re-encoded needs an
 		// output-side trim (see SeekAudioPrerollSeconds), which requires
 		// decoded video too — upgrade a copy-video plan and say so.
-		if in.SeekSeconds > 0 && d.Target.AudioCodec != "" && d.Target.VideoCodec == "" {
+		if in.SeekSeconds > 0 && d.Target.AudioCodec != "" && d.Target.VideoCodec == "" && !d.Target.AudioOnly {
 			d.Target.VideoCodec = s.policy.TranscodeVideoCodec
 			d.Target.VideoBitrateBps = s.policy.TranscodeVideoBitrateBps
 			d.Trace = append(d.Trace, model.TraceStep{
@@ -958,6 +963,61 @@ func (s *server) handleGenerateTrickplay(w http.ResponseWriter, r *http.Request)
 
 func (s *server) handlePoster(w http.ResponseWriter, r *http.Request) {
 	s.serveItemImage(w, r, "data/posters", "no poster")
+}
+
+// handleCover serves an audio item's embedded cover art, extracted with
+// ffmpeg on first request and cached under data/covers/ thereafter — the
+// same on-demand discipline as subtitles and trickplay. An item with no
+// attached picture (recorded once, as <id>.none) and every non-audio item
+// fall back to the TMDB poster route, so a tile can ask for /cover without
+// knowing the item's medium and still get whatever artwork there is.
+func (s *server) handleCover(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		httpErr(w, 400, fmt.Errorf("bad id"))
+		return
+	}
+	if s.ensureCover(r.Context(), id) {
+		w.Header().Set("Content-Type", "image/jpeg")
+		http.ServeFile(w, r, coverPath(id))
+		return
+	}
+	s.serveItemImage(w, r, "data/posters", "no cover")
+}
+
+func coverPath(id int64) string {
+	return filepath.Join(coversDir, strconv.FormatInt(id, 10)+".jpg")
+}
+
+// ensureCover reports whether a cover image exists for the item, extracting
+// it if the item is audio and has not been asked before.
+func (s *server) ensureCover(ctx context.Context, id int64) bool {
+	if _, err := os.Stat(coverPath(id)); err == nil {
+		return true
+	}
+	none := filepath.Join(coversDir, strconv.FormatInt(id, 10)+".none")
+	if _, err := os.Stat(none); err == nil {
+		return false
+	}
+	item, err := s.library.GetItem(id)
+	if err != nil || item == nil || item.MediaInfo.MediumOrVideo() != model.MediumAudio {
+		return false
+	}
+	u, err := s.s3.PresignedGetObject(ctx, s.bucket, item.ObjectKey, time.Hour, url.Values{})
+	if err != nil {
+		log.Printf("cover: item %d: presign: %v", id, err)
+		return false
+	}
+	if err := pipeline.ExtractCover(ctx, u.String(), coverPath(id)); err != nil {
+		// No picture (or a broken one): remember, so the next tile render
+		// does not run ffmpeg again for the same answer.
+		log.Printf("cover: item %d (%s): none: %v", id, item.ObjectKey, err)
+		if mkErr := os.MkdirAll(coversDir, 0o755); mkErr == nil {
+			os.WriteFile(none, nil, 0o644)
+		}
+		return false
+	}
+	return true
 }
 
 // handleStill serves the cached TMDB episode still (jpeg or 404) written by

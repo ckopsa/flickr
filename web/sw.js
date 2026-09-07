@@ -7,9 +7,10 @@
 // treats those files as untitled movies and puts one tile on the grid per
 // featurette. v7 adds passage.js to the shell: index.html calls its
 // globals at parse time, so a v6 shell serving the new index without it
-// would throw before the router runs.
-const CACHE = 'flickr-shell-v7';
-const SHELL = ['/', '/index.html', '/passage.js', '/manifest.json', '/icon-192.png', '/icon-512.png'];
+// would throw before the router runs. v8 adds audio.js and audio.css the
+// same way: index.html's grid builder calls isAudioItem at render time.
+const CACHE = 'flickr-shell-v8';
+const SHELL = ['/', '/index.html', '/passage.js', '/audio.js', '/audio.css', '/manifest.json', '/icon-192.png', '/icon-512.png'];
 
 self.addEventListener('install', (e) => {
   e.waitUntil(

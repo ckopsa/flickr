@@ -368,3 +368,88 @@ func TestBurnSeekKeepsPrerollSplit(t *testing.T) {
 		t.Errorf("burn must survive seek jobs: %v", args)
 	}
 }
+
+// --- audio-only jobs (an audiobook part, a track) ---
+
+func TestAudioOnlyReencode(t *testing.T) {
+	j := Job{
+		InputURL:  "http://x/in.m4b",
+		Target:    model.TranscodeTarget{AudioOnly: true, AudioCodec: "aac", AudioBitrateBps: 192_000},
+		OutputDir: "/out",
+	}
+	s := argString(j)
+	for _, want := range []string{"-vn", "-map 0:a:0", "-af aresample=async=1", "-c:a aac", "-ac 2", "-b:a 192000", "-f hls", "seg%05d.ts", "/out/index.m3u8"} {
+		if !strings.Contains(s, want) {
+			t.Errorf("missing %q in: %s", want, s)
+		}
+	}
+	// No picture: nothing is mapped or encoded on the video side, and there
+	// is no ladder to master.
+	for _, bad := range []string{"0:v", "-c:v", "-vf", "-filter_complex", "-g ", "master.m3u8", "var_stream_map"} {
+		if strings.Contains(s, bad) {
+			t.Errorf("audio-only job must not carry %q: %s", bad, s)
+		}
+	}
+}
+
+func TestAudioOnlyCopy(t *testing.T) {
+	s := argString(Job{
+		InputURL:  "http://x/in.m4b",
+		Target:    model.TranscodeTarget{AudioOnly: true, AudioStreamOrdinal: 1},
+		OutputDir: "/out",
+	})
+	for _, want := range []string{"-vn", "-map 0:a:1", "-c:a copy"} {
+		if !strings.Contains(s, want) {
+			t.Errorf("missing %q in: %s", want, s)
+		}
+	}
+	if strings.Contains(s, "-af") || strings.Contains(s, "0:v") {
+		t.Errorf("copy job must not filter or map video: %s", s)
+	}
+}
+
+// Seeking an audio-only re-encode stays input-side: the pre-roll split exists
+// to line re-encoded audio up with decoded video, and there is no video.
+func TestAudioOnlySeekIsInputSide(t *testing.T) {
+	args := BuildArgs(Job{
+		InputURL:    "http://x/in.m4b",
+		Target:      model.TranscodeTarget{AudioOnly: true, AudioCodec: "aac"},
+		SeekSeconds: 4762,
+		OutputDir:   "/out",
+	})
+	ss, in := slices.Index(args, "-ss"), slices.Index(args, "-i")
+	if ss == -1 || ss > in || args[ss+1] != "4762.000" {
+		t.Errorf("want a single input-side seek to 4762.000: %v", args)
+	}
+	if slices.Index(args[in:], "-ss") != -1 {
+		t.Errorf("audio-only job must not add an output-side trim: %v", args)
+	}
+}
+
+// Hardware encoders are for pictures; an audio job never initialises one.
+func TestAudioOnlyIgnoresHW(t *testing.T) {
+	hw := &HWAccel{Kind: "vaapi", Device: "/dev/dri/renderD128", Encoders: map[string]string{"h264": "h264_vaapi"}}
+	s := argString(Job{
+		InputURL:  "http://x/in.flac",
+		Target:    model.TranscodeTarget{AudioOnly: true, AudioCodec: "aac"},
+		OutputDir: "/out",
+		HW:        hw,
+	})
+	if strings.Contains(s, "vaapi") || strings.Contains(s, "hwupload") {
+		t.Errorf("audio-only job must not touch the hardware encoder: %s", s)
+	}
+}
+
+func TestCoverArgs(t *testing.T) {
+	s := strings.Join(CoverArgs("http://x/in.m4b", "/covers/7.tmp.jpg"), " ")
+	for _, want := range []string{"-i http://x/in.m4b", "-map 0:v:0", "-frames:v 1", "-an", "-f image2 /covers/7.tmp.jpg"} {
+		if !strings.Contains(s, want) {
+			t.Errorf("missing %q in: %s", want, s)
+		}
+	}
+	// Capital V would skip attached pictures — the only picture an audio
+	// file has.
+	if strings.Contains(s, "0:V") {
+		t.Errorf("cover extraction must map attached pictures: %s", s)
+	}
+}

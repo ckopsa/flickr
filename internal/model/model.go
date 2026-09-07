@@ -238,6 +238,11 @@ type TranscodeTarget struct {
 	SegmentFormat   string  `json:"segment_format,omitempty"` // "ts" (default) or "fmp4"
 	Detelecine      bool    `json:"detelecine,omitempty"`     // inverse-telecine before encoding
 	FPS             float64 `json:"fps,omitempty"`            // effective output fps (keyframe cadence)
+	// AudioOnly marks a transcode of an audio item: the job maps no video
+	// stream at all (-vn), never carries a ladder, and VideoCodec is always
+	// "" — which for an audio job means "there is no picture", not "copy the
+	// video". Set by the decision engine for medium "audio".
+	AudioOnly bool `json:"audio_only,omitempty"`
 	// AudioStreamOrdinal is which audio stream to feed the transcode
 	// (ffmpeg -map 0:a:N). 0 = first stream, the historical behavior.
 	// Only meaningful for transcode/remux jobs — direct play hands the

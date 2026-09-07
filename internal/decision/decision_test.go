@@ -585,3 +585,126 @@ func TestBurnIgnoresExternalAndUnknownOrdinals(t *testing.T) {
 		}
 	}
 }
+
+// --- audio items (medium "audio": audiobook parts, tracks) ---
+
+// A browser-like client that opens audio containers and plays the common
+// codecs; its HLS player takes only AAC in-stream.
+var audioBrowser = model.ClientCapabilities{
+	SchemaVersion:    1,
+	Containers:       []string{"mp4", "m4a", "m4b", "mp3", "flac", "ogg"},
+	VideoCodecs:      []string{"h264"},
+	AudioCodecs:      []string{"aac", "mp3", "flac", "opus"},
+	MaxAudioChannels: 2,
+	HLSAudioCodecs:   []string{"aac"},
+}
+
+func audioFile(container, codec string, channels int) model.MediaInfo {
+	return model.MediaInfo{
+		Medium: model.MediumAudio, Container: container, AudioCodec: codec,
+		AudioChannels: channels, DurationSeconds: 41400, BitrateBps: 128_000,
+	}
+}
+
+func TestAudioDecisions(t *testing.T) {
+	cellular := audioBrowser
+	cellular.MaxBitrateBps = 64_000
+	noTranscode := model.DefaultPolicy()
+	noTranscode.AllowTranscode = false
+
+	cases := []struct {
+		name       string
+		media      model.MediaInfo
+		caps       model.ClientCapabilities
+		policy     model.ServerPolicy
+		method     model.PlayMethod
+		audioCodec string // transcode target; "" = copy
+		failed     []string
+	}{
+		{"m4b aac direct-plays", audioFile("m4b", "aac", 2), audioBrowser, model.DefaultPolicy(), model.DirectPlay, "", nil},
+		{"flac direct-plays where taken", audioFile("flac", "flac", 2), audioBrowser, model.DefaultPolicy(), model.DirectPlay, "", nil},
+		// Chromecast v1 opens mp4 only: the m4b is remuxed, its AAC copied.
+		{"m4b remuxed for a container-bound client", audioFile("m4b", "aac", 2), chromecastV1, model.DefaultPolicy(), model.Transcode, "", []string{"container"}},
+		// mp3 plays directly on the v1 but the container check fails and its
+		// HLS player takes AAC only: re-encode.
+		{"mp3 re-encoded when not accepted in-stream", audioFile("mp3", "mp3", 2), chromecastV1, model.DefaultPolicy(), model.Transcode, "aac", []string{"container", "hls_audio"}},
+		{"unknown codec re-encoded", audioFile("ogg", "vorbis", 2), audioBrowser, model.DefaultPolicy(), model.Transcode, "aac", []string{"audio_codec"}},
+		{"too many channels re-encoded", audioFile("m4a", "aac", 6), audioBrowser, model.DefaultPolicy(), model.Transcode, "aac", []string{"audio_channels"}},
+		{"bitrate cap re-encodes", audioFile("mp3", "mp3", 2), cellular, model.DefaultPolicy(), model.Transcode, "aac", []string{"bitrate"}},
+		{"policy denies", audioFile("ogg", "vorbis", 2), audioBrowser, noTranscode, model.Deny, "", []string{"audio_codec"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			d := Decide(c.media, c.caps, c.policy)
+			if d.Method != c.method {
+				t.Fatalf("method %s, want %s (trace %+v)", d.Method, c.method, d.Trace)
+			}
+			failed := map[string]bool{}
+			for _, s := range d.Trace {
+				if !s.Passed {
+					failed[s.Check] = true
+				}
+				// An audio file raises no video question, and never a ladder.
+				switch s.Check {
+				case "video_codec", "resolution", "hdr", "hls_video", "abr_ladder", "segment_format":
+					t.Errorf("audio decision asked a video question: %+v", s)
+				}
+			}
+			for _, want := range c.failed {
+				if !failed[want] {
+					t.Errorf("trace missing failed check %q: %+v", want, d.Trace)
+				}
+			}
+			if d.Method != model.Transcode {
+				if d.Target != nil {
+					t.Errorf("%s must not carry a target", d.Method)
+				}
+				return
+			}
+			tg := d.Target
+			if !tg.AudioOnly || tg.VideoCodec != "" || len(tg.Renditions) != 0 || tg.Height != 0 || tg.Tonemap {
+				t.Errorf("audio target must be audio-only, no video, no ladder: %+v", tg)
+			}
+			if tg.AudioCodec != c.audioCodec {
+				t.Errorf("audio codec %q, want %q", tg.AudioCodec, c.audioCodec)
+			}
+			if tg.SegmentFormat != "ts" {
+				t.Errorf("audio HLS rides in TS, got %q", tg.SegmentFormat)
+			}
+		})
+	}
+}
+
+// A selected track steers the audio job like a video one, and the
+// substituted codec is what gets judged.
+func TestAudioSelectedTrack(t *testing.T) {
+	m := audioFile("m4b", "aac", 2)
+	m.AudioTracks = []model.AudioTrack{
+		{Ordinal: 0, Codec: "aac", Channels: 2},
+		{Ordinal: 1, Codec: "ac3", Channels: 6},
+	}
+	one := 1
+	d := DecideWith(m, audioBrowser, model.DefaultPolicy(), Options{AudioTrack: &one})
+	if d.Method != model.Transcode || d.Target.AudioStreamOrdinal != 1 || d.Target.AudioCodec != "aac" {
+		t.Errorf("selected ac3 track should re-encode stream 1: %s %+v", d.Method, d.Target)
+	}
+}
+
+// Stored rows from before the medium field existed are video and take the
+// video path unchanged — the audio branch keys off medium, not off a missing
+// video codec.
+func TestEmptyMediumStaysVideo(t *testing.T) {
+	d := Decide(h264Compatible(), chromecastV1, model.DefaultPolicy())
+	if d.Method != model.DirectPlay {
+		t.Fatalf("expected direct play, got %s", d.Method)
+	}
+	seen := false
+	for _, s := range d.Trace {
+		if s.Check == "video_codec" {
+			seen = true
+		}
+	}
+	if !seen {
+		t.Error("a video item must still be asked the video questions")
+	}
+}

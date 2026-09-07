@@ -8,6 +8,7 @@
 <link rel="manifest" href="/manifest.json">
 <link rel="icon" href="/icon-192.png" type="image/png">
 <link rel="apple-touch-icon" href="/icon-192.png">
+<link rel="stylesheet" href="/audio.css">
 <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.13/dist/hls.min.js"></script>
 <script src="https://www.gstatic.com/cv/js/sender/v1/cast_sender.js?loadCastFramework=1"></script>
 <style>
@@ -255,6 +256,19 @@
         <div id="detail-extras" hidden></div>
       </div>
     </div>
+    <!-- audio: cover, title, author and the work's parts or tracks (web/audio.js) -->
+    <div id="audio-pane" hidden>
+      <div id="audio-head">
+        <img id="audio-cover" alt="">
+        <div>
+          <div id="audio-title"></div>
+          <div id="audio-author"></div>
+          <div id="audio-part"></div>
+        </div>
+      </div>
+      <div id="audio-list-head" hidden></div>
+      <div id="audio-list" hidden></div>
+    </div>
     <div id="player-pane" hidden>
       <div id="now-playing"></div>
       <video id="video" controls></video>
@@ -306,6 +320,8 @@
 <!-- passage grammar + end detection: pure functions, shared with the node
      tests (web/passage_test.mjs) -->
 <script src="passage.js"></script>
+<!-- the audio pane: audiobooks and albums through the same player -->
+<script src="audio.js"></script>
 <script>
 // ---------------------------------------------------------------------------
 // identity: clientId IS the profile name (progress API is keyed by it)
@@ -356,7 +372,7 @@ function detectBrowserCaps() {
   if (v.canPlayType('video/mp4; codecs="av01.0.05M.08"')) codecs.push('av1');
   return {
     schema_version: 1,
-    containers: ['mp4', 'webm', 'm4v'],
+    containers: ['mp4', 'webm', 'm4v', 'm4a', 'm4b', 'mp3', 'flac', 'ogg', 'opus', 'wav'],
     video_codecs: codecs,
     audio_codecs: ['aac', 'mp3', 'opus', 'flac', 'vorbis'],
     max_width: 3840, max_height: 2160,
@@ -406,7 +422,10 @@ async function api(path, opts) {
 }
 
 function fmtSize(n) { return (n / 1e9).toFixed(2) + ' GB'; }
-function fmtRes(mi) { return mi ? `${mi.width}x${mi.height} ${mi.video_codec}/${mi.audio_codec}${mi.hdr ? ' ' + mi.hdr.toUpperCase() : ''}` : 'probe failed'; }
+function fmtRes(mi) {
+  if (mi?.medium === 'audio') return `${mi.audio_codec}${mi.audio_channels ? ' ' + mi.audio_channels + 'ch' : ''}`; // no picture to size
+  return mi ? `${mi.width}x${mi.height} ${mi.video_codec}/${mi.audio_codec}${mi.hdr ? ' ' + mi.hdr.toUpperCase() : ''}` : 'probe failed';
+}
 function fmtTime(s) {
   s = Math.max(0, Math.floor(s));
   const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), sec = s % 60;
@@ -756,23 +775,21 @@ $('audio').onchange = () => {
 // shows: title -> { eps, extras }; movies: one entry per non-episode title,
 // with its bonus material in movieExtras (item id -> extras). Bonus material
 // (kind "extra") never becomes a tile of its own — that is the whole point.
-// Identity kinds of the audio and text media (see model.Identity): kept out
-// of the video grid until their own panes exist.
-const NON_VIDEO_KINDS = new Set(['audiobook_part', 'track', 'book']);
+// Text items stay out of the grid until the reader (bead flickr-9au) exists;
+// audio items are grouped into their works by web/audio.js.
+const NON_VIDEO_KINDS = new Set(['book']);
 function buildLibrary(items) {
-  const movies = [], shows = new Map(), pending = [];
+  const movies = [], shows = new Map(), pending = [], audio = [];
   const group = name => {
     if (!shows.has(name)) shows.set(name, { eps: [], extras: [] });
     return shows.get(name);
   };
   for (const it of items) {
     const kind = it.identity?.kind, title = it.identity?.title;
-    // Audio and text items are not tiles here: the movie/show grid has no
-    // way to show or play them yet, and the catch-all below would file an
-    // audiobook part as a movie.
-    // TODO(flickr-q9v, flickr-9au): the audiobook/album pane and the reader
-    // pane take these over.
+    // A book is not a tile here (the catch-all below would file it as a
+    // movie); an audiobook part or a track is one of its work's members.
     if (NON_VIDEO_KINDS.has(kind)) continue;
+    if (isAudioItem(it)) { audio.push(it); continue; }
     if (kind === 'episode' && title) group(title).eps.push(it);
     else if (kind === 'extra' && title) pending.push(it);
     else movies.push(it);
@@ -807,7 +824,7 @@ function buildLibrary(items) {
     g.extras.sort(byKey);
   }
   for (const list of movieExtras.values()) list.sort(byKey);
-  return { movies, shows, movieExtras };
+  return { movies, shows, movieExtras, audio };
 }
 function isExtra(it) { return it?.identity?.kind === 'extra'; }
 // Show groups are keyed by the title as the show's own files spell it; an
@@ -828,7 +845,7 @@ function makeCard({ posterId, title, sub, tech, onClick }) {
   const img = document.createElement('img');
   img.loading = 'lazy';
   img.alt = '';
-  img.src = `/api/items/${posterId}/poster`;
+  img.src = artworkUrl(posterId); // poster, or an audio item's cover
   img.onerror = () => { // no poster: styled text tile with title/resolution
     img.remove();
     wrap.classList.add('text-tile');
@@ -880,7 +897,7 @@ function renderGrid() {
     $('lib-count').textContent = '';
     return;
   }
-  const { movies, shows } = buildLibrary(allItems);
+  const { movies, shows, audio } = buildLibrary(allItems);
   let count = 0;
   for (const [name, g] of [...shows.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
     if (q && !name.toLowerCase().includes(q)) continue;
@@ -917,6 +934,7 @@ function renderGrid() {
     }));
     count++;
   }
+  count += renderAudioCards(grid, audio, q); // one tile per audiobook / album
   $('lib-count').textContent = `${count} title${count === 1 ? '' : 's'}`;
   if (!count) grid.innerHTML = '<div id="empty">Nothing matches your search.</div>';
 }
@@ -964,7 +982,7 @@ function renderCwCards(entries) {
     const img = document.createElement('img');
     img.loading = 'lazy';
     img.alt = '';
-    img.src = `/api/items/${en.id}/poster`;
+    img.src = artworkUrl(en.id);
     img.onerror = () => {
       img.remove();
       wrap.classList.add('text-tile');
@@ -1222,7 +1240,7 @@ function renderDetail(item) {
   const poster = $('detail-poster');
   poster.hidden = false;
   poster.onerror = () => { poster.hidden = true; };
-  poster.src = `/api/items/${item.id}/poster`;
+  poster.src = artworkUrl(item.id);
   const isEp = item.identity?.kind === 'episode';
   $('detail-title').textContent = isEp
     ? `${displayTitle(item)} — ${epLabel(item)}`
@@ -1274,6 +1292,7 @@ function renderDetail(item) {
     exBox.appendChild(a);
   }
   exBox.hidden = !mExtras.length;
+  renderAudioDetail(item); // audio: author and parts list; hides itself otherwise
   $('detail-info').hidden = false;
   $('player-pane').hidden = true;
   showView('view-detail');
@@ -1291,6 +1310,7 @@ function closePlayer() {
   else { video.pause(); video.removeAttribute('src'); video.load(); }
   stopSession();
   currentItem = null;
+  audioMode(null);
   $('player-pane').hidden = true;
   $('detail-info').hidden = false;
   renderContinueWatching(); // playback session ended: refresh resume points
@@ -1313,6 +1333,7 @@ async function playItem(item, startAt) {
   $('player-pane').hidden = false;
   $('now-playing').textContent = itemTitle(item);
   updateEpisodeNav(item);
+  audioMode(item); // an audio item: cover in place of the picture, parts list beside it
   resetPassageEnd();
   let resume = startAt;
   // A passage starts where it says (or at the top): its route never resumes
@@ -1340,6 +1361,7 @@ async function playItem(item, startAt) {
 // episode navigation (prev/next) + auto-advance on natural end
 // ---------------------------------------------------------------------------
 function episodeSiblings(item) {
+  if (isAudioItem(item)) return audioSiblings(item); // parts and tracks: the same order, the same up-next
   if (item?.identity?.kind !== 'episode' || !item.identity.title) return null;
   const { shows } = buildLibrary(allItems); // already sorted by season, then episode
   const eps = shows.get(item.identity.title)?.eps; // extras are never siblings
@@ -1400,7 +1422,7 @@ function showUpNext(next) {
   hideUpNext();
   upNextTarget = next;
   const name = next.enrichment?.episode_title || baseName(next.object_key);
-  $('upnext-title').textContent = `Up next: ${epCode(next)} · ${name}`;
+  $('upnext-title').textContent = 'Up next: ' + (isAudioItem(next) ? partLabel(next) : `${epCode(next)} · ${name}`);
   $('upnext').hidden = false;
   $('upnext-play').hidden = autoplayNext;
   if (!autoplayNext) { // no countdown, no auto-advance: stays until clicked/dismissed
