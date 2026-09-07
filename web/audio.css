@@ -27,3 +27,14 @@ body.audio-mode video, body.audio-mode #thumb { display: none !important; }
 #artist-name { margin: 0; font-size: 22px; }
 #artist-sub { font-size: 13px; color: var(--muted); margin-top: 4px; }
 #artist-albums { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 16px; padding: 16px 20px 30px; }
+
+/* a phone: the record's head and the shelf are one column, and the album
+   tiles take the grid's narrow measure (see the breakpoint in index.html) */
+@media (max-width: 640px) {
+  #audio-head { flex-direction: column; gap: 12px; }
+  #audio-cover { width: 40vw; height: 40vw; max-width: 220px; align-self: center; }
+  #artist-head { gap: 12px; }
+  #artist-cover { width: 84px; height: 84px; }
+  #artist-name { font-size: 18px; }
+  #artist-albums { grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 12px; }
+}

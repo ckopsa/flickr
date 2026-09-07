@@ -282,6 +282,64 @@
   #toast { position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%); z-index: 90;
     background: #2e2616; color: var(--warn); border: 1px solid #a37a30; border-radius: 8px;
     padding: 10px 16px; font-size: 13px; max-width: min(680px, 92vw); box-shadow: 0 8px 30px rgba(0,0,0,0.6); }
+
+  /* --- the page on a wide screen, on a phone, and under a thumb -------------
+
+     Three rules in the order a window meets them. The measure first: past
+     1400px the header's rule still spans the glass but its content stops
+     widening. Then the phone, where the two-column shapes (poster beside
+     text, contents beside page) have no room to be two columns. Then the
+     pointer, which is not a question of width at all: a finger needs 44px
+     whatever the screen. */
+
+  /* very wide: content keeps its measure, borders still reach the edge */
+  header, #view, #stage { padding-inline: max(20px, calc((100% - 1400px) / 2)); }
+
+  @media (max-width: 640px) {
+    header, #view, #stage { padding-inline: 12px; }
+    header { padding-block: 8px; gap: 8px; }
+    header h1 { font-size: 14px; }
+    header h1 span { display: none; }  /* the subtitle is the first thing to go */
+    header select { max-width: 100%; }
+    #lib-bar { flex-wrap: wrap; padding-top: 12px; }
+    #search { width: 100%; max-width: none; }
+    #grid { grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 12px; }
+    .card .c-title { font-size: 12px; }
+    .cw-card { flex: 0 0 110px; }
+    .item.enriched img.still { width: 96px; }
+    /* the poster is a picture, not a column: it stacks and centres */
+    #detail-info { flex-direction: column; gap: 14px; }
+    #detail-poster { width: 40vw; max-width: 220px; align-self: center; }
+    #detail-body { min-width: 0; }
+    #detail-body h2 { font-size: 19px; }
+    /* the transport wraps onto as many rows as it needs, with room to hit */
+    #controls, #doc-controls { gap: 10px; }
+    #controls button, #doc-controls button { min-width: 48px; padding: 8px 14px; font-size: 14px; }
+    #controls input[type=range] { width: 100%; }
+    #passage-picker select { max-width: 100%; }
+    /* the contents list has no room beside the page, so it slides over it —
+       .rd-body is the positioned parent and reader.js already toggles hidden */
+    #reader-pane { height: calc(100vh - 120px); min-height: 0; }
+    .rd-bar { flex-wrap: wrap; }
+    .rd-toc { position: absolute; inset: 0 auto 0 0; z-index: 40; width: min(80vw, 300px);
+      max-width: none; margin-right: 0; background: #1b1d24; box-shadow: 0 10px 40px rgba(0,0,0,0.7); }
+    /* the corner panels have no corner to sit in */
+    #upnext, #passage-end, .rd-end { left: 12px; right: 12px; max-width: none; }
+  }
+
+  @media (pointer: coarse) {
+    button, select, input { min-height: 44px; }
+    .item { min-height: 44px; padding-top: 13px; padding-bottom: 13px; }
+    google-cast-launcher { width: 44px; height: 44px; }
+  }
+
+  /* where the keyboard is: one ring, the accent, on everything that acts.
+     [tabindex] catches whatever else is made focusable later. */
+  button:focus-visible, select:focus-visible, input:focus-visible, a:focus-visible,
+  .card:focus-visible, .cw-card:focus-visible, .item:focus-visible,
+  google-cast-launcher:focus-visible, [tabindex]:focus-visible {
+    outline: 2px solid #5b8def; outline-offset: 2px;
+  }
 </style>
 </head>
 <body>
