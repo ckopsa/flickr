@@ -195,6 +195,18 @@ a handful of architectural decisions (see design notes below):
 
 ## Library layout
 
+**The grid's order is the server's.** `GET /api/library` lists the tiles in
+one order and the browser draws them in it: **shows, films, artist shelves,
+audio works (audiobooks, and any album nobody filed under an artist), books**
+— each band in the works' own title order, artists by name. An album filed
+under an artist gets no tile of its own; its artist's shelf
+(`#/artist/<name>`, `GET /api/artists/{name}`) stands for it. Bonus material
+never earns a tile at all: it hangs off the show or the film it belongs to. A
+file the path could not place lands in the band its medium belongs to, so
+nothing in the bucket is invisible. The search box and the genre chips FILTER
+that list — they never regroup it (`libraryOrder`, `cmd/server/library.go`,
+table-tested).
+
 Identification reads the object key only (`scanner.Identify`), so the
 bucket's directory layout IS the catalogue. Category directories are
 matched case-insensitively, anywhere on the path (`csi-fs/Adult/Shows/…`
@@ -319,23 +331,27 @@ to demonstrate how the same file direct-plays or transcodes per client.
 
 flickr is becoming backend-driven: the server says what exists and what may
 be done to it, and the browser renders what it is told (`docs/hypermedia.md`
-has the envelope, the document table and the order of work). Four of those
+has the envelope, the document table and the order of work). Six of those
 documents are served now, beside — not instead of — everything above, and the
-router is the only part of the client that reads one yet:
+browser reads every one of them but the root: the router asks what a hash
+means, and the grid, the show pane, the detail pane and the artist's shelf
+are drawn from the answer and from the documents it points at:
 
 | Endpoint | Document |
 |---|---|
 | `GET /api/` | the root: the profile (`client_id`, query or cookie), links to library, continue, artists, works, items, scan and system, and the `scan` action. It is the only address a client is meant to know by heart |
 | `GET /api/items/{id}` | one item: its fields, `media_info` (chapters, sections, page count), its subtitle tracks with their `.vtt` addresses, artwork links, `links.work`/`prev`/`next` (the work's own order, bonus material aside), and the actions `play`, `read`, `progress`, `identity`, `reprobe`, `enrich` |
 | `GET /api/works/{key}` | one work: the fields `/api/works` publishes, `members` in order as item envelopes, `places` (the passage grammar's tokens with the labels a chip shows — `S03E22 0:00` · "S03E22 · Beach Games", `1:19:00` · "Let It Go", `ch. 7` · "The Cellar"), the profile's progress, and the actions `play`, `read`, `passage` |
+| `GET /api/library` | the grid: `items`, one tile per thing in the order the grid draws them (see *Library layout*), a `genre` facet for the chip row, and `count`. A tile is a small envelope — `self` and `links.self` (the work or artist document), `kind` (`work`/`artist`), `title`, `subtitle` ("3 seasons · 42 episodes", "Radiohead · 1997 · 12 tracks", "3 albums"), `tech`, `medium`, `work_kind`, `year`, `genres`, `item_id` (the member a tap opens) and `links.artwork`, the poster or the file's own cover, chosen here rather than in the browser |
+| `GET /api/artists/{name}` | one artist's shelf: `name` as the shelf spells it (the match is case-insensitive), `album_count`, `track_count`, `albums` in year order (the year-less last) as the same tiles with their covers, and `links.artwork`. An unknown name is a `no-such-artist` problem with the library as the remedy |
 | `GET /api/-/route?hash=` | what a hash means: `view` (`library`, `work`, `artist`, `item`), the `document` to render, the `passage` resolved to item ids and spine sections, and `autoplay`. See "Deep links and passages" |
 
 Every document is one JSON object with `self`, `kind`, `title`, its own
 fields, then `links`, `actions` (each with an `input` sketch and a `label`)
 and `unavailable` — the actions the kind has that this document does not
 afford, each with a reason in words. Errors are RFC 7807
-`application/problem+json` with a `remedy`. Two relations name documents that
-later steps serve (`/api/library`, `/api/-/passage`) and 404 until then.
+`application/problem+json` with a `remedy`. One relation still names a
+document a later step serves (`/api/-/passage`) and 404s until then.
 `internal/hyper` is the envelope; the goldens are
 `cmd/server/testdata/hyper/*.json` (`go test ./cmd/server -run TestHyperGolden -update`
 rewrites them).

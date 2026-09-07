@@ -244,18 +244,21 @@ func sectionCount(it *store.Item) int {
 	return len(it.MediaInfo.Chapters)
 }
 
-// libraryEnvelope stands in for hyper 3's library document (flickr-aq1),
-// which is not served yet: the address the shelf will answer at, and a link
-// to it. A client that follows the link renders the shelf the day that route
-// exists, and nothing here changes but this function.
+// libraryEnvelope is the library view's answer: the shelf's address and a
+// link to it, not the shelf itself. GET /api/library serves the whole grid
+// now (hyper 3, library.go), and the client keeps ONE copy of it rather than
+// a fresh one on every route — so what a route answer owes the library view
+// is where to look, which is this. Inlining the document is hyper 6's, when
+// the kernel renders every view from the answer alone.
 func libraryEnvelope() *hyper.Envelope {
 	return hyper.Doc("/api/library", "library", "Library").
 		Link("library", "/api/library", "Library")
 }
 
-// artistEnvelope is the same stand-in for GET /api/artists/{name}.
+// artistEnvelope is the same for GET /api/artists/{name}: the shelf is
+// served, and the answer names it.
 func artistEnvelope(name string) *hyper.Envelope {
-	href := "/api/artists/" + url.PathEscape(name)
+	href := artistHref(name)
 	return hyper.Doc(href, "artist", name).Link("artist", href, name)
 }
 

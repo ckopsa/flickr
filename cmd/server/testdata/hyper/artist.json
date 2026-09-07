@@ -1,0 +1,84 @@
+{
+  "self": "/api/artists/Radiohead",
+  "kind": "artist",
+  "title": "Radiohead",
+  "name": "Radiohead",
+  "album_count": 3,
+  "track_count": 4,
+  "albums": [
+    {
+      "self": "/api/works/album%3Aradiohead-pablo-honey-1993",
+      "kind": "work",
+      "title": "Pablo Honey",
+      "work_kind": "album",
+      "medium": "audio",
+      "author": "Radiohead",
+      "year": 1993,
+      "subtitle": "1993",
+      "tech": "album · flac · 3:28",
+      "item_id": 10,
+      "search": "pablo honey radiohead 01 you.flac",
+      "links": {
+        "artwork": {
+          "href": "/api/items/10/cover"
+        },
+        "self": {
+          "href": "/api/works/album%3Aradiohead-pablo-honey-1993",
+          "title": "Pablo Honey"
+        }
+      }
+    },
+    {
+      "self": "/api/works/album%3Aradiohead-ok-computer-1997",
+      "kind": "work",
+      "title": "OK Computer",
+      "work_kind": "album",
+      "medium": "audio",
+      "author": "Radiohead",
+      "year": 1997,
+      "subtitle": "1997 · 2 tracks",
+      "tech": "album · flac · 11:07",
+      "item_id": 5,
+      "search": "ok computer radiohead 01 airbag.flac",
+      "links": {
+        "artwork": {
+          "href": "/api/items/5/cover"
+        },
+        "self": {
+          "href": "/api/works/album%3Aradiohead-ok-computer-1997",
+          "title": "OK Computer"
+        }
+      }
+    },
+    {
+      "self": "/api/works/album%3Aradiohead-the-bends",
+      "kind": "work",
+      "title": "The Bends",
+      "work_kind": "album",
+      "medium": "audio",
+      "author": "Radiohead",
+      "tech": "album · flac · 4:19",
+      "item_id": 11,
+      "search": "the bends radiohead 01 planet telex.flac",
+      "links": {
+        "artwork": {
+          "href": "/api/items/11/cover"
+        },
+        "self": {
+          "href": "/api/works/album%3Aradiohead-the-bends",
+          "title": "The Bends"
+        }
+      }
+    }
+  ],
+  "links": {
+    "artwork": {
+      "href": "/api/items/10/cover"
+    },
+    "library": {
+      "href": "/api/library",
+      "title": "Library"
+    }
+  }
+}
+
