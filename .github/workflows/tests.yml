@@ -47,6 +47,10 @@ jobs:
     runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The shell/cache check below diffs against the pull request's base,
+          # so the whole history has to be here, not just the tip.
+          fetch-depth: 0
 
       # The toolchain version is whatever go.mod says (go 1.26.3), so a
       # toolchain bump is a one-line change in one place. setup-go's own
@@ -85,3 +89,22 @@ jobs:
 
       - name: go test
         run: go test -count=1 ./...
+
+      # The client. Its suites need no npm and no browser: the renderers are
+      # pure functions of a document, and the documents they are run over are
+      # the Go goldens themselves (web/testdata/hyper, kept in step with
+      # cmd/server/testdata/hyper by the go test above).
+      - name: js parses
+        run: |
+          set -euo pipefail
+          for f in web/*.js; do node --check "$f"; done
+
+      - name: node --test
+        run: node --test web/*_test.mjs
+
+      # flickr-ake: web/sw.js is cache-first for its SHELL list and sw.js is
+      # the only file a browser re-checks on its own, so a shell change with no
+      # CACHE bump never reaches a browser that has the old shell.
+      - name: the app shell and its cache version
+        if: github.event_name == 'pull_request'
+        run: scripts/shell-bump-check.sh "origin/${{ github.base_ref }}"
