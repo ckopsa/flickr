@@ -42,6 +42,9 @@
   let trickplay = null, trickplayItemId = null;
   let upNextTimer = null, upNextTarget = null;
   let autoplayNext = localStorage.autoplayNext !== 'off';
+  let scrubbing = false;         // a finger (or a mouse) is dragging the bar
+  let tapTimer = null, lastTapAt = 0, rippleTimer = null;
+  const DOUBLE_TAP_MS = 300;     // how long a single tap waits for its twin
 
   // --- capability profiles -----------------------------------------------------
   // What the PLAYING device can take. The dropdown simulates other devices;
@@ -101,24 +104,35 @@
     element = document.createElement('div');
     element.id = 'device';
     element.innerHTML =
-      '<video id="video" controls></video>' +
+      // No `controls`: the native bar is a SECOND transport, and its
+      // fullscreen shows the bare picture — no chapter ticks, no passage
+      // flags, no trickplay. The row below is the only transport there is,
+      // and it goes fullscreen with the wrapper rather than being left
+      // behind. `playsinline` is what keeps a phone from overriding all of
+      // that with its own full-screen player the moment play starts.
+      '<video id="video" playsinline></video>' +
       // Autoplay the browser refuses for want of a gesture is not an error,
       // it is a question — answered by the one tap this button is.
       '<button id="tap-to-play" hidden>▶ Tap to play</button>' +
+      // What a double tap answers with, so the finger knows it landed.
+      '<div id="seek-ripple" hidden></div>' +
       '<div id="cast-overlay">▶ Casting to <span id="cast-device"></span></div>' +
-      '<div id="scrub"><div class="rail"></div><div class="avail"></div><div class="fill"></div>' +
-        '<div id="thumb" hidden><div id="thumb-img"></div><div id="thumb-time"></div></div></div>' +
-      '<div id="timebar"><span id="t-now">0:00</span><span id="t-total">0:00</span></div>' +
-      '<div id="controls">' +
-        '<button id="btn-play" title="Play/Pause">⏵</button>' +
-        '<button id="btn-back" title="Back 10s">⏪</button>' +
-        '<button id="btn-fwd" title="Forward 30s">⏩</button>' +
-        '<span style="font-size:12px;color:#9a9daa">vol</span>' +
-        '<input type="range" id="vol" min="0" max="1" step="0.05" value="1">' +
-        '<select id="subs" title="Subtitles" style="display:none"></select>' +
-        '<select id="audio" title="Audio track" style="display:none"></select>' +
-        '<button id="btn-autoplay"></button>' +
-        '<google-cast-launcher id="cast-btn"></google-cast-launcher>' +
+      '<div id="transport">' +
+        '<div id="scrub"><div class="rail"></div><div class="avail"></div><div class="fill"></div>' +
+          '<div id="thumb" hidden><div id="thumb-img"></div><div id="thumb-time"></div></div></div>' +
+        '<div id="timebar"><span id="t-now">0:00</span><span id="t-total">0:00</span></div>' +
+        '<div id="controls">' +
+          '<button id="btn-play" title="Play/Pause">⏵</button>' +
+          '<button id="btn-back" title="Back 10s">⏪</button>' +
+          '<button id="btn-fwd" title="Forward 30s">⏩</button>' +
+          '<button id="btn-mute" title="Mute" aria-label="Mute">🔊</button>' +
+          '<input type="range" id="vol" min="0" max="1" step="0.05" value="1" aria-label="Volume">' +
+          '<select id="subs" title="Subtitles" style="display:none"></select>' +
+          '<select id="audio" title="Audio track" style="display:none"></select>' +
+          '<button id="btn-autoplay"></button>' +
+          '<button id="btn-fs" title="Fullscreen" aria-label="Fullscreen">⛶</button>' +
+          '<google-cast-launcher id="cast-btn"></google-cast-launcher>' +
+        '</div>' +
       '</div>';
     video = element.querySelector('#video');
     scrub = element.querySelector('#scrub');
@@ -136,6 +150,8 @@
     if (session) paintTrace();
     $('t-total').textContent = fmtTime(duration());
     syncPlayButton();
+    syncMuteButton();
+    syncFullscreenButton();
     setAutoplay(autoplayNext);
     renderSubSelector();
     renderAudioSelector();
@@ -638,6 +654,83 @@
     if (b) b.textContent = isPlaying() ? '⏸' : '⏵';
   }
 
+  // The one play/pause there is: the button, the picture and the keyboard all
+  // come here, and casting is the same choice made on the other device.
+  function togglePlay() {
+    if (casting()) { if (remoteController) remoteController.playOrPause(); return; }
+    if (!video) return;
+    video.paused ? video.play().catch(() => {}) : video.pause();
+  }
+
+  // Mute sits beside the volume and follows it: the cast device's when one is
+  // connected, the media element's otherwise.
+  function isMuted() {
+    return casting() ? !!(remotePlayer && remotePlayer.isMuted) : !!(video && video.muted);
+  }
+  function toggleMute() {
+    if (casting()) { if (remoteController) remoteController.muteOrUnmute(); }
+    else if (video) video.muted = !video.muted;
+    syncMuteButton();
+  }
+  function syncMuteButton() {
+    const b = $('btn-mute');
+    if (!b) return;
+    const off = isMuted();
+    b.textContent = off ? '🔇' : '🔊';
+    b.title = off ? 'Unmute' : 'Mute';
+    b.setAttribute('aria-label', b.title);
+  }
+
+  // Fullscreen is the DEVICE WRAPPER's, never the <video>'s. Taking the
+  // wrapper full keeps the scrub bar on screen — its chapter ticks, its
+  // passage flags, its trickplay previews — which the native fullscreen
+  // threw away. An iPhone allows no element but the video to go full, and
+  // lends its own player instead; that is the fallback, not the default.
+  function toggleFullscreen() {
+    if (document.fullscreenElement) { document.exitFullscreen(); return; }
+    if (element && element.requestFullscreen) element.requestFullscreen().catch(() => {});
+    else if (video && video.webkitEnterFullscreen) video.webkitEnterFullscreen();
+  }
+  function syncFullscreenButton() {
+    const b = $('btn-fs');
+    if (!b) return;
+    b.title = document.fullscreenElement === element ? 'Leave fullscreen' : 'Fullscreen';
+    b.setAttribute('aria-label', b.title);
+  }
+
+  // What a double tap answers with, so the finger knows it landed: the amount
+  // seeked, on the side it was tapped, gone again in half a second. Hiding it
+  // first restarts the fade when a second tap comes straight after.
+  function seekRipple(side, label) {
+    const el = $('seek-ripple');
+    if (!el) return;
+    el.hidden = true;
+    el.className = side;
+    void el.offsetWidth;
+    el.textContent = label;
+    el.hidden = false;
+    clearTimeout(rippleTimer);
+    rippleTimer = setTimeout(() => { el.hidden = true; }, 500);
+  }
+
+  // --- the scrub bar under a pointer -------------------------------------------
+
+  function scrubSeconds(clientX) {
+    const rect = scrub.getBoundingClientRect();
+    return Math.min(1, Math.max(0, (clientX - rect.left) / (rect.width || 1))) * duration();
+  }
+  // While a drag is on, the fill and the readout follow the finger and the
+  // tick leaves them alone; the seek itself waits for the release, because a
+  // seek past what has been transcoded restarts the stream.
+  function paintScrubAt(t) {
+    const dur = duration();
+    if (!(dur > 0)) return;
+    const fill = scrub.querySelector('.fill');
+    if (fill) fill.style.width = Math.min(100, t / dur * 100) + '%';
+    if ($('t-now')) $('t-now').textContent = fmtTime(t);
+  }
+  function hideThumb() { if ($('thumb')) $('thumb').hidden = true; }
+
   // Autoplay-next toggle: global, persisted, default ON.
   function setAutoplay(on) {
     autoplayNext = on;
@@ -670,8 +763,8 @@
   function bindDevice() {
     video.addEventListener('ended', onPlaybackEnded);
     video.addEventListener('timeupdate', checkPassageEnd);
-    // Pressing play (ours or the <video> controls') while paused at the end
-    // bound is the same choice as "Keep watching".
+    // Pressing play — the button, the picture, a key — while paused at the
+    // end bound is the same choice as "Keep watching".
     video.addEventListener('play', () => {
       if ($('tap-to-play')) $('tap-to-play').hidden = true;
       if (!passageEndFired || passageNaturalEnd) return;
@@ -684,15 +777,36 @@
     element.addEventListener('click', e => {
       const t = e.target;
       if (t.id === 'tap-to-play') { t.hidden = true; video.play().catch(() => {}); return; }
-      if (t.id === 'btn-play') {
-        if (casting()) remoteController.playOrPause();
-        else video.paused ? video.play().catch(() => {}) : video.pause();
-        return;
-      }
+      if (t.id === 'btn-play') { togglePlay(); return; }
       if (t.id === 'btn-back') { seekTo(position() - 10); return; }
       if (t.id === 'btn-fwd') { seekTo(position() + 30); return; }
+      if (t.id === 'btn-mute') { toggleMute(); return; }
+      if (t.id === 'btn-fs') { toggleFullscreen(); return; }
       if (t.id === 'btn-autoplay') { setAutoplay(!autoplayNext); return; }
     });
+
+    // The picture is a control too, now that no native bar is drawn over it.
+    // A mouse has nothing to disambiguate, so its click acts at once; a
+    // finger's single tap waits out the double-tap window, and a double tap
+    // on the left or right third seeks instead of pausing.
+    video.addEventListener('pointerup', e => {
+      if (e.pointerType !== 'touch') { togglePlay(); return; }
+      const now = Date.now();
+      if (tapTimer && now - lastTapAt < DOUBLE_TAP_MS) {
+        clearTimeout(tapTimer);
+        tapTimer = null;
+        const rect = video.getBoundingClientRect();
+        const x = (e.clientX - rect.left) / (rect.width || 1);
+        if (x < 1 / 3) { seekTo(position() - 10); seekRipple('left', '−10s'); }
+        else if (x > 2 / 3) { seekTo(position() + 30); seekRipple('right', '+30s'); }
+        else togglePlay();
+        return;
+      }
+      lastTapAt = now;
+      tapTimer = setTimeout(() => { tapTimer = null; togglePlay(); }, DOUBLE_TAP_MS);
+    });
+    video.addEventListener('volumechange', syncMuteButton);
+    document.addEventListener('fullscreenchange', syncFullscreenButton);
 
     element.addEventListener('input', e => {
       if (e.target.id !== 'vol') return;
@@ -706,12 +820,28 @@
       if (e.target.id === 'audio') return onAudioChange(e.target.value);
     });
 
-    scrub.addEventListener('click', e => {
-      const rect = scrub.getBoundingClientRect();
-      seekTo((e.clientX - rect.left) / rect.width * duration());
+    // Pointers, not clicks: the same three listeners serve a mouse and a
+    // finger, so the bar can be dragged on a phone. A hover still previews;
+    // a finger has no hover, so its preview comes with the drag.
+    scrub.addEventListener('pointerdown', e => {
+      scrubbing = true;
+      try { scrub.setPointerCapture(e.pointerId); } catch (err) { /* no capture, no matter */ }
+      paintScrubAt(scrubSeconds(e.clientX));
+      showThumb(e.clientX);
+      e.preventDefault();
     });
-    scrub.addEventListener('mousemove', onScrubHover);
-    scrub.addEventListener('mouseleave', () => { if ($('thumb')) $('thumb').hidden = true; });
+    scrub.addEventListener('pointermove', e => {
+      if (scrubbing) { paintScrubAt(scrubSeconds(e.clientX)); showThumb(e.clientX); return; }
+      if (e.pointerType !== 'touch') showThumb(e.clientX);
+    });
+    scrub.addEventListener('pointerup', e => {
+      if (!scrubbing) return;
+      scrubbing = false;
+      seekTo(scrubSeconds(e.clientX));
+      if (e.pointerType === 'touch') hideThumb();
+    });
+    scrub.addEventListener('pointercancel', () => { scrubbing = false; hideThumb(); });
+    scrub.addEventListener('pointerleave', () => { if (!scrubbing) hideThumb(); });
 
     setInterval(tick, 250);
     setInterval(() => { if (item && isPlaying()) saveProgress(position()); }, 5000);
@@ -746,13 +876,13 @@
     restartFromCurrent();
   }
 
-  function onScrubHover(e) {
+  function showThumb(clientX) {
     const dur = duration();
     if (!trickplay || !item || item.id !== trickplayItemId || dur <= 0) return;
     const sheets = trickplay.sheet_hrefs || [];
     if (!sheets.length) return;
     const rect = scrub.getBoundingClientRect();
-    const frac = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
+    const frac = Math.min(1, Math.max(0, (clientX - rect.left) / (rect.width || 1)));
     const t = frac * dur;
     const per = trickplay.cols * trickplay.rows;
     const frame = Math.min(Math.floor(t / trickplay.interval_seconds), sheets.length * per - 1);
@@ -766,7 +896,7 @@
     img.style.backgroundPosition = `-${col * tw}px -${row * th}px`;
     $('thumb-time').textContent = fmtTime(t);
     const el = $('thumb');
-    el.style.left = Math.min(Math.max(e.clientX - rect.left, tw / 2), Math.max(rect.width - tw / 2, tw / 2)) + 'px';
+    el.style.left = Math.min(Math.max(clientX - rect.left, tw / 2), Math.max(rect.width - tw / 2, tw / 2)) + 'px';
     el.hidden = false;
   }
 
@@ -778,9 +908,11 @@
     const dur = duration();
     if (dur > 0) {
       const fill = scrub.querySelector('.fill'), avail = scrub.querySelector('.avail');
-      if (fill) fill.style.width = Math.min(100, position() / dur * 100) + '%';
       if (avail) avail.style.width = Math.min(100, availableEnd() / dur * 100) + '%';
-      if ($('t-now')) $('t-now').textContent = passage ? passageReadout(position()) : fmtTime(position());
+      if (!scrubbing) {
+        if (fill) fill.style.width = Math.min(100, position() / dur * 100) + '%';
+        if ($('t-now')) $('t-now').textContent = passage ? passageReadout(position()) : fmtTime(position());
+      }
     }
     syncPlayButton();
     checkPassageEnd();

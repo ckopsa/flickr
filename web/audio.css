@@ -38,3 +38,5 @@ body.audio-mode video, body.audio-mode #thumb { display: none !important; }
   #artist-name { font-size: 18px; }
   #artist-albums { grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 12px; }
 }
+/* an audiobook or a record has no picture to fill: the fullscreen button hides with the video */
+body.audio-mode #btn-fs { display: none !important; }
