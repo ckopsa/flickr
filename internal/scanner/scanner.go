@@ -49,7 +49,9 @@ const ProbeVersion = 5
 // v4: the Audiobooks/, Music/ and Books/ grammars (kinds "audiobook_part",
 // "track", "book", with Author and Part), checked before the video grammars
 // so nothing under those directories can be read as a movie or an episode.
-const IdentityVersion = 4
+// v5: a track keeps its own name (TrackTitle, the filename after the ordinal)
+// beside the album it belongs to.
+const IdentityVersion = 5
 
 // mediumExts is the admitted-extension table: which object keys the scan
 // picks up at all, and which medium each one is. Everything else in the
@@ -673,8 +675,8 @@ var extrasDirs = map[string]bool{
 //     Audiobooks/<Author>/<Title>.m4b is the same kind with Part 0 — a
 //     single-file book filed directly under its author.
 //   - Music/<Artist>/<Album>/<NN Title> is kind "track": Author is the
-//     artist, Title the ALBUM (the work), Part the track number. The track's
-//     own name is not kept on the identity in this generation.
+//     artist, Title the ALBUM (the work), Part the track number and
+//     TrackTitle the name after it ("Title").
 //   - Books/<Author>/<Title>.epub and Books/<Author>/<Title>/<file>.epub are
 //     kind "book", the title from the file or the directory respectively.
 //
@@ -790,13 +792,37 @@ func authoredIdentity(kind string, below []string, base string, numbered bool) m
 		if numbered {
 			id.Part = partNumber(base)
 		}
+		if kind == "track" {
+			id.TrackTitle = trackTitle(base)
+		}
 	case len(below) == 1:
 		id.Author = cleanAuthor(below[0])
 		id.Title, id.Year = splitTrailingYear(base)
 	default:
 		id.Title, id.Year = splitTrailingYear(base)
 	}
+	if kind == "track" && id.TrackTitle == "" {
+		id.TrackTitle = id.Title // a loose track: the file names the work and the track alike
+	}
 	return id
+}
+
+// trackTitle reads a track's own name from its filename: whatever follows the
+// leading ordinal and its separator ("07 Karma Police" → "Karma Police",
+// "03 - Paranoid Android" → "Paranoid Android"), the whole name when there is
+// no ordinal ("Hidden Track"), and the whole name again when the ordinal is
+// all there is ("Track_07" → "Track 07") — a track called nothing is worse
+// than one called by its number. Tidied like an author directory, not like a
+// title: "Mr. Blue Sky" and "Re-Hash" are spelled with their dot and hyphen.
+func trackTitle(base string) string {
+	rest := base
+	if m := partNumRe.FindStringIndex(base); m != nil {
+		rest = strings.TrimLeft(base[m[1]:], " ._-")
+	}
+	if t := cleanAuthor(rest); t != "" {
+		return t
+	}
+	return cleanAuthor(base)
 }
 
 // partNumber reads a leading part/track ordinal from a filename; 0 when the
@@ -809,9 +835,10 @@ func partNumber(base string) int {
 	return 0
 }
 
-// cleanAuthor tidies an author directory without cleanTitle's dot and hyphen
-// replacement: "J.R.R. Tolkien" and "Jean-Paul Sartre" are spelled that way,
-// where a title's dots are almost always scene-release separators.
+// cleanAuthor tidies an author directory (and a track's name) without
+// cleanTitle's dot and hyphen replacement: "J.R.R. Tolkien" and "Jean-Paul
+// Sartre" are spelled that way, where a title's dots are almost always
+// scene-release separators.
 func cleanAuthor(s string) string {
 	return strings.Join(strings.Fields(strings.ReplaceAll(s, "_", " ")), " ")
 }

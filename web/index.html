@@ -241,6 +241,9 @@
     <div id="extras-list" hidden></div>
   </div>
 
+  <!-- artist: the shelf of albums under one name (web/audio.js fills it) -->
+  <div id="view-artist" hidden></div>
+
   <!-- detail + player -->
   <div id="view-detail" hidden>
     <button class="back" id="detail-back">← Back</button>
@@ -1044,6 +1047,7 @@ async function renderContinueWatching() {
 // navigation — location.hash is the single source of truth:
 //   #/                 library grid
 //   #/show/<title>     episode list (title encodeURIComponent'd)
+//   #/artist/<name>    an artist's albums, year order (name encodeURIComponent'd; web/audio.js)
 //   #/item/<id>        detail pane (back target: its show for episodes, else grid)
 //   #/item/<id>?t=<s>&end=<s>[&until=<item_id>][&from=<loc>&to=<loc>]
 //                      a PASSAGE of that item (grammar in passage.js): plays on
@@ -1080,6 +1084,10 @@ function parseRoute() {
     try { return { view: 'show', name: decodeURIComponent(path.slice(7)), passage: parsePassage(query) }; }
     catch (e) { return { view: 'library' }; }
   }
+  if (path.startsWith('#/artist/')) {
+    try { return { view: 'artist', name: decodeURIComponent(path.slice(9)) }; }
+    catch (e) { return { view: 'library' }; }
+  }
   const m = path.match(/^#\/item\/(\d+)$/);
   if (m) return { view: 'item', id: Number(m[1]), passage: parsePassage(query) };
   return { view: 'library' };
@@ -1108,6 +1116,8 @@ async function applyRoute() {
     } else {
       renderShow(r.name);
     }
+  } else if (r.view === 'artist') {
+    if (!renderArtist(r.name)) { pendingAutoplay = null; pendingPlay = null; location.replace('#/'); return; }
   } else if (r.view === 'item') {
     const it = allItems.find(i => i.id === r.id);
     if (!it) { pendingAutoplay = null; pendingPlay = null; location.replace('#/'); return; }
@@ -1146,7 +1156,7 @@ async function applyRoute() {
 window.addEventListener('hashchange', applyRoute);
 
 function showView(id) {
-  for (const v of ['view-loading', 'view-library', 'view-show', 'view-detail']) $(v).hidden = v !== id;
+  for (const v of ['view-loading', 'view-library', 'view-show', 'view-artist', 'view-detail']) $(v).hidden = v !== id;
   if (id === 'view-library') renderContinueWatching(); // refresh resume points
 }
 
@@ -1318,7 +1328,7 @@ function closePlayer() {
 
 $('detail-back').onclick = () => {
   if (!$('player-pane').hidden) closePlayer(); // no route change: still on the item
-  else navigate(currentShow ? showHash(currentShow) : '#/');
+  else navigate(currentShow ? showHash(currentShow) : audioBackHash(detailItem) || '#/'); // a track: its artist's shelf
 };
 
 // Play with resume: fetch saved progress (keyed by profile name) unless an

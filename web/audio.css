@@ -1,5 +1,7 @@
-/* flickr — the audio pane (audiobooks, albums); behaviour in web/audio.js.
-   Sits between #detail-info and #player-pane inside #view-detail. */
+/* flickr — the audio pane (audiobooks, albums) and the artist's shelf;
+   behaviour in web/audio.js. The pane sits between #detail-info and
+   #player-pane inside #view-detail; the shelf is #view-artist, a sibling of
+   #view-show that audio.js fills. */
 #audio-pane { margin-top: 14px; }
 #audio-head { display: flex; gap: 18px; align-items: flex-start; margin-bottom: 12px; }
 #audio-cover { width: 200px; height: 200px; border-radius: 10px; object-fit: cover; background: #1e2026;
@@ -15,3 +17,11 @@
 #detail-info:not([hidden]) ~ #audio-pane #audio-head { display: none; }
 /* audio mode: the media element plays but has no picture to show */
 body.audio-mode video, body.audio-mode #thumb { display: none !important; }
+/* the artist's shelf (#/artist/<name>): cover and name, then album tiles on
+   the library grid's own measure */
+#artist-head { display: flex; gap: 18px; align-items: center; margin: 14px 20px 6px; }
+#artist-cover { width: 120px; height: 120px; border-radius: 10px; object-fit: cover; background: #1e2026;
+  flex: 0 0 auto; box-shadow: 0 8px 30px rgba(0,0,0,0.5); }
+#artist-name { margin: 0; font-size: 22px; }
+#artist-sub { font-size: 13px; color: #9a9daa; margin-top: 4px; }
+#artist-albums { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 16px; padding: 16px 20px 30px; }
