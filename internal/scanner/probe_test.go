@@ -120,3 +120,48 @@ func TestParseProbeNoVideoStream(t *testing.T) {
 		t.Error("expected error for file with no video stream")
 	}
 }
+
+// An audio file goes through the same ffprobe path as a film. Its embedded
+// cover art shows up as a "video" stream (mjpeg), which must NOT become the
+// item's video codec: an audio item carries VideoCodec "" and no dimensions,
+// and the absence of a real video stream is not an error for it.
+const sampleProbeAudio = `{
+  "format": {"duration": "41230.5", "bit_rate": "64000"},
+  "streams": [
+    {"codec_type": "audio", "codec_name": "aac", "channels": 2},
+    {"codec_type": "video", "codec_name": "mjpeg", "width": 600, "height": 600}
+  ],
+  "chapters": [
+    {"start_time": "0.000000", "tags": {"title": "Chapter 1"}},
+    {"start_time": "1800.000000", "tags": {"title": "Chapter 2"}}
+  ]
+}`
+
+func TestParseProbeAudioOnly(t *testing.T) {
+	info, err := parseProbe([]byte(sampleProbeAudio), "Audiobooks/A/Book/01.m4b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Medium != "audio" || info.Container != "m4b" {
+		t.Errorf("medium/container: %+v", info)
+	}
+	if info.VideoCodec != "" || info.Width != 0 || info.Height != 0 || info.FPS != 0 {
+		t.Errorf("cover art must not read as video: %+v", info)
+	}
+	if info.AudioCodec != "aac" || info.AudioChannels != 2 || len(info.AudioTracks) != 1 {
+		t.Errorf("audio: %+v", info)
+	}
+	if info.DurationSeconds != 41230.5 || len(info.Chapters) != 2 {
+		t.Errorf("duration/chapters: %+v", info)
+	}
+	// A video key still gets Medium "video" and still needs a video stream.
+	video, err := parseProbe([]byte(sampleProbe), "movies/Film.2020.mkv")
+	if err != nil || video.Medium != "video" {
+		t.Errorf("video medium: %+v %v", video, err)
+	}
+	// An audio file with no audio stream at all is the audio analogue of
+	// "no video stream found".
+	if _, err := parseProbe([]byte(`{"streams":[{"codec_type":"video","codec_name":"mjpeg"}]}`), "Music/A/B/01.mp3"); err == nil {
+		t.Error("expected error for an audio file with no audio stream")
+	}
+}

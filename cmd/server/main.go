@@ -284,7 +284,8 @@ func (s *server) buildWorks() ([]works.Work, error) {
 	return works.Build(items), nil
 }
 
-// handleWorks lists the library as works (movies, whole shows, stray files).
+// handleWorks lists the library as works (movies, whole shows, audiobooks,
+// albums, books, stray files); each carries its kind, medium and author.
 func (s *server) handleWorks(w http.ResponseWriter, r *http.Request) {
 	ws, err := s.buildWorks()
 	if err != nil {
@@ -298,7 +299,8 @@ func (s *server) handleWorks(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleWorkItems lists one work's member items (episodes in season/episode
-// order), in the same JSON shape as /api/items.
+// order, parts and tracks in part order), in the same JSON shape as
+// /api/items.
 func (s *server) handleWorkItems(w http.ResponseWriter, r *http.Request) {
 	ws, err := s.buildWorks()
 	if err != nil {
@@ -422,6 +424,13 @@ func (s *server) itemAndDecision(w http.ResponseWriter, r *http.Request) (*store
 	}
 	if item.MediaInfo == nil {
 		httpErr(w, 409, fmt.Errorf("item has no media info (probe failed: %s)", item.ProbeError))
+		return nil, nil, nil, false
+	}
+	// The decision engine reasons about video streams; asked about an
+	// audiobook or a book it would order a transcode of a file that has no
+	// picture. Audio playback and the reader arrive in their own beads.
+	if m := item.MediaInfo.MediumOrVideo(); m != model.MediumVideo {
+		httpErr(w, 415, fmt.Errorf("%s items do not play yet (medium %q)", m, m))
 		return nil, nil, nil, false
 	}
 	var in decisionInput
@@ -653,10 +662,11 @@ func (w *clockWindow) untilOpen(t time.Time) time.Duration {
 	return next.Sub(t)
 }
 
-// runTrickplay is the post-enrichment trickplay stage: for every item with
-// media info and a meaningful duration that lacks sprite sheets, generate
-// them — strictly one item at a time (a full-file decode each), yielding to
-// live playback between items exactly like the scanner does.
+// runTrickplay is the post-enrichment trickplay stage: for every VIDEO item
+// with media info and a meaningful duration that lacks sprite sheets,
+// generate them — strictly one item at a time (a full-file decode each),
+// yielding to live playback between items exactly like the scanner does.
+// Audio and text items have no frames to preview and are skipped.
 func (s *server) runTrickplay(ctx context.Context) {
 	if os.Getenv("TRICKPLAY") == "0" {
 		return
@@ -681,6 +691,9 @@ func (s *server) runTrickplay(ctx context.Context) {
 		}
 		if it.MediaInfo == nil || it.MediaInfo.DurationSeconds <= 120 {
 			continue
+		}
+		if it.MediaInfo.MediumOrVideo() != model.MediumVideo {
+			continue // nothing to draw frames from
 		}
 		dest := filepath.Join(trickplayDir, strconv.FormatInt(it.ID, 10))
 		if pipeline.HasTrickplay(dest) {
