@@ -201,6 +201,26 @@ func (s *server) itemEnvelope(it store.Item, wk *works.Work, full bool, position
 	if identityKind(it) == "extra" {
 		doc.Field("extra", true)
 	}
+	if !full {
+		// The two things a LIST needs that the item's own page says another
+		// way. A show pane groups its rows by SEASON, so the numbers come out
+		// of identity as numbers (the full document carries the whole of
+		// identity, and nothing groups a single page); `watched` is
+		// works.Finished — the one 90% rule the resume shelf and the work's
+		// progress already keep — said plainly, because a finished item has
+		// no `resume` left to infer it from.
+		if it.Identity != nil {
+			if it.Identity.Season > 0 {
+				doc.Field("season", it.Identity.Season)
+			}
+			if it.Identity.Episode > 0 {
+				doc.Field("episode", it.Identity.Episode)
+			}
+		}
+		if p, ok := positions[it.ID]; ok && works.Finished(it, p) {
+			doc.Field("watched", true)
+		}
+	}
 	if it.MediaInfo != nil && it.MediaInfo.DurationSeconds > 0 {
 		doc.Field("duration_seconds", it.MediaInfo.DurationSeconds)
 	}

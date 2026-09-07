@@ -263,6 +263,16 @@
 
   // --- work --------------------------------------------------------------------
 
+  // How far into one member the profile stands, as a percentage of its own
+  // clock: the two numbers the document already carries, divided. Zero when
+  // it carried neither, and then no bar is drawn.
+  function rowPercent(m) {
+    const at = (m && m.resume && Number(m.resume.position_seconds)) || 0;
+    const dur = Number(m && m.duration_seconds) || 0;
+    if (!(at > 0 && dur > 0)) return 0;
+    return Math.max(0, Math.min(100, at / dur * 100));
+  }
+
   // One member as a row in a list: its label, its grey line, and — for an
   // episode TMDB knows — its still and its synopsis.
   function memberRow(m, opts) {
@@ -273,10 +283,18 @@
     // appended to it here.
     // Under the label goes how long the thing runs, when the document says so
     // — not what the file is. A row is chosen by what it IS.
-    const meta = '<div class="title">' + esc(m.label || m.title || '') + '</div>' +
+    // Two marks of a place, both the document's own: a tick when the server
+    // says `watched` (it is not read off `resume` — a watched thing has none
+    // left), and a thin bar at how far in `resume` stands.
+    const pct = rowPercent(m);
+    const meta = '<div class="title">' +
+      (m.watched ? '<span class="tick" title="Watched">✓</span> ' : '') +
+      esc(m.label || m.title || '') + '</div>' +
       (m.duration_seconds ? '<div class="meta">' + esc(fmtTime(m.duration_seconds)) + '</div>' : '') +
+      (pct ? '<div class="row-bar"><div style="width:' + pct.toFixed(1) + '%"></div></div>' : '') +
       (m.overview ? '<div class="overview">' + esc(m.overview) + '</div>' : '');
-    const cls = 'item' + (still ? ' enriched' : '') + (o.current ? ' current' : '');
+    const cls = 'item' + (still ? ' enriched' : '') + (o.current ? ' current' : '') +
+      (m.watched ? ' watched' : '');
     return '<div class="' + cls + '" tabindex="0" role="link"' +
       ' data-nav="' + esc(itemHash(m.id)) + '">' +
       (still ? '<img class="still" loading="lazy" alt="" src="' + esc(still) + '">' : '') +
@@ -288,20 +306,94 @@
   function walked(doc) { return members(doc).filter(m => !m.extra); }
   function extras(doc) { return members(doc).filter(m => m.extra); }
 
-  // The show pane: the episodes, then the bonus material under its own
-  // heading — both in the document's order, and both told apart by the
-  // member's own `extra` flag rather than by the browser reading an identity.
+  // The episodes in seasons, in the document's own order. The member says
+  // which season it is in (`season`, off its identity), so the browser reads
+  // no episode number out of a label; a member without one falls in a single
+  // unnumbered group, which is what a show whose files never said looks like.
+  function seasons(list) {
+    const out = [], by = {};
+    for (const m of list) {
+      const n = Number(m.season) > 0 ? Number(m.season) : 0;
+      if (!by[n]) { by[n] = { season: n, items: [] }; out.push(by[n]); }
+      by[n].items.push(m);
+    }
+    return out;
+  }
+
+  // A season as a disclosure. More than one and they all take the same
+  // `name`, which is the browser's OWN exclusive accordion: opening a season
+  // closes the last, so seasons read as tabs with the client keeping no
+  // state at all. The season holding Next up is the one that starts open.
+  function seasonBlocks(list, openID) {
+    const groups = seasons(list);
+    const many = groups.length > 1;
+    // Which one starts open: the season Next up is in, or — when nothing
+    // names one — the first. With a single season there is nothing to close.
+    let lead = groups.findIndex(g => g.items.some(m => String(m.id) === String(openID)));
+    if (lead < 0) lead = 0;
+    return groups.map((g, i) => {
+      const label = g.season > 0 ? 'Season ' + g.season : 'Episodes';
+      return '<details class="season"' + (many ? ' name="season"' : '') +
+        (!many || i === lead ? ' open' : '') + '>' +
+        '<summary>' + esc(label) +
+          '<span class="season-count">' + esc(g.items.length) + '</span></summary>' +
+        '<div class="season-items">' +
+          g.items.map(m => memberRow(m, { current: String(m.id) === String(openID) })).join('') +
+        '</div></details>';
+    }).join('');
+  }
+
+  // The member `progress.next` names, matched in the document's own members
+  // by the address the document gave for it. Nothing is composed: an href is
+  // compared with an href.
+  function memberAt(doc, addr) {
+    return members(doc).filter(m => m.self === addr)[0] || null;
+  }
+
+  // What a show leads with: the one episode this profile would put on now —
+  // its still, the server's name for it, and the work's OWN play action, in
+  // the words the server chose ("▶ Resume"). A show nobody has started
+  // carries no `progress`, and then there is no card and the action stays
+  // where it was.
+  function nextUp(doc) {
+    const next = doc && doc.progress && doc.progress.next;
+    if (!next || !next.href) return '';
+    const m = memberAt(doc, next.href);
+    const art = (m && artwork(m)) || artwork(doc);
+    const hash = m ? itemHash(m.id) : '';
+    return '<div id="next-up">' +
+      (art ? '<div class="nu-art"' + (hash ? ' data-nav="' + esc(hash) + '"' : '') + '>' +
+        '<img loading="lazy" alt="" src="' + esc(art) + '"></div>' : '') +
+      '<div class="nu-body">' +
+        '<div class="nu-lead">Next up</div>' +
+        '<div class="nu-title">' + esc(next.title || (m && m.label) || '') + '</div>' +
+        (m && m.overview ? '<div class="nu-overview">' + esc(m.overview) + '</div>' : '') +
+        '<div class="nu-act">' + primary(doc) + '</div>' +
+      '</div></div>';
+  }
+
+  // The show pane: where this profile stands, the episode to put on now, the
+  // seasons, then the bonus material under its own heading — all in the
+  // document's order, and episodes told from extras by the member's own
+  // `extra` flag rather than by the browser reading an identity.
   function showPane(doc) {
     const eps = walked(doc), bonus = extras(doc);
     const drawn = ['play', 'read', 'passage'];
+    const lead = nextUp(doc);
+    const nextID = lead ? idIn((doc.progress.next || {}).href) : '';
     return backTo('#/', 'Library') +
       '<h2 id="show-title">' + esc(doc.title || '') + '</h2>' +
+      // Where they stand, in the server's own words, under the title. It is
+      // a fact about the show, not a warning, so it reads as one.
       (doc.progress && doc.progress.text
-        ? '<div id="show-note">' + esc(doc.progress.text) + '</div>' : '') +
-      '<div id="work-actions">' + primary(doc) + restControls(doc, drawn) +
+        ? '<div id="show-progress">' + esc(doc.progress.text) + '</div>' : '') +
+      lead +
+      // The primary rides the Next up card when there is one, so the work's
+      // play action is drawn once either way.
+      '<div id="work-actions">' + (lead ? '' : primary(doc)) + restControls(doc, drawn) +
         passagePicker(doc) + '</div>' +
       '<div id="episode-list"' + (eps.length ? '' : ' hidden') + '>' +
-        eps.map(m => memberRow(m)).join('') + '</div>' +
+        seasonBlocks(eps, nextID) + '</div>' +
       '<div id="extras-head"' + (bonus.length ? '' : ' hidden') + '>Extras</div>' +
       '<div id="extras-list"' + (bonus.length ? '' : ' hidden') + '>' +
         bonus.map(m => memberRow(m)).join('') + '</div>';

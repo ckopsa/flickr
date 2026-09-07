@@ -247,6 +247,70 @@ test('the show pane keeps bonus material out of the run', () => {
   for (const m of bonus) assert.ok(extras.includes(R.esc(m.label)), m.label);
 });
 
+// A two-season show, made from the golden so every field is one the server
+// really writes: a second season, a watched episode with no place left to
+// resume, and Next up still pointing at season 3.
+function twoSeasons() {
+  const doc = JSON.parse(JSON.stringify(golden('work-show')));
+  const s2 = JSON.parse(JSON.stringify(doc.members[0]));
+  Object.assign(s2, {
+    self: '/api/items/5', id: 5, title: 'The Injury', label: 'S02E12 · The Injury',
+    season: 2, episode: 12, watched: true, duration_seconds: 1800,
+  });
+  delete s2.resume;
+  delete s2.links.still;
+  doc.members = [s2, doc.members[0], doc.members[1], doc.members[2]];
+  return doc;
+}
+
+test('the show pane groups its episodes by season', () => {
+  const html = R.work(twoSeasons());
+  const [, list] = html.split('id="episode-list"');
+  const summaries = [...list.matchAll(/<summary>([^<]*)</g)].map(m => m[1]);
+  assert.deepEqual(summaries, ['Season 2', 'Season 3']);
+  // More than one season, so they are one exclusive accordion: opening a
+  // season closes the last, which is what makes them read as tabs.
+  assert.equal((list.match(/name="season"/g) || []).length, 2);
+  // The season Next up is in is the one that starts open, and it is the only
+  // one — Next up names item 8, which is season 3.
+  assert.equal((list.match(/<details class="season" name="season" open>/g) || []).length, 1);
+  assert.match(list, /<summary>Season 2<span class="season-count">1</, 'each season says how many');
+  // Bonus material is still outside the seasons, under its own heading.
+  assert.ok(!list.split('id="extras-list"')[0].includes('Deleted Scenes'));
+});
+
+test('an episode row shows a tick when watched and a bar where it was left', () => {
+  const html = R.work(twoSeasons());
+  const watched = html.split('S02E12')[0].split('<div class="item').pop();
+  assert.ok(watched.includes('class="tick"'), 'a watched episode is ticked');
+  // …and the bar is that member's own two numbers, 745 of 2640.
+  assert.match(html, /class="row-bar"><div style="width:28\.2%"/);
+  // The Job has neither, so its row carries neither.
+  const job = html.split('S03E23')[1].split('</div></div>')[0];
+  assert.ok(!job.includes('row-bar') && !job.includes('tick'));
+});
+
+test('the show pane leads with Next up, and the play action rides it', () => {
+  const doc = golden('work-show');
+  const html = R.work(doc);
+  const lead = html.indexOf('id="next-up"');
+  assert.ok(lead > -1 && lead < html.indexOf('id="episode-list"'), 'Next up comes first');
+  const card = html.slice(lead, html.indexOf('id="work-actions"'));
+  assert.ok(card.includes(R.esc(doc.progress.next.title)), 'the card names the member the document did');
+  // One play control on the pane, and it is the work's own action, labelled
+  // as the server labelled it.
+  assert.equal((html.match(/data-act="play"/g) || []).length, 1);
+  assert.ok(card.includes('data-href="' + R.esc(doc.actions.play.href) + '"'));
+  assert.ok(card.includes(R.esc(doc.actions.play.label)));
+  // A show nobody has started has no progress, so no card — and then the
+  // action is back among the work's controls.
+  const fresh = JSON.parse(JSON.stringify(doc));
+  delete fresh.progress;
+  const cold = R.work(fresh);
+  assert.ok(!cold.includes('id="next-up"'));
+  assert.equal((cold.match(/data-act="play"/g) || []).length, 1);
+});
+
 test('a record pane lists its members with the server\'s own labels', () => {
   const html = R.work(golden('work-album'));
   assert.ok(html.includes('Track 1 · Airbag'));

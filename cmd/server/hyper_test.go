@@ -722,3 +722,52 @@ func TestExistingRoutesUnchanged(t *testing.T) {
 		t.Errorf("/api/works/tmdb%%3A2316/items = %d members, first id %d", len(members), members[0].ID)
 	}
 }
+
+// A show's members say where they sit and whether they have been seen: the
+// season and episode numbers a pane groups its rows by, and `watched` — the
+// same 90% rule works.Finished keeps everywhere else. A watched episode has
+// no `resume` left (resumeOf drops the credits), which is why the tick cannot
+// be read off one.
+func TestShowMembersCarrySeasonEpisodeAndWatched(t *testing.T) {
+	srv, h := fixtureServer(t)
+	if err := srv.state.SetPosition(idTheJob, "chris", 2755); err != nil { // the credits of 2760
+		t.Fatal(err)
+	}
+	var doc struct {
+		Members []struct {
+			ID      int64 `json:"id"`
+			Season  int   `json:"season"`
+			Episode int   `json:"episode"`
+			Watched bool  `json:"watched"`
+			Resume  *struct {
+				PositionSeconds float64 `json:"position_seconds"`
+			} `json:"resume"`
+		} `json:"members"`
+	}
+	if err := json.Unmarshal(get(t, h, "/api/works/tmdb%3A2316?client_id=chris").Body.Bytes(), &doc); err != nil {
+		t.Fatal(err)
+	}
+	type place struct {
+		season, episode int
+		watched, resume bool
+	}
+	got := map[int64]place{}
+	for _, m := range doc.Members {
+		got[m.ID] = place{m.Season, m.Episode, m.Watched, m.Resume != nil}
+	}
+	if g := got[idBeach]; g.season != 3 || g.episode != 22 || g.watched || !g.resume {
+		t.Errorf("S03E22, 745s in and unfinished: %+v", g)
+	}
+	if g := got[idTheJob]; g.season != 3 || g.episode != 23 || !g.watched || g.resume {
+		t.Errorf("S03E23 watched to the credits, with no place left to resume: %+v", g)
+	}
+	// The item's OWN document carries the whole identity instead, so it does
+	// not repeat the two numbers a list groups by.
+	var item map[string]any
+	if err := json.Unmarshal(get(t, h, "/api/items/9?client_id=chris").Body.Bytes(), &item); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := item["season"]; ok {
+		t.Error("an item's own document repeats season; its identity already says it")
+	}
+}

@@ -101,18 +101,50 @@
 
   /* show (episode list) view */
   #show-title { margin: 14px 20px 6px; font-size: 18px; }
-  #show-note, #lib-note { margin: 0 20px 8px; font-size: 13px; }
-  /* where you are in the show reads as a resume hint, like the record
-     pane's own line; only the route's refusal is a warning */
-  #show-note { color: var(--accent); }
+  #show-progress, #lib-note { margin: 0 20px 8px; font-size: 13px; }
+  /* where you are in the show is a fact about it, said under the title in
+     the same grey as every other one; only the route's refusal is a warning */
+  #show-progress { color: var(--muted); }
   #lib-note { color: var(--warn); }
+
+  /* the episode to put on now, at the head of the pane */
+  #next-up { display: flex; gap: 14px; align-items: center; margin: 10px 20px 0;
+    padding: 12px; border: 1px solid #2a2c33; border-radius: 10px; background: #1b1d24; }
+  #next-up .nu-art { flex: 0 0 auto; cursor: pointer; }
+  #next-up .nu-art img { width: 160px; aspect-ratio: 16/9; object-fit: cover;
+    border-radius: 6px; background: #1e2026; display: block; }
+  #next-up .nu-body { min-width: 0; }
+  #next-up .nu-lead { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+  #next-up .nu-title { font-size: 15px; font-weight: 600; margin: 3px 0; }
+  #next-up .nu-overview { font-size: 12px; color: var(--muted); line-height: 1.4; margin-bottom: 8px;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  #next-up .nu-act .act { margin-right: 0; }
+
   #episode-list, #extras-list { margin: 8px 20px 30px; border: 1px solid #2a2c33; border-radius: 8px; overflow: hidden; }
   #extras-head { margin: 18px 20px 0; font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+  /* one season, one disclosure. With more than one they share a `name`, and
+     the browser's exclusive accordion turns the headings into tabs. */
+  .season > summary { padding: 10px 16px; cursor: pointer; font-size: 13px; font-weight: 600;
+    background: #1b1d24; border-bottom: 1px solid #1e2026; list-style: none; }
+  .season > summary::-webkit-details-marker { display: none; }
+  .season > summary::before { content: '▸'; color: var(--muted); margin-right: 8px; }
+  .season[open] > summary::before { content: '▾'; }
+  .season > summary:hover { background: #1e222c; }
+  .season .season-count { float: right; color: var(--muted); font-weight: 400; }
+  .season:last-child .season-items .item:last-child { border-bottom: 0; }
   .item { padding: 10px 16px; border-bottom: 1px solid #1e2026; cursor: pointer; }
   .item:last-child { border-bottom: 0; }
   .item:hover { background: #1e222c; }
+  .item.current { background: #1a1f2b; }
   .item .title { font-size: 14px; }
+  .item.watched .title { color: var(--muted); }
+  /* seen: the tick is the ok green, and it is the row's only colour */
+  .item .tick { color: var(--ok); }
   .item .meta { font-size: 11px; color: var(--muted); margin-top: 2px; }
+  /* where the row was left, in the same unit the resume shelf's bar uses */
+  .item .row-bar { height: 3px; max-width: 220px; background: #2a2c33; border-radius: 2px;
+    margin-top: 5px; overflow: hidden; }
+  .item .row-bar > div { height: 100%; background: #5b8def; }
 
   /* detail + player */
   #view, #stage { padding: 0 20px 30px; }
@@ -294,7 +326,7 @@
      devices (the player's chrome around the persistent media element, and the
      reader's container), and the two are never both up */
   #view > .back, #stage > .back { margin-left: 0; }
-  #genre-row, #cw, #grid, #show-title, #show-note, #episode-list,
+  #genre-row, #cw, #grid, #show-title, #show-progress, #next-up, #episode-list,
   #extras-head, #extras-list, #artist-head, #artist-albums { margin-left: 0; margin-right: 0; }
   #grid { padding-left: 0; padding-right: 0; }
   #artist-head { margin-left: 0; }
@@ -354,6 +386,9 @@
     .card .c-title { font-size: 12px; }
     .cw-card { flex: 0 0 110px; }
     .item.enriched img.still { width: 96px; }
+    /* the still is a picture, not a column: the card stacks */
+    #next-up { flex-direction: column; align-items: stretch; gap: 10px; }
+    #next-up .nu-art img { width: 100%; }
     /* the poster is a picture, not a column: it stacks and centres */
     #detail-info { flex-direction: column; gap: 14px; }
     #detail-poster { width: 40vw; max-width: 220px; align-self: center; }
@@ -377,13 +412,14 @@
   @media (pointer: coarse) {
     button, select, input { min-height: 44px; }
     .item { min-height: 44px; padding-top: 13px; padding-bottom: 13px; }
+    .season > summary { min-height: 44px; padding-top: 13px; padding-bottom: 13px; }
     google-cast-launcher { width: 44px; height: 44px; }
   }
 
   /* where the keyboard is: one ring, the accent, on everything that acts.
      [tabindex] catches whatever else is made focusable later. */
   button:focus-visible, select:focus-visible, input:focus-visible, a:focus-visible,
-  .card:focus-visible, .cw-card:focus-visible, .item:focus-visible,
+  .card:focus-visible, .cw-card:focus-visible, .item:focus-visible, summary:focus-visible,
   google-cast-launcher:focus-visible, [tabindex]:focus-visible {
     outline: 2px solid #5b8def; outline-offset: 2px;
   }
