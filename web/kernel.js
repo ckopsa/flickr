@@ -95,6 +95,7 @@
   let libraryDoc = null, continueDoc = null;
   let currentRoute = null;       // the route document the current hash resolved to
   let currentWork = null;        // the work document the current view belongs to
+  let currentTrickplay = null;   // its sprite sheets, where the item has them
   let currentItem = null;        // the item document on screen
   let pendingAutoplay = null;    // item id to start once its route renders
   let pendingPlay = null;        // { id, mode: 'nav' | 'zero' } from a prev/next
@@ -407,6 +408,25 @@
     try { return await doc(href); } catch (e) { return null; }
   }
 
+  // The item's trickplay index, which is what puts a frame beside each chapter
+  // on its page. It is a sidecar rather than a document — it has no `self`, so
+  // the cache above has no key for it — and this keeps the last one instead,
+  // one fetch per item. A file with no sheets answers that it has none, which
+  // is an answer: the chapters are the list of names they always were.
+  let trickplayDoc = null, trickplayFor = null;
+  async function trickplayOf(itemDoc) {
+    const href = R.linkHref(itemDoc, 'trickplay');
+    if (!href) return null;
+    if (trickplayFor === itemDoc.id) return trickplayDoc;
+    try { trickplayDoc = await api(href); } catch (e) { trickplayDoc = null; }
+    trickplayFor = itemDoc.id;
+    return trickplayDoc;
+  }
+
+  // What a member needs said about it: the work it belongs to, and the sheets
+  // its chapters are pictured from.
+  function itemCtx() { return { work: currentWork, trickplay: currentTrickplay }; }
+
   async function applyRoute() {
     const seq = ++routeSeq;
     const hash = location.hash || '#/';
@@ -501,7 +521,11 @@
       return;
     }
     currentItem = itemDoc;
-    currentWork = await workOf(itemDoc);
+    // Two relations, followed side by side: the page waits for one round trip
+    // rather than two.
+    const [wk, tp] = await Promise.all([workOf(itemDoc), trickplayOf(itemDoc)]);
+    currentWork = wk;
+    currentTrickplay = tp;
     if (seq !== routeSeq) return;
 
     if (itemDoc.medium === 'text') {
@@ -511,7 +535,7 @@
         showStage(true);
       } else {
         showStage(false);
-        mount(R.item(itemDoc, { work: currentWork }));
+        mount(R.item(itemDoc, itemCtx()));
         if (tp || pendingAutoplay === itemDoc.id) await openReader(itemDoc, tp);
       }
       pendingAutoplay = pendingPlay = null;
@@ -526,7 +550,7 @@
     if (collapsed && samePlaying) {
       if (!pendingExpand) {
         showStage(false);
-        mount(R.item(itemDoc, { work: currentWork }));
+        mount(R.item(itemDoc, itemCtx()));
         pendingAutoplay = pendingPlay = null;
         return;
       }
@@ -539,13 +563,13 @@
       // A passage route plays on arrival, from its own start — `t` wins over
       // the saved place, so never null here.
       showStage(false);
-      mount(R.item(itemDoc, { work: currentWork }));
+      mount(R.item(itemDoc, itemCtx()));
       await startPlay(itemDoc, { seek: rp.t == null ? 0 : rp.t, passage: rp });
     } else if (samePlaying) {
       showStage(true); // "Keep watching" dropped the passage: nothing to restart
     } else {
       showStage(false);
-      mount(R.item(itemDoc, { work: currentWork }));
+      mount(R.item(itemDoc, itemCtx()));
       if (pendingAutoplay === itemDoc.id) await startPlay(itemDoc, {});
       else if (pendingPlay && pendingPlay.id === itemDoc.id) {
         await startPlay(itemDoc, { seek: pendingPlay.mode === 'zero' ? 0 : undefined });

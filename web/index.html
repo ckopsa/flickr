@@ -261,8 +261,18 @@
   #detail-play:hover { background: #33579e; }
   /* the tick beside Play, with the server's own words on it */
   .watch-wide { font-size: 14px; padding: 9px 16px; }
-  #detail-chapters { margin-top: 16px; display: flex; flex-wrap: wrap; gap: 6px; }
-  #detail-chapters button { font-size: 12px; padding: 4px 10px; }
+  /* The chapters as a list one can look at: a frame from the trickplay
+     sheets, the name, and when it starts. Without the sheets there is no
+     .ch-thumb and the rows are the names they always were. */
+  #detail-chapters { margin-top: 16px; display: flex; flex-wrap: wrap; gap: 8px; }
+  #detail-chapters .chapter { display: flex; align-items: center; gap: 10px; text-align: left;
+    padding: 6px 14px 6px 6px; }
+  #detail-chapters .chapter:not(:has(.ch-thumb)) { padding: 4px 10px; }
+  .ch-thumb { display: block; flex: none; border-radius: 4px; background-color: #000;
+    background-repeat: no-repeat; }
+  .ch-what { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+  .ch-title { font-size: 13px; }
+  .ch-time { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
   #detail-epnav { margin-top: 14px; display: flex; flex-wrap: wrap; gap: 8px; }
   #detail-epnav a { background: #23252d; color: #c5c8d4; border: 1px solid #3a3d47;
     border-radius: 6px; padding: 6px 12px; font-size: 13px; text-decoration: none; }
@@ -368,6 +378,9 @@
   #thumb { position: absolute; bottom: 26px; transform: translateX(-50%); z-index: 5; pointer-events: none; text-align: center; }
   #thumb-img { background-color: #000; background-repeat: no-repeat; border: 1px solid #3a3d47; border-radius: 4px; box-shadow: 0 4px 14px rgba(0,0,0,0.5); }
   #thumb-time { display: inline-block; margin-top: 3px; font-size: 11px; padding: 1px 7px; border-radius: 8px; background: rgba(20,21,26,0.9); color: #c5c8d4; font-variant-numeric: tabular-nums; }
+  /* what the frame IS: the chapter the hovered time falls in, over the time */
+  #thumb-chapter { display: block; margin-top: 4px; font-size: 12px; font-weight: 600; color: var(--fg);
+    text-shadow: 0 1px 3px rgba(0,0,0,0.9); max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #timebar { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
   #controls { display: flex; gap: 8px; align-items: center; margin-top: 8px; flex-wrap: wrap; }
   #controls button { min-width: 42px; }

@@ -773,3 +773,53 @@ test('a runtime is said the way a person says it', () => {
   assert.equal(R.fmtRuntime(120), '2h');
   assert.equal(R.fmtRuntime(0), '');
 });
+
+// The chapters, with a frame beside each one. The sheets are the ITEM's own
+// trickplay index, handed in as ctx by the kernel — the renderer works out
+// which tile, never where it lives.
+const INDEX = {
+  interval_seconds: 10, tile_width: 320, tile_height: 180, cols: 10, rows: 10,
+  sheet_hrefs: ['/api/items/4/trickplay/0.jpg', '/api/items/4/trickplay/1.jpg'],
+};
+
+test('the chapter list names each chapter, its time, and the frame it starts on', () => {
+  const doc = golden('item-film');
+  const chapters = doc.media_info.chapters;
+  assert.ok(chapters.length, 'the golden must carry the chapters this asserts on');
+  const html = R.item(doc, { trickplay: INDEX });
+  for (const ch of chapters) {
+    assert.ok(html.includes('data-seek="' + ch.start_seconds + '"'), 'a tap plays from there');
+    assert.ok(html.includes('>' + R.esc(ch.title) + '<'), 'the chapter says its name');
+    assert.ok(html.includes('>' + R.fmtTime(ch.start_seconds) + '<'), 'and when it starts');
+  }
+  assert.equal((html.match(/class="ch-thumb"/g) || []).length, chapters.length);
+  // Every sheet drawn from is one the index named.
+  for (const m of html.matchAll(/background-image:url\(([^)]*)\)/g)) {
+    assert.ok(INDEX.sheet_hrefs.includes(unesc(m[1])), m[1] + ' is not a sheet the index gave');
+  }
+  // Without the index the list is the list of names it always was.
+  const plain = R.item(doc, {});
+  assert.ok(plain.includes('id="detail-chapters"') && !plain.includes('ch-thumb'));
+  // And a file with no chapter marks gets no list at all.
+  const bare = JSON.parse(JSON.stringify(doc));
+  delete bare.media_info.chapters;
+  assert.ok(!R.item(bare, { trickplay: INDEX }).includes('id="detail-chapters"'));
+});
+
+test('a tile is the frame that moment falls on, in the sheet that holds it', () => {
+  // One frame every 10s, ten by ten to a sheet: 0s is the first tile of the
+  // first sheet, and 1100s — frame 110 — the first of the second row of the
+  // second sheet.
+  assert.deepEqual(R.tileAt(INDEX, 0),
+    { href: INDEX.sheet_hrefs[0], w: 320, h: 180, x: -0, y: -0, sheetW: 3200, sheetH: 1800 });
+  const late = R.tileAt(INDEX, 1100);
+  assert.equal(late.href, INDEX.sheet_hrefs[1]);
+  assert.equal(late.x, -0);
+  assert.equal(late.y, -180);
+  // Past the last frame there is, and before the first: the ends hold.
+  assert.equal(R.tileAt(INDEX, 99999).href, INDEX.sheet_hrefs[1]);
+  assert.equal(R.tileAt(INDEX, -5).href, INDEX.sheet_hrefs[0]);
+  // No index, no sheets, no arithmetic to do.
+  assert.equal(R.tileAt(null, 10), null);
+  assert.equal(R.tileAt({ ...INDEX, sheet_hrefs: [] }, 10), null);
+});

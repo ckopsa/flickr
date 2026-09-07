@@ -179,7 +179,8 @@
               ' role="slider" tabindex="0" aria-valuemin="0" aria-valuenow="0" hidden></div>' +
             '<div class="clip-handle" id="clip-out" aria-label="Clip end"' +
               ' role="slider" tabindex="0" aria-valuemin="0" aria-valuenow="0" hidden></div></div>' +
-          '<div id="thumb" hidden><div id="thumb-img"></div><div id="thumb-time"></div></div></div>' +
+          '<div id="thumb" hidden><div id="thumb-img"></div>' +
+            '<div id="thumb-chapter" hidden></div><div id="thumb-time"></div></div></div>' +
         '<div id="timebar"><span id="t-now">0:00</span><span id="t-total">0:00</span></div>' +
         // What the clip says, in the server's own words, and the one button
         // that hands it on.
@@ -1680,27 +1681,44 @@
     restartFromCurrent();
   }
 
+  // The chapter a time falls in: the last one that starts at or before it.
+  // A file with no chapter marks has none, and the preview says nothing where
+  // there is nothing to say.
+  function chapterAt(t) {
+    let found = null;
+    for (const ch of chapters()) {
+      if (ch.start_seconds <= t) found = ch;
+    }
+    return found;
+  }
+
   function showThumb(clientX) {
     const dur = duration();
     if (!trickplay || !item || item.id !== trickplayItemId || dur <= 0) return;
-    const sheets = trickplay.sheet_hrefs || [];
-    if (!sheets.length) return;
     const rect = scrub.getBoundingClientRect();
     const frac = Math.min(1, Math.max(0, (clientX - rect.left) / (rect.width || 1)));
     const t = frac * dur;
-    const per = trickplay.cols * trickplay.rows;
-    const frame = Math.min(Math.floor(t / trickplay.interval_seconds), sheets.length * per - 1);
-    const sheet = Math.floor(frame / per), tile = frame % per;
-    const col = tile % trickplay.cols, row = Math.floor(tile / trickplay.cols);
-    const tw = trickplay.tile_width, th = trickplay.tile_height || 180;
+    // Which frame of which sheet: the same arithmetic the item page's chapter
+    // list does over the same index (R.tileAt), said once.
+    const tile = R.tileAt(trickplay, t);
+    if (!tile) return;
     const img = $('thumb-img');
-    img.style.width = tw + 'px';
-    img.style.height = th + 'px';
-    img.style.backgroundImage = `url(${sheets[sheet]})`;
-    img.style.backgroundPosition = `-${col * tw}px -${row * th}px`;
+    img.style.width = tile.w + 'px';
+    img.style.height = tile.h + 'px';
+    img.style.backgroundImage = `url(${tile.href})`;
+    img.style.backgroundPosition = `${tile.x}px ${tile.y}px`;
+    // What the frame IS, which is what somebody scrubbing is looking for: the
+    // chapter's name over the time, the way YouTube's preview says it.
+    const name = $('thumb-chapter');
+    if (name) {
+      const ch = chapterAt(t);
+      name.textContent = (ch && ch.title) || '';
+      name.hidden = !(ch && ch.title);
+    }
     $('thumb-time').textContent = fmtTime(t);
     const el = $('thumb');
-    el.style.left = Math.min(Math.max(clientX - rect.left, tw / 2), Math.max(rect.width - tw / 2, tw / 2)) + 'px';
+    el.style.left =
+      Math.min(Math.max(clientX - rect.left, tile.w / 2), Math.max(rect.width - tile.w / 2, tile.w / 2)) + 'px';
     el.hidden = false;
   }
 

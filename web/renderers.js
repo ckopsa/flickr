@@ -649,8 +649,6 @@
     const wk = c.work || null;
     const art = artwork(doc) || (wk ? artwork(wk) : '');
     const back = href(doc, 'backdrop');
-    const chapters = ((doc.media_info && doc.media_info.chapters) || [])
-      .filter(() => doc.medium !== 'text');
     // Play stands alone up here, with the tick beside it. The curatorial
     // actions are drawn too — but inside the Details disclosure, so `drawn`
     // names all of them as handled.
@@ -673,9 +671,7 @@
           '<p id="detail-overview"' + (doc.overview ? '' : ' hidden') + '>' + esc(doc.overview || '') + '</p>' +
           castLine(doc) +
           primary(doc) + watchedControl(doc, 'watch-wide', true) + restControls(doc, drawn) +
-          '<div id="detail-chapters">' + chapters.map(ch =>
-            '<button data-seek="' + esc(ch.start_seconds) + '">' +
-            esc((ch.title || '') + ' · ' + fmtTime(ch.start_seconds)) + '</button>').join('') + '</div>' +
+          chapterList(doc, c) +
           '<div id="detail-epnav"' + (prev || next ? '' : ' hidden') + '>' +
             (prev ? nav(itemHash(idIn(prev.href)), '⏮ Prev: ' + (prev.title || ''), '', '') : '') +
             (next ? nav(itemHash(idIn(next.href)), 'Next: ' + (next.title || '') + ' ⏭', '', '') : '') +
@@ -695,6 +691,60 @@
         : '') +
       details(doc) +
       similarRow(wk);
+  }
+
+  // The chapters, as a list one can look at rather than a row of times: the
+  // name, when it starts, and a frame of the film cut out of the trickplay
+  // sheets — the same pictures the scrub bar previews with. A tap plays from
+  // there, which is the seek it always was.
+  //
+  // The sheets come from `ctx.trickplay`, the item's own trickplay index, one
+  // relation the kernel followed. A file with no sheets — too short, or not
+  // generated yet — is the list of names it has always been.
+  const CHAPTER_THUMB_WIDTH = 160; // px; the sheets' own tiles are wider
+
+  function chapterList(doc, ctx) {
+    if (!doc || doc.medium === 'text') return '';
+    const chapters = (doc.media_info && doc.media_info.chapters) || [];
+    if (!chapters.length) return '';
+    const idx = (ctx && ctx.trickplay) || null;
+    return '<div id="detail-chapters">' + chapters.map(ch => {
+      const tile = tileAt(idx, ch.start_seconds);
+      return '<button class="chapter" data-seek="' + esc(ch.start_seconds) + '">' +
+        (tile ? '<span class="ch-thumb" style="' + esc(tileStyle(tile, CHAPTER_THUMB_WIDTH)) + '"></span>' : '') +
+        '<span class="ch-what">' +
+          '<span class="ch-title">' + esc(ch.title || 'Chapter') + '</span>' +
+          '<span class="ch-time">' + fmtTime(ch.start_seconds) + '</span>' +
+        '</span></button>';
+    }).join('') + '</div>';
+  }
+
+  // Which frame of which sheet stands for a moment, and where it sits in that
+  // sheet. The index is a document like any other — its `sheet_hrefs` are the
+  // server's addresses — and what happens here is arithmetic, not an address.
+  function tileAt(idx, seconds) {
+    const sheets = (idx && idx.sheet_hrefs) || [];
+    if (!sheets.length || !idx.cols || !idx.rows || !idx.interval_seconds || !idx.tile_width) return null;
+    const per = idx.cols * idx.rows;
+    const frame = Math.min(Math.max(0, Math.floor(seconds / idx.interval_seconds)), sheets.length * per - 1);
+    const tile = frame % per;
+    const w = idx.tile_width, h = idx.tile_height || 180;
+    return {
+      href: sheets[Math.floor(frame / per)], w, h,
+      x: -(tile % idx.cols) * w, y: -Math.floor(tile / idx.cols) * h,
+      sheetW: idx.cols * w, sheetH: idx.rows * h,
+    };
+  }
+
+  // One tile, drawn at the width the page has room for: the whole sheet is
+  // scaled by the same factor, so the frame lands where it does at full size.
+  function tileStyle(tile, width) {
+    const s = width / tile.w;
+    const px = n => Math.round(n * s) + 'px';
+    return 'width:' + px(tile.w) + ';height:' + px(tile.h) + ';' +
+      'background-image:url(' + tile.href + ');' +
+      'background-size:' + px(tile.sheetW) + ' ' + px(tile.sheetH) + ';' +
+      'background-position:' + px(tile.x) + ' ' + px(tile.y);
   }
 
   // The genres this title is filed under: the work's list when the kernel has
@@ -1089,6 +1139,9 @@
     card, memberRow, control, watchedControl, restControls, trace, identityForm,
     esc, fmtTime, fmtRuntime, hashFor, itemHash, showHash, artistHash, searchHash,
     idIn,
+    // The sprite-sheet arithmetic, shared with the device: the scrub bar's
+    // hover preview cuts its frame out of the same sheets this list does.
+    tileAt,
     linkHref: href, actionOf: action, unavailableReason: why, artworkOf: artwork,
     SILENT_ACTIONS: SILENT,
   };
