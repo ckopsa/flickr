@@ -143,6 +143,7 @@
           '<select id="subs" title="Subtitles" style="display:none"></select>' +
           '<select id="audio" title="Audio track" style="display:none"></select>' +
           '<button id="btn-autoplay"></button>' +
+          '<button id="btn-pip" title="Picture in picture" aria-label="Picture in picture" hidden>⧉</button>' +
           '<button id="btn-fs" title="Fullscreen" aria-label="Fullscreen">⛶</button>' +
           '<google-cast-launcher id="cast-btn"></google-cast-launcher>' +
         '</div>' +
@@ -150,6 +151,7 @@
     video = element.querySelector('#video');
     scrub = element.querySelector('#scrub');
     bindDevice();
+    bindNowPlaying();
   }
 
   // attach moves the ONE device element into the chrome the kernel just
@@ -424,6 +426,7 @@
     session = s;
     K.renderSession(s);
     paintCastRemote();
+    updateNowPlaying();
   }
 
   // holdSession lets the reader's sitting share this one's exit: a book's
@@ -450,6 +453,7 @@
     if (casting()) { castEndSuppressed = true; if (remoteController) remoteController.stop(); }
     else if (video) { video.pause(); video.removeAttribute('src'); video.load(); }
     await stopSession();
+    clearNowPlaying();
     item = null;
     method = null;
     document.body.classList.remove('audio-mode');
@@ -945,6 +949,7 @@
       }
     }
     syncPlayButton();
+    updatePositionState();
     checkPassageEnd();
     if (passageEndFired && !passageNaturalEnd && isPlaying()) {
       const endAt = passageEndNow();
@@ -959,6 +964,137 @@
       onPlaybackEnded();
     }
     if (endFired && isPlaying() && dur > 0 && position() < dur - 10) endFired = false;
+  }
+
+  // --- the lock screen and the small window ------------------------------------
+  //
+  // A lock screen, a headphone button, a car stereo and a hardware key all
+  // speak one API, and none of them can see the transport above. What they
+  // are told is read off the SAME documents the transport draws from — the
+  // session's title, its work, its artwork link, the item's author — so the
+  // phone says what the page says, and nothing here composes an address or a
+  // rule of its own. Every call is guarded: a browser without the API is a
+  // browser with no lock-screen controls, which is where it started.
+
+  function mediaSession() {
+    return (root.navigator && root.navigator.mediaSession) || null;
+  }
+  function linkTitle(doc, rel) {
+    const l = doc && doc.links && doc.links[rel];
+    return (l && l.title) || '';
+  }
+  // What is playing, in the three lines an OS shows it in. The author is the
+  // audiobook's author and the record's artist; a film or an episode has
+  // none, and then the work's own title is the name under the title.
+  function nowPlaying() {
+    const work = linkTitle(session, 'work') || linkTitle(item, 'work');
+    const author = (item && item.identity && item.identity.author) || '';
+    const art = R.linkHref(session, 'artwork');
+    return {
+      title: (session && session.title) || (item && item.title) || '',
+      artist: author || work,
+      album: work,
+      // The same absolute the cast device is given: a lock screen fetches the
+      // picture itself, and a relative href is not enough for one.
+      artwork: art ? [{ src: root.castAbsolute(baseUrl, art) }] : [],
+    };
+  }
+  function updateNowPlaying() {
+    const ms = mediaSession();
+    if (!ms) return;
+    if (root.MediaMetadata) {
+      try { ms.metadata = new root.MediaMetadata(nowPlaying()); } catch (e) { /* no metadata, then */ }
+    }
+    ms.playbackState = isPlaying() ? 'playing' : 'paused';
+    syncPipButton();
+  }
+  function clearNowPlaying() {
+    const ms = mediaSession();
+    if (!ms) return;
+    ms.metadata = null;
+    ms.playbackState = 'none';
+    if (document.pictureInPictureElement) document.exitPictureInPicture().catch(() => {});
+  }
+  // Where the person is, in the ITEM's clock — the one the transport shows —
+  // so the scrubber on a lock screen agrees with the one on the page. A
+  // position past the duration is refused by the API rather than clamped,
+  // which is why it is clamped here.
+  function updatePositionState() {
+    const ms = mediaSession();
+    if (!ms || !ms.setPositionState) return;
+    const dur = duration();
+    if (!(dur > 0)) return;
+    try {
+      ms.setPositionState({
+        duration: dur,
+        position: Math.min(Math.max(position(), 0), dur),
+        playbackRate: (video && video.playbackRate) || 1,
+      });
+    } catch (e) { /* a clock the browser would not take */ }
+    ms.playbackState = isPlaying() ? 'playing' : 'paused';
+  }
+  // The neighbour a track button asks for: the work's order, off the item
+  // document's own relations, taken the way the transport's prev/next take
+  // it. The session's `next` is the fallback, because a run's next member is
+  // the session's and not the item's.
+  function goToNeighbour(rel) {
+    const href = R.linkHref(item, rel);
+    if (href) { goTo(Number(R.idIn(href)), 'nav'); return; }
+    if (rel === 'next' && nextId() != null) advance();
+  }
+  function bindMediaSession() {
+    const ms = mediaSession();
+    if (!ms || !ms.setActionHandler) return;
+    const handlers = {
+      play: () => { if (!isPlaying()) togglePlay(); },
+      pause: () => { if (isPlaying()) togglePlay(); },
+      seekbackward: d => seekTo(position() - ((d && d.seekOffset) || 10)),
+      seekforward: d => seekTo(position() + ((d && d.seekOffset) || 30)),
+      seekto: d => { if (d && typeof d.seekTime === 'number') seekTo(d.seekTime); },
+      previoustrack: () => goToNeighbour('prev'),
+      nexttrack: () => goToNeighbour('next'),
+    };
+    for (const name of Object.keys(handlers)) {
+      // A browser that does not know an action THROWS on its name rather
+      // than ignoring it, so each one is set on its own.
+      try { ms.setActionHandler(name, handlers[name]); } catch (e) { /* not this browser's */ }
+    }
+  }
+
+  // Picture-in-picture is the browser's own small window, and only the video
+  // element may go into it. The button appears when the browser has the
+  // feature; audio mode and casting hide it in CSS, having no picture here to
+  // put in a window.
+  function pipAvailable() {
+    return !!(document.pictureInPictureEnabled && video && !video.disablePictureInPicture);
+  }
+  function syncPipButton() {
+    const b = $('btn-pip');
+    if (!b) return;
+    b.hidden = !pipAvailable();
+    const on = document.pictureInPictureElement === video;
+    b.title = on ? 'Leave picture in picture' : 'Picture in picture';
+    b.setAttribute('aria-label', b.title);
+  }
+  function togglePip() {
+    if (!pipAvailable()) return;
+    if (document.pictureInPictureElement) { document.exitPictureInPicture().catch(() => {}); return; }
+    video.requestPictureInPicture().catch(() => {});
+  }
+
+  // The listeners this pair needs, bound beside the device's own rather than
+  // inside them: the OS's handlers never change, and the button answers a
+  // click of its own.
+  function bindNowPlaying() {
+    bindMediaSession();
+    element.addEventListener('click', e => {
+      if (e.target.id === 'btn-pip') togglePip();
+    });
+    video.addEventListener('enterpictureinpicture', syncPipButton);
+    video.addEventListener('leavepictureinpicture', syncPipButton);
+    video.addEventListener('play', updateNowPlaying);
+    video.addEventListener('pause', updateNowPlaying);
+    syncPipButton();
   }
 
   // --- casting -----------------------------------------------------------------

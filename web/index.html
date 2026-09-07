@@ -253,6 +253,8 @@
   body.casting #controls input[type=range] { width: 160px; }
   /* nothing to take fullscreen when the picture is on the other device */
   body.casting #btn-fs { display: none; }
+  /* the picture is on the television: there is nothing here to put in a small window */
+  body.casting #btn-pip { display: none !important; }
   #scrub { position: relative; height: 22px; margin: 10px 0 2px; cursor: pointer; }
   #scrub .rail { position: absolute; left: 0; right: 0; top: 8px; height: 6px; background: #2a2c33; border-radius: 3px; }
   #scrub .avail { position: absolute; left: 0; top: 8px; height: 6px; background: #3d4250; border-radius: 3px; width: 0; }
