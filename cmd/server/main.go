@@ -194,7 +194,18 @@ func main() {
 		}
 		streamFiles.ServeHTTP(w, r)
 	}))
-	mux.Handle("GET /", http.FileServer(http.Dir("web")))
+	// The web shell always REVALIDATES. Without a Cache-Control header a
+	// browser applies heuristic freshness from Last-Modified — a file that
+	// looks old is fresh for a long time without a single request — and
+	// the service worker's precache rides the same HTTP cache, so a
+	// weeks-old index.html outlived three deploys and a cache bump
+	// (2026-09-07). no-cache keeps ETag/Last-Modified 304s cheap and
+	// makes every load ask; offline is the service worker's job.
+	web := http.FileServer(http.Dir("web"))
+	mux.Handle("GET /", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-cache")
+		web.ServeHTTP(w, r)
+	}))
 
 	// Permissive CORS: the Cast receiver fetches playlists/segments from a
 	// different origin and preflights Range requests.

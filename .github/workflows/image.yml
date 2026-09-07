@@ -100,8 +100,11 @@ jobs:
           CGO_ENABLED=0 GOOS=linux GOARCH=arm64 \
             go build -trimpath -ldflags='-s -w' -o out/app/server ./cmd/server
           cp -r web out/app/web
-          # one layer: /app/server and /app/web/…, owned by root, fixed mtimes
-          tar --sort=name --owner=0 --group=0 --numeric-owner --mtime='2000-01-01' \
+          # one layer: /app/server and /app/web/…, owned by root. The mtime
+          # is the COMMIT's time: reproducible per commit, and an honest
+          # Last-Modified — a year-2000 stamp let browsers call the shell
+          # fresh for years (2026-09-07).
+          tar --sort=name --owner=0 --group=0 --numeric-owner --mtime="@$(git log -1 --format=%ct)" \
               -C out -cf layer.tar app
           ls -l layer.tar
 
