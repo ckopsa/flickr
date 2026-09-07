@@ -431,3 +431,65 @@ test('the decision trace hides behind a disclosure, closed by default', () => {
   };
   assert.ok(R.trace(transcoding, '', '').trace.includes('<summary>Why is this transcoding?</summary>'));
 });
+
+// --- the hero and the facts under a title ------------------------------------
+
+// The home leads with one thing, and which one is the server's ordering: the
+// resume shelf's first entry, then what arrived lately, then the first tile.
+test('the home leads with a hero, and the resume shelf leads the hero', () => {
+  const lib = golden('library'), cont = golden('continue');
+  const html = R.library(lib, {}, cont);
+  assert.ok(html.indexOf('id="hero"') < html.indexOf('id="genre-row"'), 'the hero comes first');
+
+  // The resume shelf's first entry, with its own action, its own address and
+  // the item's own route beside them — nothing composed.
+  const en = cont.items[0];
+  const hero = html.split('id="hero"')[1].split('</section>')[0];
+  assert.ok(hero.includes(R.esc(en.work_title)), 'the hero names what is being resumed');
+  assert.ok(hero.includes('data-href="' + R.esc(en.actions.resume.href) + '"'));
+  assert.ok(hero.includes(R.esc(en.actions.resume.label)), 'the action keeps the server\'s verb');
+  assert.ok(hero.includes('data-nav="#/item/' + en.id + '"'));
+  assert.ok(hero.includes('src="' + R.esc(R.linkHref(en, 'backdrop') || R.artworkOf(en)) + '"'));
+
+  // Nothing in progress: what arrived lately leads instead, and it is a
+  // link — a tile carries no action, so there is no button on it.
+  const cold = R.library(lib, {});
+  const first = lib.recently_added[0];
+  assert.ok(cold.includes('data-nav="' + R.esc(R.hashFor(first)) + '"'));
+  assert.ok(!cold.split('id="genre-row"')[0].includes('data-act='));
+
+  // Nothing lately either: the first tile. Nothing at all: no hero.
+  const bare = Object.assign({}, lib, { recently_added: [] });
+  assert.ok(R.library(bare, {}).includes(R.esc(bare.items[0].title)));
+  assert.equal(R.hero({ items: [] }, null), '');
+});
+
+// What TMDB knows about the title, on the title's page: the facts as facts,
+// and nothing at all where the document is silent.
+test('the item page shows the backdrop, the facts and the cast it was given', () => {
+  const doc = golden('item-film');
+  const html = R.item(doc, {});
+  assert.ok(html.includes('id="detail-backdrop"'), 'the backdrop is painted behind the head');
+  assert.ok(html.includes('src="' + R.esc(doc.links.backdrop.href) + '"'));
+  const meta = html.split('id="detail-meta"')[1].split('</div>')[0];
+  assert.ok(meta.includes('>' + R.esc(doc.certification) + '<'), 'the certification is a badge');
+  assert.ok(meta.includes('1h 42m'), 'the runtime is said in hours and minutes');
+  for (const g of doc.enrichment.genres) assert.ok(meta.includes('>' + R.esc(g) + '<'), g);
+  assert.ok(html.includes('With: ' + R.esc(doc.cast.join(', '))));
+
+  // A document that carries none of it says none of it.
+  const bare = JSON.parse(JSON.stringify(doc));
+  delete bare.links.backdrop; delete bare.certification; delete bare.runtime_minutes;
+  delete bare.cast; delete bare.enrichment.genres;
+  const plain = R.item(bare, {});
+  for (const id of ['detail-backdrop', 'detail-meta', 'detail-cast']) {
+    assert.ok(!plain.includes('id="' + id + '"'), id + ' is drawn over nothing');
+  }
+});
+
+test('a runtime is said the way a person says it', () => {
+  assert.equal(R.fmtRuntime(102), '1h 42m');
+  assert.equal(R.fmtRuntime(45), '45m');
+  assert.equal(R.fmtRuntime(120), '2h');
+  assert.equal(R.fmtRuntime(0), '');
+});

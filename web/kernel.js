@@ -200,7 +200,7 @@
   // --- the library view --------------------------------------------------------
 
   function paintLibrary() {
-    mount(R.library(libraryDoc, libState));
+    mount(R.library(libraryDoc, libState, continueDoc));
     libState.note = '';
     paintContinue();
   }
@@ -220,6 +220,10 @@
     const html = continueDoc ? R.continueShelf(continueDoc) : '';
     box.innerHTML = html;
     box.hidden = !html;
+    // The hero leads with whatever is in progress, so it is drawn again when
+    // the shelf lands on its own errand — or empties.
+    const slot = $('hero-slot');
+    if (slot) slot.innerHTML = R.hero(libraryDoc, continueDoc);
   }
 
   // The resume shelf is its own document, followed from the root (or the

@@ -47,6 +47,16 @@
     return (h ? h + ':' + String(m).padStart(2, '0') : m) + ':' + String(sec).padStart(2, '0');
   }
 
+  // How long a title runs, said the way a person says it: "1h 42m", "45m".
+  // Minutes, because minutes is the unit the enrichment carries.
+  function fmtRuntime(min) {
+    const m = Math.floor(Number(min) || 0);
+    if (m <= 0) return '';
+    const h = Math.floor(m / 60), rest = m % 60;
+    if (!h) return rest + 'm';
+    return rest ? h + 'h ' + rest + 'm' : h + 'h';
+  }
+
   // --- the document, read ------------------------------------------------------
   // One reach per relation, so a document that does not carry one reads as
   // absent rather than throwing halfway down a chain.
@@ -213,12 +223,58 @@
     return '<div id="genre-row">' + chips + '</div>';
   }
 
-  // The home screen, top to bottom: the chips, the resume shelf the kernel
-  // fills in (#cw), then the banded sections. There is no tile count any
-  // more — "6 titles" told nobody anything a headed row does not.
-  function library(doc, state) {
+  // --- the hero ----------------------------------------------------------------
+
+  // What the home leads with: the one thing this profile would put on now.
+  // The resume shelf's first entry when there is one — it already knows the
+  // verb and the place — else what arrived lately, else the first tile. All
+  // three are the server's own orderings; nothing here sorts or scores.
+  function heroPick(doc, cont) {
+    return ((cont && cont.items) || [])[0] ||
+      ((doc && doc.recently_added) || [])[0] ||
+      ((doc && doc.items) || [])[0] || null;
+  }
+
+  // The banner: the entry's backdrop (its poster or cover when the document
+  // gave it no backdrop), the title, one line about it, and — when the entry
+  // carries one — its own resume/play action. The whole banner is the
+  // control, the way a resume row is: the action rides it and the hash beside
+  // it says where it is taken, so the place to pick up from is read on the
+  // item's own page. An entry with no action is a plain link to it.
+  function hero(doc, cont) {
+    const e = heroPick(doc, cont);
+    if (!e) return '';
+    const art = href(e, 'backdrop') || artwork(e);
+    const title = e.work_title || e.title || '';
+    const line = e.overview || e.subtitle || (e.label && e.label !== title ? e.label : '');
+    const act = action(e, 'resume') || action(e, 'play') || action(e, 'read');
+    const name = action(e, 'resume') ? 'resume' : action(e, 'play') ? 'play' : 'read';
+    // A resume entry is an item document and says so; a tile says which route
+    // its kind spells.
+    const hash = e.kind === 'item' ? itemHash(e.id) : hashFor(e);
+    return '<section id="hero" tabindex="0" role="' + (act ? 'button' : 'link') + '"' +
+      (act ? ' data-act="' + esc(name) + '" data-href="' + esc(act.href) + '"' +
+             ' data-method="' + esc(act.method || 'POST') + '"' : '') +
+      ' data-nav="' + esc(hash) + '">' +
+      (art ? '<div class="hero-art"><img loading="lazy" alt="" src="' + esc(art) + '"></div>' : '') +
+      '<div class="hero-body">' +
+        '<h2 class="hero-title">' + esc(title) + '</h2>' +
+        (line ? '<p class="hero-line">' + esc(line) + '</p>' : '') +
+        (act ? '<span class="hero-act">' + esc(act.label) + '</span>' : '') +
+      '</div></section>';
+  }
+
+  // The home screen, top to bottom: the hero, the chips, the resume shelf the
+  // kernel fills in (#cw), then the banded sections. There is no tile count
+  // any more — "6 titles" told nobody anything a headed row does not.
+  //
+  // `cont` is the resume shelf's document, which arrives on its own errand:
+  // the kernel repaints #hero-slot when it lands, so the hero leads with what
+  // is in progress the moment there is one.
+  function library(doc, state, cont) {
     const s = state || {};
     return '<div id="lib-note"' + (s.note ? '' : ' hidden') + '>' + esc(s.note || '') + '</div>' +
+      '<div id="hero-slot">' + hero(doc, cont) + '</div>' +
       genreRow(doc, s) +
       '<div id="cw" hidden></div>' +
       '<div id="grid">' + libraryGrid(doc, s).html + '</div>';
@@ -488,6 +544,7 @@
     const c = ctx || {};
     const wk = c.work || null;
     const art = artwork(doc) || (wk ? artwork(wk) : '');
+    const back = href(doc, 'backdrop');
     const chapters = ((doc.media_info && doc.media_info.chapters) || [])
       .filter(() => doc.medium !== 'text');
     // Play stands alone up here. The curatorial actions are drawn too — but
@@ -499,11 +556,17 @@
 
     return backTo(backHash(doc, wk), backLabel(doc, wk)) +
       '<div id="detail-info">' +
+        // The picture the title is known by, behind the head and faded into
+        // the page. It is a link like every other; a document without one is
+        // a head on the flat page, which is what it always was.
+        (back ? '<div id="detail-backdrop"><img loading="lazy" alt="" src="' + esc(back) + '"></div>' : '') +
         (art ? '<img id="detail-poster" alt="" src="' + esc(art) + '">' : '') +
         '<div id="detail-body">' +
           '<h2><span id="detail-title">' + esc(doc.title || '') + '</span> ' +
             '<span id="detail-year">' + esc(detailSub(doc, wk)) + '</span></h2>' +
+          detailMeta(doc, wk) +
           '<p id="detail-overview"' + (doc.overview ? '' : ' hidden') + '>' + esc(doc.overview || '') + '</p>' +
+          castLine(doc) +
           primary(doc) + restControls(doc, drawn) +
           '<div id="detail-chapters">' + chapters.map(ch =>
             '<button data-seek="' + esc(ch.start_seconds) + '">' +
@@ -526,6 +589,38 @@
           '</div></div>'
         : '') +
       details(doc);
+  }
+
+  // The genres this title is filed under: the work's list when the kernel has
+  // the work document, else the item's own enrichment, which is where the
+  // item keeps what TMDB said. The first list that has anything in it wins —
+  // works publish an empty one rather than none.
+  function genresOf(doc, wk) {
+    for (const g of [doc && doc.genres, wk && wk.genres,
+                     doc && doc.enrichment && doc.enrichment.genres]) {
+      if (Array.isArray(g) && g.length) return g;
+    }
+    return [];
+  }
+
+  // What the title IS, in one line under it: the certification as a badge,
+  // how long it runs, and the genres as chips. Each is left out when the
+  // document does not carry it — the line is facts, not a form with holes.
+  function detailMeta(doc, wk) {
+    const parts = [];
+    if (doc.certification) parts.push('<span class="cert">' + esc(doc.certification) + '</span>');
+    const runtime = fmtRuntime(doc.runtime_minutes);
+    if (runtime) parts.push('<span class="runtime">' + esc(runtime) + '</span>');
+    for (const g of genresOf(doc, wk)) parts.push('<span class="chip">' + esc(g) + '</span>');
+    return parts.length ? '<div id="detail-meta">' + parts.join('') + '</div>' : '';
+  }
+
+  // Who is in it, in the order TMDB billed them. The server already cut the
+  // list to the few names a page shows, so nothing is trimmed here.
+  function castLine(doc) {
+    const cast = (doc && doc.cast) || [];
+    if (!cast.length) return '';
+    return '<div id="detail-cast">With: ' + esc(cast.join(', ')) + '</div>';
   }
 
   // What the file IS, folded away at the foot of the page: the tech line, the
@@ -812,9 +907,9 @@
   }
 
   const api = {
-    library, libraryGrid, work, artist, item, session, continueShelf,
+    library, libraryGrid, hero, work, artist, item, session, continueShelf,
     card, memberRow, control, restControls, trace, identityForm,
-    esc, fmtTime, hashFor, itemHash, showHash, artistHash,
+    esc, fmtTime, fmtRuntime, hashFor, itemHash, showHash, artistHash,
     idIn,
     linkHref: href, actionOf: action, unavailableReason: why, artworkOf: artwork,
     SILENT_ACTIONS: SILENT,
