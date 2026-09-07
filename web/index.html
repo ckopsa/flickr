@@ -61,6 +61,18 @@
   .set-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 14px; }
   .set-row > label { font-size: 12px; color: var(--muted); }
   .set-row.end { justify-content: flex-end; margin-bottom: 0; }
+  .set-row.col { display: block; }
+  .set-label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+  /* the household dashboard: one line per live sitting, who on the left and
+     where they have got to on the right */
+  #settings-activity { font-size: 13px; }
+  .act-row { display: flex; gap: 10px; align-items: baseline; padding: 5px 0; border-top: 1px solid #262931; }
+  .act-row:first-child { border-top: 0; }
+  .act-who { flex: 0 0 auto; font-weight: 600; }
+  .act-what { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .act-part { color: var(--muted); }
+  .act-how { flex: 0 0 auto; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .act-none { color: var(--muted); }
   #scan-status { font-size: 12px; color: var(--muted); }
   #hw { font-size: 11px; padding: 2px 8px; border-radius: 10px; background: #1e2c42; color: var(--accent); cursor: help; }
 
@@ -732,6 +744,13 @@
     </div>
     <div class="set-row">
       <span id="hw" title=""></span>
+    </div>
+    <!-- who is playing what, right now: the server's own list
+         (root.links.activity), read while this panel is up. kernel.js fills
+         the box; there is nothing to press. -->
+    <div class="set-row col">
+      <span class="set-label">Activity</span>
+      <div id="settings-activity"></div>
     </div>
     <div class="set-row end">
       <button id="settings-close">Close</button>

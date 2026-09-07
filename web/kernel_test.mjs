@@ -77,7 +77,8 @@ test('the shell lists every file the page loads, and the cache is bumped with th
 
 test('the root names everything the client needs to reach', () => {
   const root = golden('root');
-  for (const rel of ['library', 'search', 'continue', 'artists', 'scan', 'system', 'profiles']) {
+  for (const rel of ['library', 'search', 'continue', 'artists', 'scan', 'system', 'profiles',
+                     'activity']) {
     assert.ok(root.links[rel] && root.links[rel].href, `the root has no ${rel} relation`);
   }
   // The route resolver is the one address the kernel would otherwise have had
@@ -156,6 +157,27 @@ test('the resume shelf carries its own pictures and one action per row', () => {
     assert.ok(en.actions.resume, `${en.title}: no resume action`);
     assert.equal(typeof en.percent, 'number');
   }
+});
+
+// The household dashboard behind the gear: a list of live sittings, each
+// drawable from its own words, and not one action anywhere — the panel shows
+// who is playing what, it does not reach across the room.
+test('the activity document is a read, and every row draws itself', () => {
+  const doc = golden('activity');
+  assert.equal(doc.kind, 'activity');
+  assert.equal(doc.actions, undefined, 'the dashboard offers an action');
+  assert.ok(doc.items.length, 'the fixture has a sitting in it');
+  for (const a of doc.items) {
+    assert.ok(a.profile, 'a sitting with nobody in it');
+    assert.ok(a.work_title || a.title, `${a.session_id}: nothing to name it by`);
+    assert.equal(typeof a.position, 'string', 'the place is words, not a sum');
+    assert.ok(a.method && a.started_at, `${a.session_id}: how and since when`);
+    assert.equal(a.actions, undefined, `${a.session_id}: a row offers an action`);
+  }
+  // The panel reads it by following the root, and polls only while it is up.
+  const src = read('kernel.js');
+  assert.match(src, /links\.activity/, 'the panel composes the address itself');
+  assert.match(src, /watchActivity\(false\)/, 'the poll never stops');
 });
 
 test('every golden the client renders is the one the server writes', () => {

@@ -169,6 +169,10 @@ async function walk(page) {
     await page.waitForFunction(() => document.body.hasAttribute('data-ten-foot'));
     await page.click('#settings-tenfoot');
     await page.waitForFunction(() => !document.body.hasAttribute('data-ten-foot'));
+    // The household dashboard fills itself from the root's activity link the
+    // moment the panel is up; nothing is playing, so it says so.
+    await page.waitForFunction(
+      () => /\S/.test(document.getElementById('settings-activity').textContent));
     await page.click('#settings-close');
     await page.waitForFunction(() => document.getElementById('settings').hidden);
   });

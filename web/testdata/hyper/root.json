@@ -18,6 +18,10 @@
     "🐧"
   ],
   "links": {
+    "activity": {
+      "href": "/api/activity",
+      "title": "Activity"
+    },
     "artists": {
       "href": "/api/artists",
       "title": "Artists"

@@ -782,6 +782,61 @@
     paintAutoplay();
     paintTenFoot();
     $('settings').hidden = false;
+    watchActivity(true);
+  }
+
+  function closeSettings() {
+    $('settings').hidden = true;
+    watchActivity(false);
+  }
+
+  // --- household activity ------------------------------------------------------
+  //
+  // Who is playing what, right now — the server's own list, followed from the
+  // root (`links.activity`). It is READ while the panel is up and nowhere
+  // else: a dashboard nobody is looking at is a poll nobody asked for, so the
+  // timer starts with the panel and stops with it.
+  //
+  // Rows are the document's words — the profile, the work, the member's own
+  // label, how it is being sent and where they have got to — and there is
+  // nothing to press: the document offers no action, and neither does this.
+  const ACTIVITY_MS = 5000;
+  let activityTimer = null;
+
+  function watchActivity(on) {
+    if (activityTimer) clearInterval(activityTimer);
+    activityTimer = null;
+    if (!on) return;
+    paintActivity();
+    activityTimer = setInterval(paintActivity, ACTIVITY_MS);
+  }
+
+  async function paintActivity() {
+    const box = $('settings-activity');
+    const l = rootDoc && rootDoc.links && rootDoc.links.activity;
+    if (!box) return;
+    if (!l) { box.textContent = 'This server does not report activity.'; return; }
+    let doc;
+    try {
+      doc = await api(l.href);
+    } catch (e) {
+      box.textContent = e.detail || 'Activity could not be read.';
+      return;
+    }
+    if ($('settings').hidden) return; // the panel closed while we were asking
+    const rows = (doc && doc.items) || [];
+    box.innerHTML = rows.length
+      ? rows.map(a =>
+          '<div class="act-row">' +
+            '<span class="act-who">' + esc(a.profile || '') + '</span>' +
+            '<span class="act-what">' + esc(a.work_title || a.title || '') +
+              (a.label && a.label !== a.work_title
+                ? ' <span class="act-part">' + esc(a.label) + '</span>' : '') +
+            '</span>' +
+            '<span class="act-how">' +
+              esc([a.position, a.method].filter(Boolean).join(' · ')) + '</span>' +
+          '</div>').join('')
+      : '<div class="act-none">Nothing is playing.</div>';
   }
 
   // --- ten-foot mode -----------------------------------------------------------
@@ -914,7 +969,7 @@
     if (e.key !== 'Backspace' && e.key !== 'Escape') return false;
     if (typingIn(e.target)) return false;
     if (!$('gate').hidden) return false; // who is watching has no way past
-    if (!$('settings').hidden) { $('settings').hidden = true; e.preventDefault(); return true; }
+    if (!$('settings').hidden) { closeSettings(); e.preventDefault(); return true; }
     if (!$('stage').hidden) {
       if (e.key === 'Escape') return false;
       if (playsOn()) collapse(); else closeStage();
@@ -1132,8 +1187,8 @@
     $('search').oninput = onSearchInput;
     $('search').onkeydown = onSearchKey;
     $('gear').onclick = openSettings;
-    $('settings-close').onclick = () => { $('settings').hidden = true; };
-    $('settings').onclick = e => { if (e.target.id === 'settings') $('settings').hidden = true; };
+    $('settings-close').onclick = closeSettings;
+    $('settings').onclick = e => { if (e.target.id === 'settings') closeSettings(); };
     $('settings-autoplay').onclick = () => { root.Player.setAutoplay(!root.Player.autoplay()); paintAutoplay(); };
     $('settings-tenfoot').onclick = () => setTenFoot(!tenFoot);
     // Remembered if it was ever chosen, guessed if it was not.

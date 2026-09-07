@@ -82,6 +82,9 @@ func (s *server) handleRootDoc(w http.ResponseWriter, r *http.Request) {
 		// `?q=`, and the client reaches it by the hash its box spells.
 		Link("search", "/api/search", "Search").
 		Link("continue", cont, "Continue watching").
+		// Who is playing what, right now — the household's, not this
+		// profile's, so it carries nobody's name (activity.go).
+		Link("activity", "/api/activity", "Activity").
 		Link("artists", "/api/artists", "Artists").
 		Link("works", "/api/works", "Works").
 		Link("items", "/api/items", "Items").
