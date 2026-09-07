@@ -462,6 +462,26 @@
   #passage-picker { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 10px; }
   #passage-picker select { max-width: 40vw; }
 
+  /* the mini player: the bar an audio sitting collapses into. It sits over
+     whatever document is on screen, says what is playing, and takes a tap
+     back to the item's own page, where the full chrome is drawn again. */
+  #mini-player { position: fixed; left: 0; right: 0; bottom: 0; z-index: 80;
+    background: #1b1d24; border-top: 1px solid #2a2c33; box-shadow: 0 -6px 30px rgba(0,0,0,0.5); }
+  #mini-bar { position: relative; display: flex; align-items: center; gap: 12px;
+    padding: 8px max(16px, calc((100% - 1400px) / 2)); cursor: pointer; }
+  #mini-art { width: 44px; height: 44px; flex: 0 0 auto; border-radius: 6px;
+    object-fit: cover; background: #14151a; }
+  #mini-what { flex: 1 1 auto; min-width: 0; }
+  #mini-title, #mini-work { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #mini-title { font-size: 13px; }
+  #mini-work { font-size: 12px; color: var(--muted); }
+  #mini-controls { display: flex; gap: 6px; flex: 0 0 auto; }
+  #mini-controls button { min-width: 40px; }
+  #mini-progress { position: absolute; left: 0; right: 0; bottom: 0; height: 2px; background: #2a2c33; }
+  #mini-fill { width: 0; height: 100%; background: var(--accent); }
+  /* the bar is over the page, so the page ends above it */
+  body:has(#mini-player:not([hidden])) main { padding-bottom: 76px; }
+
   /* what a refusal reads as: the server's sentence, and its remedy */
   #toast { position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%); z-index: 90;
     background: #2e2616; color: var(--warn); border: 1px solid #a37a30; border-radius: 8px;
@@ -623,6 +643,12 @@
     <div id="reader-pane" hidden></div>
   </div>
 </main>
+
+<!-- the mini player: an audio sitting somebody walked away from. kernel.js
+     draws it from the same session document (Render.miniPlayer) and player.js
+     moves the ONE device element into the hidden slot inside it, so the sound
+     — and the buffer — survive leaving the page. -->
+<div id="mini-player" hidden></div>
 
 <!-- a refusal, said out loud -->
 <div id="toast" hidden></div>

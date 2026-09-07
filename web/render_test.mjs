@@ -129,6 +129,46 @@ test('the session chrome hands the device a slot, never a player', () => {
     'element is moved into it, so the buffer survives a document swap');
 });
 
+// --- the mini player ---------------------------------------------------------
+
+// The other shape the chrome comes in: the same session document, collapsed
+// to a bar so an audio sitting can play on under whatever is being browsed.
+test('the mini player says what is playing and where to tap to get it back', () => {
+  const doc = golden('session-play');
+  const html = R.miniPlayer(doc, {});
+  assert.ok(html.includes(R.esc(doc.title)), 'the bar names what is playing');
+  assert.ok(html.includes(R.esc(doc.links.work.title)), 'and the work it belongs to');
+  // The device moves into the bar, which is what keeps the sound going across
+  // the document swap: one slot, and no media element of the bar's own.
+  assert.equal((html.match(/id="device-slot"/g) || []).length, 1);
+  assert.ok(!/<video\b/i.test(html) && !/<audio\b/i.test(html),
+    'the bar must not make a second media element');
+  // A tap goes back to the item's own page, where the full chrome is drawn.
+  assert.ok(html.includes('data-nav="' + R.itemHash(doc.item_id) + '"'));
+  assert.ok(html.includes('data-expand='), 'the tap says it wants the chrome back');
+  // Every address on it came out of the document, like every other renderer's.
+  for (const a of addresses(html)) {
+    if (a.startsWith('#')) continue;
+    assert.ok(flat(doc).includes(JSON.stringify(a).slice(1, -1)),
+      a + ' is not an address this document gave');
+  }
+  // And an unknown field changes nothing.
+  const grown = JSON.parse(JSON.stringify(doc));
+  grown.something_the_server_added_later = { deep: [1, 2, 3] };
+  assert.equal(R.miniPlayer(grown, {}), html);
+});
+
+test('a bar with no picture is still a bar, and a book gets none at all', () => {
+  const doc = JSON.parse(JSON.stringify(golden('session-play')));
+  delete doc.links.artwork;
+  const html = R.miniPlayer(doc, {});
+  assert.ok(!html.includes('<img'), 'no picture rather than a broken one');
+  assert.ok(html.includes(R.esc(doc.title)));
+  // A reading session is the reader's, not the device's: no bar for it.
+  assert.equal(R.miniPlayer(golden('session-read'), {}), '');
+  assert.equal(R.miniPlayer(null, {}), '');
+});
+
 test('a reading session has no player chrome at all', () => {
   assert.equal(R.session(golden('session-read'), {}), '');
   assert.equal(R.session(golden('session-read-pdf'), {}), '');

@@ -179,6 +179,13 @@
 
   // attach moves the ONE device element into the chrome the kernel just
   // rendered. See the note at the top: this move keeps the buffer.
+  //
+  // The chrome comes in two shapes and this is the whole of the difference:
+  // the full player, and the mini bar an audio sitting collapses into when the
+  // page under it changes (kernel.js holds that rule). The bar's slot is
+  // inside a hidden box — a display:none media element goes on playing — so
+  // the sound carries across the swap the same way the buffer does. Everything
+  // painted below is skipped by its own guard when the bar drew no such thing.
   function attach(chrome) {
     const slot = chrome.querySelector('#device-slot');
     if (!slot) return;
@@ -206,6 +213,30 @@
     renderSubSelector();
     renderAudioSelector();
     wake();
+    paintMini();
+  }
+
+  // The bar's own controls are the DEVICE's — play/pause and ±30s, not
+  // anything the document affords — so they are handled here. Stopping the
+  // click keeps the bar's tap, which navigates back to the item, from firing
+  // under the button that was pressed.
+  function onMiniClick(e) {
+    const b = e.target.closest && e.target.closest('button');
+    if (!b) return;
+    e.stopPropagation();
+    if (b.id === 'mini-play') togglePlay();
+    else if (b.id === 'mini-back') seekTo(position() - 30);
+    else if (b.id === 'mini-fwd') seekTo(position() + 30);
+    syncPlayButton();
+  }
+
+  // The bar's thin line: the place the scrubber shows, in the one measure a
+  // collapsed sitting has room for.
+  function paintMini() {
+    const fill = $('mini-fill');
+    if (!fill) return;
+    const dur = duration();
+    fill.style.width = dur > 0 ? Math.min(100, position() / dur * 100) + '%' : '0%';
   }
 
   // --- clocks ------------------------------------------------------------------
@@ -657,8 +688,19 @@
     // A different file: the subtitle, burn and audio selections were this
     // one's ordinals and mean nothing there.
     selectedSubOrdinal = burnSubOrdinal = selectedAudioOrdinal = null;
+    // A COLLAPSED sitting goes nowhere: the person is browsing something else,
+    // and a record reaching its next track is no reason to drag the page along
+    // with the run. The next member starts in place and the bar renames itself.
+    if (K.collapsed() && id === nextId()) { playNext(); return; }
     K.setPendingPlay({ id, mode });
     K.replaceHash(K.itemHash(id, root.passageForNext(passage)));
+  }
+  // The next member, started without a route: its document is one relation off
+  // the session (`next`), which is the same address the hash would have gone to.
+  async function playNext() {
+    let doc = null;
+    try { doc = await K.doc(nextHref()); } catch (e) { /* the run ends here */ }
+    if (doc) await play(doc, { seek: 0 });
   }
 
   // --- natural ends and the heartbeat ------------------------------------------
@@ -721,8 +763,11 @@
   }
 
   function syncPlayButton() {
-    const b = $('btn-play');
-    if (b) b.textContent = isPlaying() ? '⏸' : '⏵';
+    const glyph = isPlaying() ? '⏸' : '⏵';
+    for (const id of ['btn-play', 'mini-play']) {
+      const b = $(id);
+      if (b) b.textContent = glyph;
+    }
   }
 
   // The one play/pause there is: the button, the picture and the keyboard all
@@ -1082,6 +1127,7 @@
     // A stop the media element never announced — a cast device's pause, a
     // stream that ran out — lights the room back up all the same.
     if (element.classList.contains('idle') && !isPlaying()) wake();
+    paintMini();
     checkPassageEnd();
     if (passageEndFired && !passageNaturalEnd && isPlaying()) {
       const endAt = passageEndNow();
@@ -1338,6 +1384,10 @@
     K = kernel;
     profiles.browser = detectBrowserCaps();
     if (!element) build();
+    // The bar is re-rendered from the session document, so the listener goes
+    // on the container that outlives every render of it.
+    const bar = $('mini-player');
+    if (bar) bar.addEventListener('click', onMiniClick);
     root.__onGCastApiAvailable = ok => { if (ok) initCast(); };
   }
 
@@ -1349,6 +1399,9 @@
     setAutoplay, autoplay: () => autoplayNext,
     setBaseUrl: u => { baseUrl = u; },
     playingItem: () => (item ? item.id : null),
+    // What the device is playing, for the one rule that turns on it: audio
+    // plays on when the page changes, video stops (kernel.js, playsOn).
+    medium: () => (item && item.medium) || null,
     passage: () => passage,
     session: () => session,
     get element() { return element; },

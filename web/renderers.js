@@ -892,6 +892,42 @@
       '</div>';
   }
 
+  // --- the mini player ---------------------------------------------------------
+
+  // The other shape the session chrome comes in. Music does not stop because
+  // somebody went looking for the next record: leaving an audio item COLLAPSES
+  // its sitting into this bar (kernel.js holds that rule) instead of ending it.
+  //
+  // It is the same session document, said in one line — the picture, what is
+  // playing, the work it belongs to — with the device's own play/pause and
+  // ±30s beside it and a thin line of progress under it. #device-slot is here
+  // too, inside a hidden box: the ONE media element moves into it, which is
+  // what keeps the buffer and the sound across the document swap.
+  //
+  // The bar itself is a tap back to the item's own page, where the full chrome
+  // is drawn again — a hash, which is the client's grammar, never an address.
+  function miniPlayer(doc, ctx) {
+    if (!doc || doc.method === 'read') return '';
+    const c = ctx || {};
+    const art = artwork(doc);
+    const wk = (link(doc, 'work') || {}).title || (c.work && c.work.title) || '';
+    return '<div id="mini-bar" data-nav="' + esc(itemHash(doc.item_id)) + '" data-expand="1"' +
+        ' tabindex="0" role="button" title="Back to the player">' +
+      (art ? '<img id="mini-art" src="' + esc(art) + '" alt="">' : '') +
+      '<div id="mini-what">' +
+        '<div id="mini-title">' + esc(doc.title || '') + '</div>' +
+        (wk ? '<div id="mini-work">' + esc(wk) + '</div>' : '') +
+      '</div>' +
+      '<div id="mini-controls">' +
+        '<button id="mini-back" title="Back 30s" aria-label="Back 30 seconds">⏪</button>' +
+        '<button id="mini-play" title="Play/Pause" aria-label="Play/Pause">⏵</button>' +
+        '<button id="mini-fwd" title="Forward 30s" aria-label="Forward 30 seconds">⏩</button>' +
+      '</div>' +
+      '<div id="mini-device" hidden><div id="device-slot"></div></div>' +
+      '<div id="mini-progress"><div id="mini-fill"></div></div>' +
+      '</div>';
+  }
+
   // --- the trace ---------------------------------------------------------------
   // Not a document kind of its own: the decision the session document carries,
   // drawn for the system panel under the player. The badge line stays out in
@@ -933,7 +969,7 @@
   }
 
   const api = {
-    library, libraryGrid, hero, work, artist, item, session, continueShelf, search,
+    library, libraryGrid, hero, work, artist, item, session, miniPlayer, continueShelf, search,
     card, memberRow, control, restControls, trace, identityForm,
     esc, fmtTime, fmtRuntime, hashFor, itemHash, showHash, artistHash, searchHash,
     idIn,

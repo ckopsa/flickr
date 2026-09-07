@@ -98,6 +98,8 @@
   let currentItem = null;        // the item document on screen
   let pendingAutoplay = null;    // item id to start once its route renders
   let pendingPlay = null;        // { id, mode: 'nav' | 'zero' } from a prev/next
+  let collapsed = false;         // an audio sitting playing on in the mini bar
+  let pendingExpand = false;     // the bar was tapped: the full chrome is wanted
   let routeSeq = 0;
   let swReloadPending = false;   // a new worker took control mid-stream
 
@@ -174,13 +176,66 @@
   // document changes — and the ONE device element moved into it. Nothing in
   // the chrome is a <video>; the buffer belongs to the device, not the render.
   function renderSession(session) {
+    // A COLLAPSED sitting is chrome too, of the other shape: the next track in
+    // the run redraws the bar rather than throwing the player over whatever
+    // the person is reading.
+    if (collapsed) { paintMini(session); return; }
     const chrome = $('player-chrome');
     const html = R.session(session, { work: currentWork });
     chrome.innerHTML = html;
     chrome.hidden = !html;
     if (!html) return; // a reading session has no player chrome; the pane is its own
-    root.Player.attach(chrome);
+    root.Player.attach(chrome); // the device comes back out of the bar, if it was in it
+    hideMini();
     showStage(true);
+  }
+
+  // --- the mini player ---------------------------------------------------------
+  //
+  // Music does not stop because you went looking for the next record. Leaving
+  // an audio item COLLAPSES its sitting into the bottom bar instead of ending
+  // it: the bar is drawn from the same session document and the one device
+  // element moves into the hidden slot inside it, so the buffer — and the
+  // sound — carry on across the document swap. Video keeps the old rule: a
+  // picture nobody is looking at is not worth a stream.
+  //
+  // Three things end a collapsed sitting: the bar's own tap (which asks for
+  // the full chrome back), starting any other item, and Stop.
+  function playsOn() {
+    return root.Player.medium() === 'audio' && !!root.Player.session();
+  }
+  function collapse() {
+    const s = root.Player.session();
+    if (!s) { closeStage(); return; }
+    collapsed = true;
+    paintMini(s);
+    showStage(false);
+  }
+  function paintMini(session) {
+    const bar = $('mini-player');
+    const html = R.miniPlayer(session, { work: currentWork });
+    if (!bar || !html) return;
+    bar.innerHTML = html;
+    bar.hidden = false;
+    root.Player.attach(bar); // synchronous, so the element never leaves the document
+  }
+  // The full chrome again, which is one re-render of the session document.
+  function expand() {
+    const s = root.Player.session();
+    collapsed = false;
+    if (!s) { hideMini(); return; }
+    renderSession(s);
+  }
+  function hideMini() {
+    collapsed = false;
+    const bar = $('mini-player');
+    if (bar) bar.hidden = true;
+  }
+  // Starting a play is the end of a collapsed sitting: the bar belongs to what
+  // was playing, and this is another one.
+  async function startPlay(itemDoc, opts) {
+    collapsed = false;
+    await root.Player.play(itemDoc, opts);
   }
 
   // One sentence, said out loud: a refusal's detail and the remedy that would
@@ -349,8 +404,12 @@
     }
 
     const routedItem = r.view === 'item' && r.document ? r.document.id : null;
-    // Leaving the item that is playing (browser back/forward included).
-    if (currentItem && routedItem !== currentItem.id) closeStage();
+    // Leaving the item that is playing (browser back/forward included). Audio
+    // does not stop for it: the sitting collapses into the bar and plays on.
+    if (currentItem && routedItem !== currentItem.id) {
+      if (playsOn()) collapse(); else closeStage();
+    }
+    if (r.view !== 'item') pendingExpand = false; // the bar's tap goes to an item or nowhere
 
     if (r.view === 'work') {
       currentWork = remember(r.document);
@@ -434,6 +493,19 @@
 
     const rp = root.isTimedPassage(r.passage) ? r.passage : null;
     const samePlaying = root.Player.playingItem() === itemDoc.id;
+    // The bar's own item, arrived at again. Its tap asks for the full chrome
+    // back; arriving any other way leaves the sound where it is and draws the
+    // page under the bar.
+    if (collapsed && samePlaying) {
+      if (!pendingExpand) {
+        showStage(false);
+        mount(R.item(itemDoc, { work: currentWork }));
+        pendingAutoplay = pendingPlay = null;
+        return;
+      }
+      expand();
+    }
+    pendingExpand = false;
     if (samePlaying && root.passageQuery(rp) === root.passageQuery(root.Player.passage())) {
       showStage(true); // already playing this item: keep the player as it is
     } else if (rp) {
@@ -441,15 +513,15 @@
       // the saved place, so never null here.
       showStage(false);
       mount(R.item(itemDoc, { work: currentWork }));
-      await root.Player.play(itemDoc, { seek: rp.t == null ? 0 : rp.t, passage: rp });
+      await startPlay(itemDoc, { seek: rp.t == null ? 0 : rp.t, passage: rp });
     } else if (samePlaying) {
       showStage(true); // "Keep watching" dropped the passage: nothing to restart
     } else {
       showStage(false);
       mount(R.item(itemDoc, { work: currentWork }));
-      if (pendingAutoplay === itemDoc.id) await root.Player.play(itemDoc, {});
+      if (pendingAutoplay === itemDoc.id) await startPlay(itemDoc, {});
       else if (pendingPlay && pendingPlay.id === itemDoc.id) {
-        await root.Player.play(itemDoc, { seek: pendingPlay.mode === 'zero' ? 0 : undefined });
+        await startPlay(itemDoc, { seek: pendingPlay.mode === 'zero' ? 0 : undefined });
       }
     }
     pendingAutoplay = pendingPlay = null;
@@ -465,6 +537,7 @@
     act = act || R.actionOf(itemDoc, 'read');
     if (!act) return;
     await root.Player.close();
+    hideMini(); // a book is read in silence: the sitting the bar held is over
     let session;
     try {
       session = await api(act.href, {
@@ -500,6 +573,7 @@
   function closeStage() {
     root.Reader.close();
     root.Player.close();
+    hideMini();
     currentItem = null;
     showStage(false);
     loadContinue(); // a sitting ended: the resume points moved
@@ -664,7 +738,13 @@
       if (id != null) replaceHash(itemHash(id, null));
       return;
     }
-    if (t.closest('#detail-back')) { closeStage(); applyRoute(); return; }
+    if (t.closest('#detail-back')) {
+      // Back out of the player: an audio sitting collapses into the bar
+      // rather than ending, and the item's own page comes back under it.
+      if (playsOn()) collapse(); else closeStage();
+      applyRoute();
+      return;
+    }
     const goto_ = t.closest('[data-goto]');
     if (goto_) { root.Player.goTo(Number(goto_.dataset.goto), goto_.dataset.mode || 'nav'); return; }
     const seek = t.closest('[data-seek]');
@@ -696,6 +776,9 @@
       e.preventDefault();
       if (navEl.dataset.autoplay) pendingAutoplay = Number(navEl.dataset.nav.replace('#/item/', ''));
       morph(navEl);
+      // The mini bar: a tap on it is a request for the full chrome back, which
+      // is what tells the route apart from merely arriving at the same item.
+      if (navEl.dataset.expand) pendingExpand = true;
       navigate(navEl.dataset.nav);
     }
   }
@@ -738,6 +821,9 @@
     // device. Everything else is the device's, and it takes the action as it
     // was written on the button.
     if (name === 'read') { await openReader(currentItem, null, req); return; }
+    // Starting something is the end of a collapsed sitting: the bar belongs to
+    // what was playing, and this is another one.
+    if (name === 'play' || name === 'resume') collapsed = false;
     // The two minting actions are the same answer shown the same way.
     if (name === 'passage' || name === 'link') { await mint(req); return; }
     await root.Player.invoke(req, { item: currentItem, work: currentWork });
@@ -845,6 +931,7 @@
     boot, applyRoute, navigate, replaceHash, itemHash,
     profile: who, showStage, renderSession, closeStage, loadContinue, mint,
     currentRoute: () => currentRoute,
+    collapsed: () => collapsed,
     currentWork: () => currentWork,
     currentItem: () => currentItem,
     setPendingPlay: p => { pendingPlay = p; },
