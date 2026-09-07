@@ -77,6 +77,7 @@
 
   /* show (episode list) view */
   #view-show h2 { margin: 14px 20px 6px; font-size: 18px; }
+  #show-note { margin: 0 20px 8px; font-size: 13px; color: #f0b45c; }
   #episode-list, #extras-list { margin: 8px 20px 30px; border: 1px solid #2a2c33; border-radius: 8px; overflow: hidden; }
   #extras-head { margin: 18px 20px 0; font-size: 13px; color: #9a9daa; text-transform: uppercase; letter-spacing: .06em; }
   .item { padding: 10px 16px; border-bottom: 1px solid #1e2026; cursor: pointer; }
@@ -119,6 +120,12 @@
   #scrub .avail { position: absolute; left: 0; top: 8px; height: 6px; background: #3d4250; border-radius: 3px; width: 0; }
   #scrub .fill { position: absolute; left: 0; top: 8px; height: 6px; background: #5b8def; border-radius: 3px; width: 0; }
   #scrub .tick { position: absolute; top: 6px; width: 2px; height: 10px; background: #8a92a8; border-radius: 1px; }
+  /* passage bounds: amber flags pointing into the passage — taller and
+     coloured so they cannot be mistaken for chapter ticks */
+  #scrub .bound { position: absolute; top: 2px; width: 3px; height: 18px; background: #f0b45c; border-radius: 2px; transform: translateX(-50%); z-index: 2; }
+  #scrub .bound::after { content: ''; position: absolute; top: 0; width: 6px; height: 5px; background: #f0b45c; }
+  #scrub .bound.start::after { left: 3px; border-radius: 0 3px 3px 0; }
+  #scrub .bound.end::after { right: 3px; border-radius: 3px 0 0 3px; }
   #thumb { position: absolute; bottom: 26px; transform: translateX(-50%); z-index: 5; pointer-events: none; text-align: center; }
   #thumb-img { background-color: #000; background-repeat: no-repeat; border: 1px solid #3a3d47; border-radius: 4px; box-shadow: 0 4px 14px rgba(0,0,0,0.5); }
   #thumb-time { display: inline-block; margin-top: 3px; font-size: 11px; padding: 1px 7px; border-radius: 8px; background: rgba(20,21,26,0.9); color: #c5c8d4; font-variant-numeric: tabular-nums; }
@@ -139,6 +146,14 @@
   #upnext-cancel { margin-top: 10px; }
   #upnext-play { margin-top: 10px; margin-right: 8px; background: #2a4a8a; border-color: #3a5da8; }
   #upnext-play:hover { background: #33579e; }
+  /* end-of-passage panel: paused at the bound, two ways out */
+  #passage-end { position: fixed; right: 24px; bottom: 24px; z-index: 60; background: #1b1d24; border: 1px solid #f0b45c;
+    border-radius: 10px; padding: 14px 18px; max-width: 340px; box-shadow: 0 8px 30px rgba(0,0,0,0.6); }
+  #passage-end-title { font-size: 14px; font-weight: 600; }
+  #passage-end-sub { font-size: 12px; color: #9a9daa; margin-top: 4px; font-variant-numeric: tabular-nums; }
+  #passage-keep { margin-top: 10px; margin-right: 8px; background: #2a4a8a; border-color: #3a5da8; }
+  #passage-keep:hover { background: #33579e; }
+  #passage-back { margin-top: 10px; }
   .badge { display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 10px; margin-right: 6px; }
   .badge.direct { background: #14432a; color: #6ee7a0; }
   .badge.transcode { background: #4a3413; color: #f0b45c; }
@@ -205,6 +220,7 @@
   <div id="view-show" hidden>
     <button class="back" id="show-back">← Library</button>
     <h2 id="show-title"></h2>
+    <div id="show-note" hidden></div>
     <div id="episode-list"></div>
     <div id="extras-head" hidden>Extras</div>
     <div id="extras-list" hidden></div>
@@ -260,6 +276,18 @@
   <button id="upnext-cancel">Cancel</button>
 </div>
 
+<!-- end-of-passage panel: the passage has run its course and the player is
+     paused at its end (see onPassageEnd) -->
+<div id="passage-end" hidden>
+  <div id="passage-end-title">End of the passage</div>
+  <div id="passage-end-sub"></div>
+  <button id="passage-keep">Keep watching</button>
+  <button id="passage-back">Back</button>
+</div>
+
+<!-- passage grammar + end detection: pure functions, shared with the node
+     tests (web/passage_test.mjs) -->
+<script src="passage.js"></script>
 <script>
 // ---------------------------------------------------------------------------
 // identity: clientId IS the profile name (progress API is keyed by it)
@@ -280,6 +308,14 @@ let upNextTimer = null, upNextTarget = null; // auto-advance countdown
 let castLastState = null;       // last seen RemotePlayer.playerState (fire end-detection on transitions only)
 let castEndSuppressed = false;  // our own stop/load in flight: IDLE isn't a natural end
 let endFired = false;           // one natural-end per stream load (re-armed on seeking back)
+// passage session (see passage.js and README "Deep links and passages"):
+// { t, end, until, from, to } while the player is inside a passage, null in
+// normal viewing. Every /api/progress write is gated on this being null: a
+// scene replayed for a talk is not where the person is in the film — the
+// saved place belongs to normal viewing.
+let passage = null;
+let passageEndFired = false;    // the end bound (or the run's last item) has been reached and the panel shown
+let passageNaturalEnd = false;  // …by the item ending on its own rather than by the `end` bound
 const video = document.getElementById('video');
 const scrub = document.getElementById('scrub');
 const $ = id => document.getElementById(id);
@@ -464,7 +500,11 @@ function onCastPlayerState() {
   syncPlayButton();
   const st = remotePlayer.playerState;
   if (st === castLastState) return;
+  const prev = castLastState;
   castLastState = st;
+  // Resumed (from the device or its own remote) while paused at the end of
+  // a passage: the person chose to keep watching.
+  if (st === 'PLAYING' && prev === 'PAUSED' && passageEndFired && !passageNaturalEnd) keepWatching();
   if (st === 'PLAYING' || st === 'BUFFERING' || st === 'PAUSED') { castEndSuppressed = false; return; }
   if (st !== 'IDLE' || castEndSuppressed || !currentItem) return;
   const ms = cast.framework.CastContext.getInstance().getCurrentSession()?.getMediaSession();
@@ -519,7 +559,9 @@ async function castLoad(url, isHls, title, resumeForDirect, segFormat, item) {
       ? [selectedSubOrdinal + 1] : [];
   }
   // HLS sessions are already positioned server-side; pin to 0 so the
-  // receiver doesn't jump to the live edge of the growing playlist.
+  // receiver doesn't jump to the live edge of the growing playlist. Either
+  // way a passage's start (`t`) arrives here as the seek, so the receiver
+  // starts where the passage starts.
   req.currentTime = isHls ? 0 : (resumeForDirect > 0 ? resumeForDirect : 0);
   req.autoplay = true;
   await cast.framework.CastContext.getInstance().getCurrentSession().loadMedia(req);
@@ -952,25 +994,43 @@ async function renderContinueWatching() {
 //   #/                 library grid
 //   #/show/<title>     episode list (title encodeURIComponent'd)
 //   #/item/<id>        detail pane (back target: its show for episodes, else grid)
+//   #/item/<id>?t=<s>&end=<s>[&until=<item_id>][&from=<loc>&to=<loc>]
+//                      a PASSAGE of that item (grammar in passage.js): plays on
+//                      arrival from t, stops at end, writes no progress
+//   #/show/<title>?ep=S02E05&t=<s>&end=<s>[&until=S02E07]
+//                      the same passage addressed by episode code, for a minter
+//                      that knows no item ids; resolved against the show's
+//                      episodes on arrival and REPLACED by the item form above
 // Every navigation action just sets the hash; the hashchange listener renders.
 // ---------------------------------------------------------------------------
 let pendingAutoplay = null; // item id to auto-resume once its route renders
 let routeSeq = 0;
 
 function showHash(name) { return '#/show/' + encodeURIComponent(name); }
-function itemHash(id) { return '#/item/' + id; }
+// itemHash(id) keeps whatever passage the CURRENT route carries for that same
+// item — re-routing the item that is playing must not strip its passage.
+// Pass null to build the bare route, or a passage to route into one.
+function itemHash(id, p) {
+  if (p === undefined) {
+    const r = parseRoute();
+    p = r.view === 'item' && r.id === id ? r.passage : null;
+  }
+  return '#/item/' + id + passageQuery(p);
+}
 function navigate(hash) {
   if (location.hash === hash) applyRoute(); // same hash: no hashchange event fires
   else location.hash = hash;
 }
+// The query part follows the hash PATH (#/item/51?t=4740&end=5070), so it is
+// parsed out of location.hash, never location.search.
 function parseRoute() {
-  const h = location.hash || '#/';
-  if (h.startsWith('#/show/')) {
-    try { return { view: 'show', name: decodeURIComponent(h.slice(7)) }; }
+  const { path, query } = splitHash(location.hash || '#/');
+  if (path.startsWith('#/show/')) {
+    try { return { view: 'show', name: decodeURIComponent(path.slice(7)), passage: parsePassage(query) }; }
     catch (e) { return { view: 'library' }; }
   }
-  const m = h.match(/^#\/item\/(\d+)$/);
-  if (m) return { view: 'item', id: Number(m[1]) };
+  const m = path.match(/^#\/item\/(\d+)$/);
+  if (m) return { view: 'item', id: Number(m[1]), passage: parsePassage(query) };
   return { view: 'library' };
 }
 
@@ -987,12 +1047,35 @@ async function applyRoute() {
   if (r.view === 'show') {
     const { shows } = buildLibrary(allItems);
     if (!shows.has(r.name)) { pendingAutoplay = null; pendingPlay = null; location.replace('#/'); return; }
-    renderShow(r.name);
+    if (r.passage?.ep != null) {
+      // show-addressed passage: find the episode, then hand over to the item
+      // form so one code path plays every passage. The route is REPLACED —
+      // the show link was the minter's spelling, the item link is ours.
+      const res = resolveShowPassage(r.passage, shows.get(r.name).eps);
+      if (res.item) { pendingAutoplay = null; pendingPlay = null; location.replace(itemHash(res.item.id, res.passage)); return; }
+      renderShow(r.name, res.error); // names no episode: say so, play nothing
+    } else {
+      renderShow(r.name);
+    }
   } else if (r.view === 'item') {
     const it = allItems.find(i => i.id === r.id);
     if (!it) { pendingAutoplay = null; pendingPlay = null; location.replace('#/'); return; }
-    if (currentItem && currentItem.id === it.id && !$('player-pane').hidden) {
+    // from/to alone (text locators) ride in the route but do not put the
+    // video player into passage mode
+    const rp = isTimedPassage(r.passage) ? r.passage : null;
+    const samePlaying = currentItem && currentItem.id === it.id && !$('player-pane').hidden;
+    if (samePlaying && passageQuery(rp) === passageQuery(passage)) {
       showView('view-detail'); // already playing this item: keep the player as-is
+    } else if (rp) {
+      // A passage route plays on arrival, from its own start — `t` wins over
+      // saved progress, so never null here. Later items of an episode run
+      // arrive the same way via the up-next / prev-next route replace, with
+      // t/end already dropped (passageForNext), so they start at the top.
+      setPassage(rp);
+      if (!samePlaying) renderDetail(it);
+      playItem(it, rp.t ?? 0);
+    } else if (samePlaying) {
+      showView('view-detail'); // "Keep watching" dropped the passage from the route: nothing to restart
     } else {
       renderDetail(it);
       if (pendingAutoplay === it.id) playItem(it, null);
@@ -1016,12 +1099,14 @@ function showView(id) {
   if (id === 'view-library') renderContinueWatching(); // refresh resume points
 }
 
-function renderShow(name) {
+function renderShow(name, note) {
   currentShow = name;
   const { shows } = buildLibrary(allItems);
   const g = shows.get(name) || { eps: [], extras: [] };
   const eps = g.eps;
   $('show-title').textContent = (eps[0]?.enrichment?.title) || name;
+  $('show-note').textContent = note || '';
+  $('show-note').hidden = !note;
   const list = $('episode-list');
   list.innerHTML = '';
   list.hidden = !eps.length;
@@ -1137,7 +1222,7 @@ function renderDetail(item) {
   for (const [ep, label] of [[sib?.prev, 'Previous'], [sib?.next, 'Next']]) {
     if (!ep) continue; // first/last episode: omit that side
     const a = document.createElement('a');
-    a.href = itemHash(ep.id);
+    a.href = itemHash(ep.id, passageForNext(passage)); // a run carries `until`; t/end were this item's
     const name = ep.enrichment?.episode_title;
     a.title = `${label} episode · ${epCode(ep)}${name ? ' · ' + name : ''}`;
     a.textContent = label === 'Previous' ? `⏮ Prev: ${epCode(ep)}` : `Next: ${epCode(ep)} ⏭`;
@@ -1167,6 +1252,7 @@ $('detail-play').onclick = () => playItem(detailItem, null);
 // by applyRoute when browser back/forward navigates away from a playing item)
 function closePlayer() {
   hideUpNext();
+  setPassage(null); // the next normal play is normal
   if (casting()) { castEndSuppressed = true; remoteController.stop(); }
   else { video.pause(); video.removeAttribute('src'); video.load(); }
   stopSession();
@@ -1191,7 +1277,11 @@ async function playItem(item, startAt) {
   $('player-pane').hidden = false;
   $('now-playing').textContent = itemTitle(item);
   updateEpisodeNav(item);
+  resetPassageEnd();
   let resume = startAt;
+  // A passage starts where it says (or at the top): its route never resumes
+  // from /api/progress.
+  if (resume == null && passage) resume = 0;
   if (resume == null) {
     resume = 0;
     try {
@@ -1203,7 +1293,7 @@ async function playItem(item, startAt) {
   }
   renderSubSelector(item);
   renderAudioSelector(item);
-  recordRecentlyPlayed(item.id); // feeds the continue-watching row
+  if (!passage) recordRecentlyPlayed(item.id); // feeds the continue-watching row; a passage is not a place
   loadTrickplay(item); // lazy, in the background; feature hides itself on 404
   await startPlayback(item, resume);
   renderChapters();
@@ -1245,8 +1335,10 @@ function goToEpisode(target, mode) {
   // different file: subtitle/audio/burn selections reset to defaults
   selectedSubOrdinal = null; burnSubOrdinal = null; selectedAudioOrdinal = null;
   pendingPlay = { id: target.id, mode };
-  if (location.hash === itemHash(target.id)) applyRoute();
-  else location.replace(itemHash(target.id));
+  // in a run the route carries `until` on; t/end applied to the first item only
+  const h = itemHash(target.id, passageForNext(passage));
+  if (location.hash === h) applyRoute();
+  else location.replace(h);
 }
 $('btn-prev-ep').onclick = () => goToEpisode(episodeSiblings(currentItem)?.prev, 'nav');
 $('btn-next-ep').onclick = () => goToEpisode(episodeSiblings(currentItem)?.next, 'nav');
@@ -1320,20 +1412,135 @@ function onPlaybackEnded() {
   if (!currentItem || endFired) return;
   endFired = true;
   const next = episodeSiblings(currentItem)?.next;
+  if (passage) {
+    // Inside a passage the item's own end is not a finish to record. In a
+    // run it is the cue for the next episode — until the `until` item (or
+    // the last episode there is) has played; then the passage is over.
+    if (runContinues(passage, currentItem.id) && next) { showUpNext(next); return; }
+    passageNaturalEnd = true;
+    onPassageEnd(`${itemTitle(currentItem)} has ended`);
+    return;
+  }
   if (!next) return;
   const dur = currentItem.media_info?.duration_seconds;
-  if (dur > 0) {
-    fetch('/api/progress', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        item_id: currentItem.id, client_id: clientId || 'anonymous',
-        position_seconds: dur,
-      }),
-    });
-  }
+  if (dur > 0) saveProgress(dur);
   showUpNext(next);
 }
 video.addEventListener('ended', onPlaybackEnded); // covers direct play AND hls.js
+
+// The one road to POST /api/progress. A passage session writes NO progress:
+// a scene replayed for a talk is not where the person is in the film, and a
+// two-episode run for the day's plan is not a binge — the saved place belongs
+// to normal viewing. (There is no pause/unload write today; if one is added
+// it goes through here.)
+function saveProgress(positionSeconds) {
+  if (passage || !currentItem) return;
+  fetch('/api/progress', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      item_id: currentItem.id, client_id: clientId || 'anonymous',
+      position_seconds: positionSeconds,
+    }),
+  });
+}
+
+// ---------------------------------------------------------------------------
+// passage sessions: start there, stop there, never move the saved place
+// (grammar and predicates live in passage.js; this is the player's side)
+// ---------------------------------------------------------------------------
+function setPassage(p) {
+  passage = p || null;
+  resetPassageEnd();
+  renderPassageMarks();
+}
+function resetPassageEnd() {
+  passageEndFired = false;
+  passageNaturalEnd = false;
+  $('passage-end').hidden = true;
+}
+// Two bound marks on the scrubber: the start (`t`) and, on the item the
+// `end` applies to, the end. Later items of a run carry neither.
+function renderPassageMarks() {
+  scrub.querySelectorAll('.bound').forEach(b => b.remove());
+  const dur = duration();
+  if (!passage || !(dur > 0)) return;
+  const marks = [['start', passage.t, 'Passage starts at '],
+                 ['end', passageEndAt(passage, currentItem?.id), 'Passage ends at ']];
+  for (const [cls, t, label] of marks) {
+    if (t == null) continue;
+    const b = document.createElement('div');
+    b.className = 'bound ' + cls;
+    b.style.left = Math.min(100, t / dur * 100) + '%';
+    b.title = label + fmtTime(t);
+    scrub.appendChild(b);
+  }
+}
+// The time readout while inside a passage: elapsed / extent of the passage
+// itself ("2:14 / 5:30 in passage"); a run's unbounded item just says so.
+function passageReadout(pos) {
+  const endAt = passageEndAt(passage, currentItem?.id);
+  if (endAt == null) return `${fmtTime(pos)} · in passage`;
+  const start = passage.t ?? 0;
+  return `${fmtTime(pos - start)} / ${fmtTime(endAt - start)} in passage`;
+}
+// Called from timeupdate (local) and the 250ms tick (local and cast):
+// position() already includes the HLS seek offset and, when casting, reads
+// the receiver's current time.
+function checkPassageEnd() {
+  if (!passage || !currentItem || passageEndFired || !isPlaying()) return;
+  const endAt = passageEndAt(passage, currentItem.id);
+  if (!passageEnded(position(), endAt)) return;
+  if (casting()) {
+    // Sender-side stop: the default receiver knows nothing about passages,
+    // so the page watches remotePlayer.currentTime and pauses from here (a
+    // second or so late at worst — the receiver is not changed in this bead).
+    if (remotePlayer.playerState === 'PLAYING') remoteController.playOrPause();
+  } else {
+    video.pause();
+  }
+  onPassageEnd(`Paused at ${fmtTime(endAt)}`);
+}
+// The passage is over — by its end bound or by the last item of a run ending
+// on its own. Not a natural end: no finished-write, no up-next.
+function onPassageEnd(sub) {
+  passageEndFired = true;
+  hideUpNext();
+  $('passage-end-sub').textContent = sub;
+  $('passage-end').hidden = false;
+}
+// "Keep watching": leave passage mode — bounds cleared, normal behaviour from
+// the current position on, progress writes included. The route drops the
+// passage too, so a reload or Play from here is normal viewing.
+function keepWatching() {
+  if (!currentItem) return;
+  const wasNaturalEnd = passageNaturalEnd;
+  const id = currentItem.id;
+  setPassage(null);
+  if (parseRoute().passage) location.replace(itemHash(id, null));
+  if (wasNaturalEnd) {
+    // The item already ended: give it the natural end it was denied — the
+    // finished-write and the up-next offer.
+    endFired = false;
+    onPlaybackEnded();
+    return;
+  }
+  if (!isPlaying()) { casting() ? remoteController.playOrPause() : video.play().catch(() => {}); }
+}
+$('passage-keep').onclick = keepWatching;
+// "Back": close the player. The bare item route stays behind so Play from
+// the detail pane is normal viewing.
+$('passage-back').onclick = () => {
+  const id = currentItem?.id;
+  closePlayer();
+  if (id != null && parseRoute().passage) location.replace(itemHash(id, null));
+};
+video.addEventListener('timeupdate', checkPassageEnd);
+// Pressing play (ours or the <video> controls') while paused at the end
+// bound is the same choice as "Keep watching".
+video.addEventListener('play', () => {
+  if (!passageEndFired || passageNaturalEnd) return;
+  if (passageEnded(position(), passageEndAt(passage, currentItem?.id))) keepWatching();
+});
 
 // ---------------------------------------------------------------------------
 // trickplay scrub previews (mouse only; touch devices skip this)
@@ -1408,6 +1615,7 @@ function renderChapters() {
       scrub.appendChild(tick);
     }
   }
+  renderPassageMarks();
 }
 
 async function stopSession() {
@@ -1529,9 +1737,15 @@ setInterval(() => {
   if (dur > 0) {
     scrub.querySelector('.fill').style.width = Math.min(100, position() / dur * 100) + '%';
     scrub.querySelector('.avail').style.width = Math.min(100, availableEnd() / dur * 100) + '%';
-    $('t-now').textContent = fmtTime(position());
+    $('t-now').textContent = passage ? passageReadout(position()) : fmtTime(position());
   }
   syncPlayButton();
+  checkPassageEnd(); // cast has no timeupdate on this side; the tick is its clock
+  // Sought back below the bound after it fired: the panel goes, the bound re-arms.
+  if (passageEndFired && !passageNaturalEnd && isPlaying()) {
+    const endAt = passageEndAt(passage, currentItem?.id);
+    if (endAt != null && position() < endAt - 1) resetPassageEnd();
+  }
   // Transcode tail: the final HLS fragment can end a hair short of the media
   // element's duration (audio/video buffers finish unevenly), so 'ended'
   // never fires — catch the stall at the very end of the stream, but only
@@ -1552,15 +1766,7 @@ setInterval(() => {
 }, 250);
 
 setInterval(() => {
-  if (currentItem && isPlaying()) {
-    fetch('/api/progress', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        item_id: currentItem.id, client_id: clientId || 'anonymous',
-        position_seconds: position(),
-      }),
-    });
-  }
+  if (currentItem && isPlaying()) saveProgress(position()); // no-op inside a passage
 }, 5000);
 
 $('scan').onclick = async () => {
