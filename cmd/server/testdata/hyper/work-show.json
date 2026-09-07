@@ -1,0 +1,227 @@
+{
+  "self": "/api/works/tmdb%3A2316",
+  "kind": "work",
+  "title": "The Office",
+  "work_kind": "show",
+  "work_key": "tmdb:2316",
+  "medium": "video",
+  "year": 2005,
+  "genres": [
+    "Comedy"
+  ],
+  "overview": "A mockumentary on a group of office workers.",
+  "episode_count": 2,
+  "extra_count": 1,
+  "item_count": 3,
+  "representative_item_id": 8,
+  "profile": "chris",
+  "progress": {
+    "status": "active",
+    "fraction": 0.14109848484848486,
+    "text": "S03E22 · 12:25",
+    "next": {
+      "href": "/api/items/8",
+      "title": "S03E22 · Beach Games"
+    }
+  },
+  "places": [
+    {
+      "token": "S03E22 0:00",
+      "label": "S03E22 · Beach Games"
+    },
+    {
+      "token": "S03E23 0:00",
+      "label": "S03E23 · The Job"
+    }
+  ],
+  "members": [
+    {
+      "self": "/api/items/8",
+      "kind": "item",
+      "title": "Beach Games",
+      "id": 8,
+      "medium": "video",
+      "label": "S03E22 · Beach Games",
+      "duration_seconds": 2640,
+      "chapters": [
+        {
+          "start_seconds": 0,
+          "title": "Cold open"
+        },
+        {
+          "start_seconds": 142,
+          "title": "Titles"
+        }
+      ],
+      "links": {
+        "poster": {
+          "href": "/api/items/8/poster"
+        },
+        "still": {
+          "href": "/api/items/8/still"
+        },
+        "trickplay": {
+          "href": "/api/items/8/trickplay.json"
+        },
+        "work": {
+          "href": "/api/works/tmdb%3A2316",
+          "title": "The Office"
+        }
+      },
+      "actions": {
+        "play": {
+          "method": "POST",
+          "href": "/api/items/8/play",
+          "input": {
+            "passage": "passage?",
+            "seek_seconds": "number?"
+          },
+          "label": "▶ Play"
+        },
+        "progress": {
+          "method": "POST",
+          "href": "/api/progress",
+          "input": {
+            "client_id": "string",
+            "item_id": "8",
+            "position_seconds": "number"
+          },
+          "label": "Save the place"
+        }
+      },
+      "unavailable": {
+        "read": {
+          "reason": "an episode is played, not read"
+        }
+      }
+    },
+    {
+      "self": "/api/items/9",
+      "kind": "item",
+      "title": "The Job",
+      "id": 9,
+      "medium": "video",
+      "label": "S03E23 · The Job",
+      "duration_seconds": 2760,
+      "links": {
+        "poster": {
+          "href": "/api/items/9/poster"
+        },
+        "still": {
+          "href": "/api/items/9/still"
+        },
+        "trickplay": {
+          "href": "/api/items/9/trickplay.json"
+        },
+        "work": {
+          "href": "/api/works/tmdb%3A2316",
+          "title": "The Office"
+        }
+      },
+      "actions": {
+        "play": {
+          "method": "POST",
+          "href": "/api/items/9/play",
+          "input": {
+            "passage": "passage?",
+            "seek_seconds": "number?"
+          },
+          "label": "▶ Play"
+        },
+        "progress": {
+          "method": "POST",
+          "href": "/api/progress",
+          "input": {
+            "client_id": "string",
+            "item_id": "9",
+            "position_seconds": "number"
+          },
+          "label": "Save the place"
+        }
+      },
+      "unavailable": {
+        "read": {
+          "reason": "an episode is played, not read"
+        }
+      }
+    },
+    {
+      "self": "/api/items/7",
+      "kind": "item",
+      "title": "Deleted Scenes.mkv",
+      "id": 7,
+      "medium": "video",
+      "label": "Deleted Scenes.mkv",
+      "duration_seconds": 900,
+      "links": {
+        "trickplay": {
+          "href": "/api/items/7/trickplay.json"
+        },
+        "work": {
+          "href": "/api/works/tmdb%3A2316",
+          "title": "The Office"
+        }
+      },
+      "actions": {
+        "play": {
+          "method": "POST",
+          "href": "/api/items/7/play",
+          "input": {
+            "passage": "passage?",
+            "seek_seconds": "number?"
+          },
+          "label": "▶ Play"
+        },
+        "progress": {
+          "method": "POST",
+          "href": "/api/progress",
+          "input": {
+            "client_id": "string",
+            "item_id": "7",
+            "position_seconds": "number"
+          },
+          "label": "Save the place"
+        }
+      },
+      "unavailable": {
+        "read": {
+          "reason": "a film is played, not read"
+        }
+      }
+    }
+  ],
+  "links": {
+    "items": {
+      "href": "/api/works/tmdb%3A2316/items"
+    },
+    "poster": {
+      "href": "/api/items/8/poster"
+    }
+  },
+  "actions": {
+    "passage": {
+      "method": "GET",
+      "href": "/api/-/passage?work=tmdb%3A2316",
+      "input": {
+        "from": "place?",
+        "to": "place?"
+      },
+      "label": "Copy a passage link"
+    },
+    "play": {
+      "method": "POST",
+      "href": "/api/items/8/play",
+      "input": {
+        "passage": "passage?",
+        "seek_seconds": "number?"
+      },
+      "label": "▶ Resume"
+    }
+  },
+  "unavailable": {
+    "read": {
+      "reason": "an episode is played, not read"
+    }
+  }
+}
+

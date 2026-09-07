@@ -66,6 +66,11 @@ type server struct {
 // trickplayDir is where per-item sprite-sheet sets live (data/trickplay/<id>/).
 const trickplayDir = "data/trickplay"
 
+// trickplayMinSeconds is the duration below which an item gets no scrub
+// previews: a two-minute clip is not scrubbed, and a full-file decode for
+// one is not worth the node.
+const trickplayMinSeconds = 120
+
 // coversDir is where an audio item's embedded cover art is cached
 // (data/covers/<id>.jpg), extracted on first request; <id>.none records a
 // file that was asked and has no picture, so it is not asked again.
@@ -144,68 +149,7 @@ func main() {
 		log.Printf("TMDB enrichment disabled (TMDB_API_KEY not set)")
 	}
 
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /api/items", srv.handleListItems)
-	mux.HandleFunc("GET /api/works", srv.handleWorks)
-	mux.HandleFunc("GET /api/works/{key}/items", srv.handleWorkItems)
-	mux.HandleFunc("GET /api/artists", srv.handleArtists)
-	mux.HandleFunc("GET /api/continue", srv.handleContinue)
-	mux.HandleFunc("GET /api/feed/media", srv.handleFeed)
-	mux.HandleFunc("POST /api/items/{id}/decision", srv.handleDecision)
-	mux.HandleFunc("POST /api/items/{id}/play", srv.handlePlay)
-	mux.HandleFunc("POST /api/items/{id}/identity", srv.handleOverrideIdentity)
-	mux.HandleFunc("POST /api/items/{id}/reprobe", srv.handleReprobe)
-	mux.HandleFunc("POST /api/items/{id}/enrich", srv.handleEnrich)
-	mux.HandleFunc("GET /api/items/{id}/subtitles/{file}", srv.handleSubtitle)
-	mux.HandleFunc("GET /api/items/{id}/poster", srv.handlePoster)
-	mux.HandleFunc("GET /api/items/{id}/cover", srv.handleCover)
-	mux.HandleFunc("GET /api/items/{id}/still", srv.handleStill)
-	mux.HandleFunc("GET /api/items/{id}/book", srv.handleBook)
-	mux.HandleFunc("GET /api/items/{id}/trickplay.json", srv.handleTrickplayIndex)
-	mux.HandleFunc("GET /api/items/{id}/trickplay/{file}", srv.handleTrickplaySheet)
-	mux.HandleFunc("POST /api/items/{id}/trickplay", srv.handleGenerateTrickplay)
-	mux.HandleFunc("POST /api/scan", srv.handleScan)
-	mux.HandleFunc("GET /api/scan", srv.handleScanStatus)
-	mux.HandleFunc("GET /api/system", srv.handleSystem)
-	mux.HandleFunc("DELETE /api/sessions/{id}", srv.handleStopSession)
-	mux.HandleFunc("POST /api/progress", srv.handleSetProgress)
-	mux.HandleFunc("GET /api/progress", srv.handleGetProgress)
-	mux.HandleFunc("GET /api/users", srv.handleListUsers)
-	mux.HandleFunc("POST /api/users", srv.handleCreateUser)
-	mux.HandleFunc("POST /api/telemetry", srv.handleTelemetry)
-	// Log stream fetches: which client asked for which segment with what
-	// Range — a poor man's receiver-side network tab.
-	streamFiles := http.StripPrefix("/streams/", http.FileServer(http.Dir("data/streams")))
-	mux.Handle("GET /streams/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// The first path segment is the session id: any fetch inside a
-		// session counts as liveness for the idle-session reaper.
-		if rest := strings.TrimPrefix(r.URL.Path, "/streams/"); rest != "" {
-			id, _, _ := strings.Cut(rest, "/")
-			srv.sessions.Touch(id)
-		}
-		log.Printf("stream %s %s range=%q ua=%.40q", r.RemoteAddr, r.URL.Path, r.Header.Get("Range"), r.UserAgent())
-		// Go's sniffer has no idea what .m3u8/.m4s are and labels a playlist
-		// "text/plain", which players are entitled to reject. Name them.
-		switch path.Ext(r.URL.Path) {
-		case ".m3u8":
-			w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
-		case ".m4s":
-			w.Header().Set("Content-Type", "video/iso.segment")
-		}
-		streamFiles.ServeHTTP(w, r)
-	}))
-	// The web shell always REVALIDATES. Without a Cache-Control header a
-	// browser applies heuristic freshness from Last-Modified — a file that
-	// looks old is fresh for a long time without a single request — and
-	// the service worker's precache rides the same HTTP cache, so a
-	// weeks-old index.html outlived three deploys and a cache bump
-	// (2026-09-07). no-cache keeps ETag/Last-Modified 304s cheap and
-	// makes every load ask; offline is the service worker's job.
-	web := http.FileServer(http.Dir("web"))
-	mux.Handle("GET /", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Cache-Control", "no-cache")
-		web.ServeHTTP(w, r)
-	}))
+	mux := srv.routes()
 
 	// Permissive CORS: the Cast receiver fetches playlists/segments from a
 	// different origin and preflights Range requests.
@@ -281,6 +225,83 @@ func main() {
 	if err := httpSrv.ListenAndServe(); err != http.ErrServerClosed {
 		log.Fatal(err)
 	}
+}
+
+// routes registers every endpoint on a fresh mux. It is a method rather
+// than inline setup so that a test can stand a server up over a temporary
+// library and drive it through the real routing table — a document is only
+// as good as the address it actually answers on.
+func (s *server) routes() *http.ServeMux {
+	mux := http.NewServeMux()
+	// The hypermedia documents (docs/hypermedia.md, hyper.go). "/api/{$}" is
+	// the exact path, not the subtree: an unknown /api/... still falls
+	// through to the web handler's 404 rather than being answered with the
+	// root document.
+	mux.HandleFunc("GET /api/{$}", s.handleRootDoc)
+	mux.HandleFunc("GET /api/items/{id}", s.handleItemDoc)
+	mux.HandleFunc("GET /api/works/{key}", s.handleWorkDoc)
+	mux.HandleFunc("GET /api/items", s.handleListItems)
+	mux.HandleFunc("GET /api/works", s.handleWorks)
+	mux.HandleFunc("GET /api/works/{key}/items", s.handleWorkItems)
+	mux.HandleFunc("GET /api/artists", s.handleArtists)
+	mux.HandleFunc("GET /api/continue", s.handleContinue)
+	mux.HandleFunc("GET /api/feed/media", s.handleFeed)
+	mux.HandleFunc("POST /api/items/{id}/decision", s.handleDecision)
+	mux.HandleFunc("POST /api/items/{id}/play", s.handlePlay)
+	mux.HandleFunc("POST /api/items/{id}/identity", s.handleOverrideIdentity)
+	mux.HandleFunc("POST /api/items/{id}/reprobe", s.handleReprobe)
+	mux.HandleFunc("POST /api/items/{id}/enrich", s.handleEnrich)
+	mux.HandleFunc("GET /api/items/{id}/subtitles/{file}", s.handleSubtitle)
+	mux.HandleFunc("GET /api/items/{id}/poster", s.handlePoster)
+	mux.HandleFunc("GET /api/items/{id}/cover", s.handleCover)
+	mux.HandleFunc("GET /api/items/{id}/still", s.handleStill)
+	mux.HandleFunc("GET /api/items/{id}/book", s.handleBook)
+	mux.HandleFunc("GET /api/items/{id}/trickplay.json", s.handleTrickplayIndex)
+	mux.HandleFunc("GET /api/items/{id}/trickplay/{file}", s.handleTrickplaySheet)
+	mux.HandleFunc("POST /api/items/{id}/trickplay", s.handleGenerateTrickplay)
+	mux.HandleFunc("POST /api/scan", s.handleScan)
+	mux.HandleFunc("GET /api/scan", s.handleScanStatus)
+	mux.HandleFunc("GET /api/system", s.handleSystem)
+	mux.HandleFunc("DELETE /api/sessions/{id}", s.handleStopSession)
+	mux.HandleFunc("POST /api/progress", s.handleSetProgress)
+	mux.HandleFunc("GET /api/progress", s.handleGetProgress)
+	mux.HandleFunc("GET /api/users", s.handleListUsers)
+	mux.HandleFunc("POST /api/users", s.handleCreateUser)
+	mux.HandleFunc("POST /api/telemetry", s.handleTelemetry)
+	// Log stream fetches: which client asked for which segment with what
+	// Range — a poor man's receiver-side network tab.
+	streamFiles := http.StripPrefix("/streams/", http.FileServer(http.Dir("data/streams")))
+	mux.Handle("GET /streams/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// The first path segment is the session id: any fetch inside a
+		// session counts as liveness for the idle-session reaper.
+		if rest := strings.TrimPrefix(r.URL.Path, "/streams/"); rest != "" {
+			id, _, _ := strings.Cut(rest, "/")
+			s.sessions.Touch(id)
+		}
+		log.Printf("stream %s %s range=%q ua=%.40q", r.RemoteAddr, r.URL.Path, r.Header.Get("Range"), r.UserAgent())
+		// Go's sniffer has no idea what .m3u8/.m4s are and labels a playlist
+		// "text/plain", which players are entitled to reject. Name them.
+		switch path.Ext(r.URL.Path) {
+		case ".m3u8":
+			w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
+		case ".m4s":
+			w.Header().Set("Content-Type", "video/iso.segment")
+		}
+		streamFiles.ServeHTTP(w, r)
+	}))
+	// The web shell always REVALIDATES. Without a Cache-Control header a
+	// browser applies heuristic freshness from Last-Modified — a file that
+	// looks old is fresh for a long time without a single request — and
+	// the service worker's precache rides the same HTTP cache, so a
+	// weeks-old index.html outlived three deploys and a cache bump
+	// (2026-09-07). no-cache keeps ETag/Last-Modified 304s cheap and
+	// makes every load ask; offline is the service worker's job.
+	web := http.FileServer(http.Dir("web"))
+	mux.Handle("GET /", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-cache")
+		web.ServeHTTP(w, r)
+	}))
+	return mux
 }
 
 func (s *server) handleListItems(w http.ResponseWriter, r *http.Request) {
@@ -720,7 +741,7 @@ func (s *server) runTrickplay(ctx context.Context) {
 		if ctx.Err() != nil {
 			return
 		}
-		if it.MediaInfo == nil || it.MediaInfo.DurationSeconds <= 120 {
+		if it.MediaInfo == nil || it.MediaInfo.DurationSeconds <= trickplayMinSeconds {
 			continue
 		}
 		if it.MediaInfo.MediumOrVideo() != model.MediumVideo {

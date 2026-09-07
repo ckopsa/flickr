@@ -1,0 +1,143 @@
+{
+  "self": "/api/works/album%3Aradiohead-ok-computer-1997",
+  "kind": "work",
+  "title": "OK Computer",
+  "work_kind": "album",
+  "work_key": "album:radiohead-ok-computer-1997",
+  "medium": "audio",
+  "author": "Radiohead",
+  "year": 1997,
+  "genres": [],
+  "overview": "",
+  "episode_count": 0,
+  "extra_count": 0,
+  "track_count": 2,
+  "item_count": 2,
+  "representative_item_id": 5,
+  "profile": "chris",
+  "places": [],
+  "members": [
+    {
+      "self": "/api/items/5",
+      "kind": "item",
+      "title": "Airbag",
+      "id": 5,
+      "medium": "audio",
+      "label": "Track 1 · Airbag",
+      "duration_seconds": 284,
+      "links": {
+        "cover": {
+          "href": "/api/items/5/cover"
+        },
+        "work": {
+          "href": "/api/works/album%3Aradiohead-ok-computer-1997",
+          "title": "OK Computer"
+        }
+      },
+      "actions": {
+        "play": {
+          "method": "POST",
+          "href": "/api/items/5/play",
+          "input": {
+            "passage": "passage?",
+            "seek_seconds": "number?"
+          },
+          "label": "▶ Play"
+        },
+        "progress": {
+          "method": "POST",
+          "href": "/api/progress",
+          "input": {
+            "client_id": "string",
+            "item_id": "5",
+            "position_seconds": "number"
+          },
+          "label": "Save the place"
+        }
+      },
+      "unavailable": {
+        "read": {
+          "reason": "an album is played, not read"
+        }
+      }
+    },
+    {
+      "self": "/api/items/6",
+      "kind": "item",
+      "title": "Paranoid Android",
+      "id": 6,
+      "medium": "audio",
+      "label": "Track 2 · Paranoid Android",
+      "duration_seconds": 383,
+      "links": {
+        "cover": {
+          "href": "/api/items/6/cover"
+        },
+        "work": {
+          "href": "/api/works/album%3Aradiohead-ok-computer-1997",
+          "title": "OK Computer"
+        }
+      },
+      "actions": {
+        "play": {
+          "method": "POST",
+          "href": "/api/items/6/play",
+          "input": {
+            "passage": "passage?",
+            "seek_seconds": "number?"
+          },
+          "label": "▶ Play"
+        },
+        "progress": {
+          "method": "POST",
+          "href": "/api/progress",
+          "input": {
+            "client_id": "string",
+            "item_id": "6",
+            "position_seconds": "number"
+          },
+          "label": "Save the place"
+        }
+      },
+      "unavailable": {
+        "read": {
+          "reason": "an album is played, not read"
+        }
+      }
+    }
+  ],
+  "links": {
+    "cover": {
+      "href": "/api/items/5/cover"
+    },
+    "items": {
+      "href": "/api/works/album%3Aradiohead-ok-computer-1997/items"
+    }
+  },
+  "actions": {
+    "passage": {
+      "method": "GET",
+      "href": "/api/-/passage?work=album%3Aradiohead-ok-computer-1997",
+      "input": {
+        "from": "place?",
+        "to": "place?"
+      },
+      "label": "Copy a passage link"
+    },
+    "play": {
+      "method": "POST",
+      "href": "/api/items/5/play",
+      "input": {
+        "passage": "passage?",
+        "seek_seconds": "number?"
+      },
+      "label": "▶ Play"
+    }
+  },
+  "unavailable": {
+    "read": {
+      "reason": "an album is played, not read"
+    }
+  }
+}
+

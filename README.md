@@ -315,6 +315,30 @@ picture; forces a video re-encode, overlay applied before all other filters).
 The web UI includes capability presets (Chromecast v1, 4K HDR TV, cellular cap)
 to demonstrate how the same file direct-plays or transcodes per client.
 
+### The hypermedia documents
+
+flickr is becoming backend-driven: the server says what exists and what may
+be done to it, and the browser renders what it is told (`docs/hypermedia.md`
+has the envelope, the document table and the order of work). Three of those
+documents are served now, beside — not instead of — everything above, and no
+client reads them yet:
+
+| Endpoint | Document |
+|---|---|
+| `GET /api/` | the root: the profile (`client_id`, query or cookie), links to library, continue, artists, works, items, scan and system, and the `scan` action. It is the only address a client is meant to know by heart |
+| `GET /api/items/{id}` | one item: its fields, `media_info` (chapters, sections, page count), its subtitle tracks with their `.vtt` addresses, artwork links, `links.work`/`prev`/`next` (the work's own order, bonus material aside), and the actions `play`, `read`, `progress`, `identity`, `reprobe`, `enrich` |
+| `GET /api/works/{key}` | one work: the fields `/api/works` publishes, `members` in order as item envelopes, `places` (the passage grammar's tokens with the labels a chip shows — `S03E22 0:00` · "S03E22 · Beach Games", `1:19:00` · "Let It Go", `ch. 7` · "The Cellar"), the profile's progress, and the actions `play`, `read`, `passage` |
+
+Every document is one JSON object with `self`, `kind`, `title`, its own
+fields, then `links`, `actions` (each with an `input` sketch and a `label`)
+and `unavailable` — the actions the kind has that this document does not
+afford, each with a reason in words. Errors are RFC 7807
+`application/problem+json` with a `remedy`. Two relations name documents that
+later steps serve (`/api/library`, `/api/-/passage`) and 404 until then.
+`internal/hyper` is the envelope; the goldens are
+`cmd/server/testdata/hyper/*.json` (`go test ./cmd/server -run TestHyperGolden -update`
+rewrites them).
+
 ## Deep links and passages
 
 The web UI is hash-routed and `location.hash` is the only source of truth,

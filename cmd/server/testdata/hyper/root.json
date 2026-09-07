@@ -1,0 +1,44 @@
+{
+  "self": "/api/",
+  "kind": "root",
+  "title": "flickr",
+  "profile": "chris",
+  "links": {
+    "artists": {
+      "href": "/api/artists",
+      "title": "Artists"
+    },
+    "continue": {
+      "href": "/api/continue?client_id=chris",
+      "title": "Continue watching"
+    },
+    "items": {
+      "href": "/api/items",
+      "title": "Items"
+    },
+    "library": {
+      "href": "/api/library",
+      "title": "Library"
+    },
+    "scan": {
+      "href": "/api/scan",
+      "title": "Scan status"
+    },
+    "system": {
+      "href": "/api/system",
+      "title": "System"
+    },
+    "works": {
+      "href": "/api/works",
+      "title": "Works"
+    }
+  },
+  "actions": {
+    "scan": {
+      "method": "POST",
+      "href": "/api/scan",
+      "label": "Scan the library"
+    }
+  }
+}
+
