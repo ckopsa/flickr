@@ -14,6 +14,19 @@
   currentTime) to /api/telemetry on this same server, throttled to one POST
   per 5 seconds — errors bypass the throttle. Append ?debug=1 to the
   registered URL to enable the CastDebugLogger overlay.
+
+  It also reads the SESSION DOCUMENT (docs/hypermedia.md §Passages are
+  session state). The sender puts that document's own address in the load's
+  customData; this page fetches it and reads the passage's end bound and the
+  run's next member for itself, rather than being told about them field by
+  field. Stopping at the bound is then the DEVICE's, which matters when the
+  sender is a phone that has locked or walked out of the room: the passage
+  still ends where it says it ends. The sender pauses at the same bound from
+  its own clock — whichever gets there first, the other finds it paused.
+
+  The bound is armed ONCE per load: having paused there, the receiver plays
+  on if anyone presses play (that is "keep watching", and the sender takes it
+  as such), and the next passage arrives with the next load's customData.
 -->
 <html lang="en">
 <head>
@@ -29,6 +42,8 @@
 <cast-media-player></cast-media-player>
 <script src="//www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js"></script>
 <script src="//www.gstatic.com/cast/sdk/libs/devtools/debug_layer/caf_receiver_logger.js"></script>
+<!-- the same reading of the session document the sender uses (web/cast.js) -->
+<script src="/cast.js"></script>
 <script>
 (function () {
   'use strict';
@@ -73,6 +88,65 @@
       var info = playerManager.getMediaInformation();
       mediaTitle = (info && info.metadata && info.metadata.title) || '';
       telemetry('player_load_complete', {}, true);
+    });
+
+  // --- the session document ----------------------------------------------
+  // What is playing is a document, and its address arrives with the load.
+  // The receiver reads two things off it: `passage.ends_at`, the bound to
+  // stop at (in this player's own clock — castReceiverBound takes off the
+  // seek a transcode was cut at), and `links.next`, what follows in the
+  // work. Advancing stays the sender's: it owns the route, the countdown
+  // and the panel. Knowing the bound does not.
+  var endsAt = null;      // in the receiver's clock; null = no bound
+  var endArmed = false;   // one shot per load
+  var nextTitle = '';
+
+  function sessionAddress(request) {
+    var fromMedia = request && request.media && request.media.customData;
+    var fromLoad = request && request.customData;
+    return (fromMedia && fromMedia.session) || (fromLoad && fromLoad.session) || '';
+  }
+
+  function readSession(address) {
+    fetch(address, { headers: { Accept: 'application/json' } })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (doc) {
+        if (!doc) return;
+        // castReceiverBound and sessionEndBound come from /cast.js — the
+        // sender reads the very same document with the very same functions.
+        endsAt = typeof castReceiverBound === 'function' ? castReceiverBound(doc) : null;
+        // A bound at or before where the stream starts is no bound: pausing
+        // on the first tick would be a stopped player, not a passage.
+        endArmed = endsAt != null && endsAt > 0;
+        nextTitle = (doc.links && doc.links.next && doc.links.next.title) || '';
+        telemetry('session_read', {
+          session: doc.id || null,
+          ends_at: endsAt,
+          next: nextTitle || null,
+        }, true);
+      })
+      .catch(function () { /* no document, no bound: the sender still holds the clock */ });
+  }
+
+  playerManager.setMessageInterceptor(
+    cast.framework.messages.MessageType.LOAD,
+    function (request) {
+      endsAt = null; endArmed = false; nextTitle = '';
+      var address = sessionAddress(request);
+      if (address) readSession(address);
+      return request; // the load itself is untouched
+    });
+
+  // Rule 2, held by the device: stop there. Disarmed as it fires, so a
+  // resume from anywhere plays on rather than pausing again a tick later.
+  playerManager.addEventListener(
+    cast.framework.events.EventType.TIME_UPDATE,
+    function () {
+      if (!endArmed || endsAt == null) return;
+      if ((playerManager.getCurrentTimeSec() || 0) < endsAt) return;
+      endArmed = false;
+      playerManager.pause();
+      telemetry('passage_end', { ends_at: endsAt, next: nextTitle || null }, true);
     });
 
   playerManager.addEventListener(

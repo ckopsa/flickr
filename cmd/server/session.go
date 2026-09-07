@@ -24,6 +24,7 @@ import (
 	"net/http"
 	"net/url"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -50,6 +51,10 @@ type playSession struct {
 	Method   string
 	URL      string
 	Encoder  string
+	// Seek is where these bytes begin: for a transcode the offset the
+	// server baked into the stream (so the receiver's own clock runs from
+	// there), for a direct play the position the client asked to start at.
+	Seek     float64
 	Decision model.PlayDecision
 	// Caps and the track selections are kept so the run's next member can be
 	// started on the same device without the client re-stating itself.
@@ -330,6 +335,7 @@ func (s *server) act(r *http.Request, req playRequest) (playSession, *hyper.Prob
 	}
 
 	row.Decision = req.d
+	row.Seek = req.seek
 	s.plays.put(row)
 	return row, nil
 }
@@ -476,7 +482,14 @@ func (s *server) sessionEnvelope(row playSession, item store.Item, next *store.I
 		doc.Field("profile", row.ClientID)
 	}
 	doc.Field("method", row.Method).
-		Field("url", row.URL)
+		Field("url", row.URL).
+		// What the bytes at `url` ARE, in the words a media element and a
+		// Cast receiver both take. The client was guessing "video/mp4" for
+		// every direct play; the server probed the container and knows.
+		Field("content_type", sessionContentType(row, item))
+	if row.Seek > 0 {
+		doc.Field("seek_seconds", row.Seek)
+	}
 	if row.Encoder != "" {
 		doc.Field("video_encoder", row.Encoder)
 	}
@@ -489,6 +502,11 @@ func (s *server) sessionEnvelope(row playSession, item store.Item, next *store.I
 		Field("marks", row.Marks)
 
 	doc.Link("item", itemHref(item.ID), itemTitle(item))
+	// The picture this play is shown by — a Cast device draws it behind the
+	// title, and it is the server that knows which route has one.
+	if href := sessionArtwork(item); href != "" {
+		doc.Link("artwork", href, "")
+	}
 	// `back` is where the end-of-the-passage panel goes when the person is
 	// done: the item's own page, the same address the item relation names,
 	// under the name the panel renders it by, so the screen needs no rule.
@@ -538,6 +556,78 @@ func (s *server) sessionEnvelope(row playSession, item store.Item, next *store.I
 		doc.Unavailable("link", "mark an in point first — a passage needs somewhere to start")
 	}
 	return doc
+}
+
+// sessionArtwork is the picture that stands for this play: the item's own
+// cover for audio and text, the episode still or the film's poster for
+// video — and NOTHING when there is no picture, rather than a link to a
+// route that would answer 404. The still comes first for video: a cast
+// device draws it full-width behind the title, and a frame of the episode
+// says more there than the show's poster does.
+func sessionArtwork(it store.Item) string {
+	base := itemHref(it.ID)
+	switch it.MediaInfo.MediumOrVideo() {
+	case model.MediumAudio, model.MediumText:
+		return base + "/cover"
+	}
+	if it.Enrichment != nil && it.Enrichment.HasStill {
+		return base + "/still"
+	}
+	if it.Enrichment != nil && it.Enrichment.HasPoster {
+		return base + "/poster"
+	}
+	return ""
+}
+
+// sessionContentType is the media type of the bytes at `url`: the HLS
+// playlist for a transcode, and for a direct play the container's own type.
+// The container is what the probe read, so this is the server saying what
+// it is handing over rather than every client guessing from the URL.
+func sessionContentType(row playSession, it store.Item) string {
+	if row.Method == string(model.Transcode) {
+		return "application/x-mpegurl"
+	}
+	audio := it.MediaInfo.MediumOrVideo() == model.MediumAudio
+	container := ""
+	if it.MediaInfo != nil {
+		container = strings.ToLower(it.MediaInfo.Container)
+	}
+	switch container {
+	case "mp4", "m4v", "mov":
+		if audio {
+			return "audio/mp4"
+		}
+		return "video/mp4"
+	case "m4a", "m4b":
+		return "audio/mp4"
+	case "mkv":
+		return "video/x-matroska"
+	case "webm":
+		if audio {
+			return "audio/webm"
+		}
+		return "video/webm"
+	case "mp3":
+		return "audio/mpeg"
+	case "flac":
+		return "audio/flac"
+	case "ogg", "oga", "opus":
+		return "audio/ogg"
+	case "wav":
+		return "audio/wav"
+	case "avi":
+		return "video/x-msvideo"
+	case "ts":
+		return "video/mp2t"
+	case "epub":
+		return "application/epub+zip"
+	case "pdf":
+		return "application/pdf"
+	}
+	if audio {
+		return "audio/mp4"
+	}
+	return "video/mp4"
 }
 
 // sessionProgressInput is what a progress write on THIS session takes. The

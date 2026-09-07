@@ -54,7 +54,9 @@ func play(t *testing.T, h http.Handler, id int64, body map[string]any) map[strin
 	if body == nil {
 		body = map[string]any{}
 	}
-	body["capabilities"] = directPlayCaps()
+	if _, ok := body["capabilities"]; !ok {
+		body["capabilities"] = directPlayCaps()
+	}
 	if _, ok := body["client_id"]; !ok {
 		body["client_id"] = "chris"
 	}
@@ -173,6 +175,49 @@ func TestPlayAnswersTheSessionDocument(t *testing.T) {
 	}
 	if again := decode(t, w); again["self"] != doc["self"] || again["url"] != doc["url"] {
 		t.Errorf("GET /api/sessions/%s is a different document", id)
+	}
+}
+
+// What the cast bridge reads off the document instead of composing it: the
+// media type of the bytes, where they begin, and the picture to draw. The
+// sender used to say "video/mp4" for every direct play and show no artwork
+// at all — both were guesses, and both are the server's to answer.
+func TestSessionDocumentSaysWhatToPlayAndHowItLooks(t *testing.T) {
+	_, _, doc := playing(t, idBeach, nil)
+	if doc["content_type"] != "video/x-matroska" {
+		t.Errorf("content_type = %v (the fixture episode is an mkv)", doc["content_type"])
+	}
+	if _, ok := doc["seek_seconds"]; ok {
+		t.Errorf("a play from the top has no seek: %v", doc["seek_seconds"])
+	}
+	// The episode has a TMDB still, so that is the picture — a frame of the
+	// episode, not the show's poster.
+	if got := href(t, doc, "links", "artwork"); got != itemHref(idBeach)+"/still" {
+		t.Errorf("links.artwork = %q", got)
+	}
+
+	// A passage starts where it says, and the document says so: `t` is the
+	// seek the server seeded, and the receiver starts there.
+	_, _, doc = playing(t, idBeach, map[string]any{
+		"passage": map[string]any{"t": 142, "end": 854},
+	})
+	if doc["seek_seconds"] != 142.0 {
+		t.Errorf("seek_seconds = %v, want the passage's t", doc["seek_seconds"])
+	}
+
+	// An audio item is its own cover, and an m4b is not video/mp4.
+	_, _, doc = playing(t, idDunePart1, map[string]any{
+		"capabilities": model.ClientCapabilities{
+			SchemaVersion: model.CapabilitySchemaVersion,
+			Containers:    []string{"m4b"}, AudioCodecs: []string{"aac"},
+			MaxAudioChannels: 6,
+		},
+	})
+	if doc["content_type"] != "audio/mp4" {
+		t.Errorf("content_type = %v (an m4b)", doc["content_type"])
+	}
+	if got := href(t, doc, "links", "artwork"); got != itemHref(idDunePart1)+"/cover" {
+		t.Errorf("links.artwork = %q", got)
 	}
 }
 
