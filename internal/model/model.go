@@ -283,8 +283,7 @@ type PlayDecision struct {
 //   - "audiobook_part" — one file of an audiobook; Title is the book, Author
 //     its author, Part its position (0 = a single-file book, or unnumbered).
 //   - "track" — one file of an album; Title is the ALBUM (the work), Author
-//     the artist, Part the track number. The track's own name is not stored
-//     here in this generation — the album is the unit the library presents.
+//     the artist, Part the track number, TrackTitle the track's own name.
 //   - "book" — a text file; Title and Author name it, Part is unused.
 //   - "unknown" — the path said nothing.
 type Identity struct {
@@ -300,4 +299,10 @@ type Identity struct {
 	// Part orders the files of a multi-file audio work: an audiobook part or
 	// a track number. 0 = unnumbered (or the work is a single file).
 	Part int `json:"part,omitempty"`
+	// TrackTitle is a track's own name — the filename after its ordinal
+	// ("07 Karma Police.flac" → "Karma Police"), or the work's title when the
+	// file is the whole work. Only kind "track" carries it: an audiobook's
+	// parts are numbered, not named, and every other kind names its work in
+	// Title.
+	TrackTitle string `json:"track_title,omitempty"`
 }

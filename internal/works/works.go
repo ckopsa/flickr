@@ -69,7 +69,8 @@ type Work struct {
 //     and so never a tile, of its own.
 //   - kind "audiobook_part" → one "audiobook" work per (author, title),
 //     case-insensitively, its parts ordered by part number.
-//   - kind "track" → one "album" work per (artist, album title), likewise.
+//   - kind "track" → one "album" work per (artist, album title), likewise;
+//     Artists shelves those works by artist for the artist tile.
 //   - kind "book" → one "book" work per item (two copies of one book merge
 //     on their shared key, exactly as two copies of a film do).
 //   - anything else (kind "unknown", missing identity) → a per-item

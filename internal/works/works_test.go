@@ -484,6 +484,13 @@ func track(id int64, key, artist, album string, n int) store.Item {
 		Identity: &model.Identity{Kind: "track", Author: artist, Title: album, Part: n}}
 }
 
+// titledTrack is a track from an identity that knows the track's own name;
+// the album's year rides on it the way the path grammar puts it there.
+func titledTrack(id int64, key, artist, album string, year, n int, name string) store.Item {
+	return store.Item{ID: id, ObjectKey: key,
+		Identity: &model.Identity{Kind: "track", Author: artist, Title: album, Year: year, Part: n, TrackTitle: name}}
+}
+
 func book(id int64, key, author, title string, year int) store.Item {
 	return store.Item{ID: id, ObjectKey: key,
 		Identity:  &model.Identity{Kind: "book", Author: author, Title: title, Year: year},
@@ -739,5 +746,72 @@ func TestFeedWorkCarriesMedium(t *testing.T) {
 	}
 	if _, has := mv["part_count"]; has {
 		t.Errorf("a video work must omit part_count, got %v", mv["part_count"])
+	}
+}
+
+// Artists shelves the album works by artist: name order, albums in year order
+// (the year-less last), the name spelled as the first album spells it, the
+// first album's representative as the picture. Audiobooks and artist-less
+// albums are not on any shelf.
+func TestArtists(t *testing.T) {
+	ws := Build([]store.Item{
+		titledTrack(1, "Music/Radiohead/In Rainbows (2007)/01 15 Step.flac", "Radiohead", "In Rainbows", 2007, 1, "15 Step"),
+		titledTrack(2, "Music/Radiohead/OK Computer (1997)/01 Airbag.flac", "Radiohead", "OK Computer", 1997, 1, "Airbag"),
+		titledTrack(3, "Music/Radiohead/OK Computer (1997)/02 Paranoid Android.flac", "Radiohead", "OK Computer", 1997, 2, "Paranoid Android"),
+		// Case differs across albums: one artist, spelled as the earliest album spells it.
+		titledTrack(4, "Music/radiohead/Kid A (2000)/01 Everything in Its Right Place.flac", "radiohead", "Kid A", 2000, 1, "Everything in Its Right Place"),
+		// A year-less album sorts after the dated ones.
+		titledTrack(5, "Music/Radiohead/B-Sides/01 Talk Show Host.flac", "Radiohead", "B-Sides", 0, 1, "Talk Show Host"),
+		titledTrack(6, "Music/Bjork/Homogenic (1997)/01 Hunter.flac", "Bjork", "Homogenic", 1997, 1, "Hunter"),
+		// Not music, and music with nobody to file it under.
+		part(7, "Audiobooks/Frank Herbert/Dune/01.m4b", "Frank Herbert", "Dune", 1),
+		track(8, "Music/Orphan.mp3", "", "Orphan", 0),
+	})
+	got := Artists(ws)
+	if len(got) != 2 || got[0].Name != "Bjork" || got[1].Name != "Radiohead" {
+		t.Fatalf("artists: %+v", got)
+	}
+	rh := got[1]
+	if rh.AlbumCount != 4 || len(rh.Albums) != 4 || rh.RepresentativeItemID != 2 {
+		t.Errorf("radiohead shelf: %+v", rh)
+	}
+	var titles []string
+	for _, a := range rh.Albums {
+		titles = append(titles, fmt.Sprintf("%s/%d/%d", a.Title, a.Year, a.TrackCount))
+	}
+	want := []string{"OK Computer/1997/2", "Kid A/2000/1", "In Rainbows/2007/1", "B-Sides/0/1"}
+	if !reflect.DeepEqual(titles, want) {
+		t.Errorf("album order = %v, want %v", titles, want)
+	}
+	if rh.Albums[0].Key != "album:radiohead-ok-computer-1997" || rh.Albums[0].RepresentativeItemID != 2 {
+		t.Errorf("album entry: %+v", rh.Albums[0])
+	}
+	if bj := got[0]; bj.AlbumCount != 1 || bj.RepresentativeItemID != 6 {
+		t.Errorf("bjork shelf: %+v", bj)
+	}
+
+	// No music at all: an empty list, not null.
+	raw, err := json.Marshal(Artists(Build([]store.Item{movie(1, "m/f.mkv", "Frozen", 2013)})))
+	if err != nil || string(raw) != "[]" {
+		t.Errorf("no artists: %s %v", raw, err)
+	}
+}
+
+// A track's label carries its title once the identity knows it; without a
+// number the title stands alone; an identity from before track titles keeps
+// the bare number.
+func TestItemLabelTrack(t *testing.T) {
+	for _, tc := range []struct {
+		it   store.Item
+		want string
+	}{
+		{titledTrack(1, "m/r/07 Karma Police.flac", "Radiohead", "OK Computer", 1997, 7, "Karma Police"), "Track 7 · Karma Police"},
+		{titledTrack(2, "m/r/Hidden Track.flac", "Radiohead", "OK Computer", 1997, 0, "Hidden Track"), "Hidden Track"},
+		{track(3, "m/r/07 Karma Police.flac", "Radiohead", "OK Computer", 7), "Track 7"},
+		{track(4, "m/r/Untitled.flac", "Radiohead", "OK Computer", 0), "Untitled.flac"},
+	} {
+		if got := itemLabel(tc.it); got != tc.want {
+			t.Errorf("itemLabel(%s) = %q, want %q", tc.it.ObjectKey, got, tc.want)
+		}
 	}
 }

@@ -146,6 +146,7 @@ func main() {
 	mux.HandleFunc("GET /api/items", srv.handleListItems)
 	mux.HandleFunc("GET /api/works", srv.handleWorks)
 	mux.HandleFunc("GET /api/works/{key}/items", srv.handleWorkItems)
+	mux.HandleFunc("GET /api/artists", srv.handleArtists)
 	mux.HandleFunc("GET /api/continue", srv.handleContinue)
 	mux.HandleFunc("GET /api/feed/media", srv.handleFeed)
 	mux.HandleFunc("POST /api/items/{id}/decision", srv.handleDecision)
@@ -319,6 +320,17 @@ func (s *server) handleWorkItems(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, wk.Items)
+}
+
+// handleArtists lists the album works shelved by artist: name, album count,
+// albums in year order, and the item whose cover is the artist's picture.
+func (s *server) handleArtists(w http.ResponseWriter, r *http.Request) {
+	ws, err := s.buildWorks()
+	if err != nil {
+		httpErr(w, 500, err)
+		return
+	}
+	writeJSON(w, works.Artists(ws))
 }
 
 // handleContinue is a profile's resume list: most-recent first, capped,

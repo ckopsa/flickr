@@ -388,11 +388,12 @@ func nextMember(w *Work, itemID int64) *store.Item {
 
 // itemLabel names one item inside its work: numbered episodes get
 // "S02E05 · <title>" (enrichment episode title when known, else the file
-// basename); a numbered audiobook part is "Part 3" and a numbered track
-// "Track 3" — the identity keeps no track title to add, so there is nothing
-// after the number; everything else — bonus material, episodes and parts
-// nobody numbered, books — is just the basename, since a made-up "S00E00" or
-// "Part 0" names nothing.
+// basename); a numbered audiobook part is "Part 3"; a track is
+// "Track 3 · <its title>" when the path named it, "Track 3" when the identity
+// predates track titles, and its title alone when nobody numbered it;
+// everything else — bonus material, episodes and parts nobody numbered,
+// books — is just the basename, since a made-up "S00E00" or "Part 0" names
+// nothing.
 func itemLabel(it store.Item) string {
 	name := path.Base(it.ObjectKey)
 	if it.Identity == nil {
@@ -412,9 +413,17 @@ func itemLabel(it store.Item) string {
 			return fmt.Sprintf("Part %d", it.Identity.Part)
 		}
 	case "track":
-		if it.Identity.Part > 0 {
-			return fmt.Sprintf("Track %d", it.Identity.Part)
+		title := it.Identity.TrackTitle
+		if it.Identity.Part == 0 {
+			if title != "" {
+				return title
+			}
+			return name
 		}
+		if title != "" {
+			return fmt.Sprintf("Track %d · %s", it.Identity.Part, title)
+		}
+		return fmt.Sprintf("Track %d", it.Identity.Part)
 	}
 	return name
 }

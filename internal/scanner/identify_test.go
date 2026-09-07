@@ -241,19 +241,35 @@ func TestIdentifyAudioAndText(t *testing.T) {
 			model.Identity{Kind: "audiobook_part", Author: "Arthur C. Clarke", Title: "2001 A Space Odyssey", Year: 1968},
 		},
 		// Music: the album is the work; the artist is the author; the track
-		// number is the part. The track's own title is not kept.
+		// number is the part; the track's own name is what follows it.
 		{
 			"Music/Radiohead/OK Computer (1997)/01 Airbag.flac",
-			model.Identity{Kind: "track", Author: "Radiohead", Title: "OK Computer", Year: 1997, Part: 1},
+			model.Identity{Kind: "track", Author: "Radiohead", Title: "OK Computer", Year: 1997, Part: 1, TrackTitle: "Airbag"},
 		},
+		{
+			"Music/Radiohead/OK Computer (1997)/02 - Paranoid Android.flac",
+			model.Identity{Kind: "track", Author: "Radiohead", Title: "OK Computer", Year: 1997, Part: 2, TrackTitle: "Paranoid Android"},
+		},
+		// No ordinal: the whole name is the track's, and it stays unnumbered.
 		{
 			"music/Radiohead/OK Computer (1997)/Hidden Track.flac",
-			model.Identity{Kind: "track", Author: "Radiohead", Title: "OK Computer", Year: 1997},
+			model.Identity{Kind: "track", Author: "Radiohead", Title: "OK Computer", Year: 1997, TrackTitle: "Hidden Track"},
 		},
-		// A loose track under the artist: the file names the work.
+		// A disc directory below the album is walked past; the track keeps
+		// its dot and hyphen, an underscore becomes a space.
+		{
+			"Music/ELO/Out of the Blue (1977)/Disc 1/04_Mr. Blue-Sky.flac",
+			model.Identity{Kind: "track", Author: "ELO", Title: "Out of the Blue", Year: 1977, Part: 4, TrackTitle: "Mr. Blue-Sky"},
+		},
+		// A loose track under the artist: the file names the work and the track.
 		{
 			"Music/Radiohead/Spectre.mp3",
-			model.Identity{Kind: "track", Author: "Radiohead", Title: "Spectre"},
+			model.Identity{Kind: "track", Author: "Radiohead", Title: "Spectre", TrackTitle: "Spectre"},
+		},
+		// Loose in the category directory: still a track, still named.
+		{
+			"Music/Orphan Recording.mp3",
+			model.Identity{Kind: "track", Title: "Orphan Recording", TrackTitle: "Orphan Recording"},
 		},
 		// Books: a bare .epub under the author, or a title directory.
 		{
@@ -300,6 +316,29 @@ func TestPartNumber(t *testing.T) {
 	} {
 		if got := partNumber(tc.in); got != tc.want {
 			t.Errorf("partNumber(%q) = %d, want %d", tc.in, got, tc.want)
+		}
+	}
+}
+
+// trackTitle is the name after the ordinal; an ordinal that is the whole
+// name, or no ordinal at all, leaves the name as it stands.
+func TestTrackTitle(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{"01 Airbag", "Airbag"},
+		{"03 - Paranoid Android", "Paranoid Android"},
+		{"07.Karma Police", "Karma Police"},
+		{"Track 05 - Let Down", "Let Down"},
+		{"12_The_Tourist", "The Tourist"},
+		{"05 Exit Music (For a Film)", "Exit Music (For a Film)"},
+		{"04 Mr. Blue-Sky", "Mr. Blue-Sky"},
+		{"Hidden Track", "Hidden Track"},
+		{"Track_07", "Track 07"},
+		{"03", "03"},
+		{"2001 A Space Odyssey", "2001 A Space Odyssey"}, // a year is not an ordinal
+		{"100 Years", "Years"},
+	} {
+		if got := trackTitle(tc.in); got != tc.want {
+			t.Errorf("trackTitle(%q) = %q, want %q", tc.in, got, tc.want)
 		}
 	}
 }
