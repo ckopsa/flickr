@@ -70,6 +70,13 @@ type server struct {
 	// daily clock window (TRICKPLAY_WINDOW) so library-wide backfills don't
 	// saturate the node during the day.
 	trickplayWindow *clockWindow
+	// transcriber, when set (TRANSCRIBE and WHISPER_MODEL both named), is the
+	// whisper.cpp stage that gives a file carrying no subtitles of its own a
+	// generated transcript. Nil is the stage switched off.
+	transcriber *pipeline.Transcriber
+	// transcribeBusy guards it the way trickplayBusy guards sprite sheets:
+	// one item at a time, one pass at a time.
+	transcribeBusy atomic.Bool
 }
 
 // trickplayDir is where per-item sprite-sheet sets live (data/trickplay/<id>/).
@@ -79,6 +86,16 @@ const trickplayDir = "data/trickplay"
 // previews: a two-minute clip is not scrubbed, and a full-file decode for
 // one is not worth the node.
 const trickplayMinSeconds = 120
+
+// subsDir is where subtitle WebVTT lives: <id>-<ordinal>.vtt for a track
+// extracted from the file on demand, <id>/transcript.vtt for the one the
+// transcription stage generated (it is the server's own file, not a stream
+// ffmpeg could pull out again, so it gets a directory of its own).
+const subsDir = "data/subs"
+
+func transcriptPath(id int64) string {
+	return filepath.Join(subsDir, strconv.FormatInt(id, 10), "transcript.vtt")
+}
 
 // coversDir is where an audio item's embedded cover art is cached
 // (data/covers/<id>.jpg), extracted on first request; <id>.none records a
@@ -148,6 +165,17 @@ func main() {
 		log.Fatalf("bad TRICKPLAY_WINDOW: %v", err)
 	}
 	log.Printf("advertising as %s (cast devices fetch streams here)", srv.baseURL)
+
+	// Transcription needs a binary and a model; either missing is the stage
+	// off, which is the ordinary state of a box that has neither.
+	if bin, mdl := os.Getenv("TRANSCRIBE"), os.Getenv("WHISPER_MODEL"); bin != "" && mdl != "" {
+		srv.transcriber = &pipeline.Transcriber{
+			Bin: bin, Model: mdl, Language: os.Getenv("WHISPER_LANGUAGE"),
+		}
+		log.Printf("transcription enabled: %s with %s", bin, mdl)
+	} else {
+		log.Printf("transcription disabled (TRANSCRIBE and WHISPER_MODEL not both set)")
+	}
 
 	if key := os.Getenv("TMDB_API_KEY"); key != "" {
 		srv.enricher = &tmdb.Enricher{
@@ -594,8 +622,9 @@ func (s *server) handleScan(w http.ResponseWriter, r *http.Request) {
 }
 
 // runScan performs one scan, then the TMDB enrichment pass (if enabled),
-// then the trickplay generation pass. Used by the manual endpoint, the
-// startup scan, and the interval scheduler.
+// then the trickplay generation pass, then the transcription pass (if
+// enabled). Used by the manual endpoint, the startup scan, and the interval
+// scheduler.
 func (s *server) runScan(ctx context.Context) {
 	if err := s.scanner.Scan(ctx); err != nil {
 		log.Printf("scan error: %v", err)
@@ -614,6 +643,7 @@ func (s *server) runScan(ctx context.Context) {
 		}
 	}
 	s.runTrickplay(ctx)
+	s.runTranscribe(ctx)
 }
 
 // clockWindow is a daily wall-clock interval, possibly wrapping midnight
@@ -746,6 +776,114 @@ func (s *server) generateTrickplay(ctx context.Context, item *store.Item) error 
 	}
 	dest := filepath.Join(trickplayDir, strconv.FormatInt(item.ID, 10))
 	return pipeline.GenerateTrickplay(ctx, u.String(), item.MediaInfo.DurationSeconds, dest)
+}
+
+// needsTranscript is the transcription stage's rule, said once: a video or
+// audio file that carries no subtitle track of its own, and either has never
+// been transcribed or was transcribed from a different file (the etag moved
+// under the id). A file with subtitles of its own is left alone — the author's
+// own words beat a machine's hearing of them.
+func needsTranscript(it store.Item, have *store.Transcript) bool {
+	if it.MediaInfo == nil {
+		return false
+	}
+	switch it.MediaInfo.MediumOrVideo() {
+	case model.MediumVideo, model.MediumAudio:
+	default:
+		return false // a book has no audio to hear
+	}
+	if len(it.MediaInfo.Subtitles) > 0 {
+		return false
+	}
+	return have == nil || have.ETag != it.ETag
+}
+
+// runTranscribe is the post-trickplay transcription stage: whisper.cpp over
+// every silent file, one at a time (each is hours of CPU), yielding to live
+// playback exactly like the trickplay and scan passes do. It is a no-op
+// without TRANSCRIBE and WHISPER_MODEL.
+func (s *server) runTranscribe(ctx context.Context) {
+	if s.transcriber == nil {
+		return
+	}
+	if !s.transcribeBusy.CompareAndSwap(false, true) {
+		return // a previous pass is still running
+	}
+	defer s.transcribeBusy.Store(false)
+
+	items, err := s.library.ListItems()
+	if err != nil {
+		log.Printf("transcribe: list items: %v", err)
+		return
+	}
+	have, err := s.library.Transcripts()
+	if err != nil {
+		log.Printf("transcribe: list transcripts: %v", err)
+		return
+	}
+	done := 0
+	for _, it := range items {
+		if ctx.Err() != nil {
+			return
+		}
+		var got *store.Transcript
+		if t, ok := have[it.ID]; ok {
+			got = &t
+		}
+		if !needsTranscript(it, got) {
+			continue
+		}
+		// Same yield condition as scans and trickplay: active playback owns
+		// the storage bandwidth and the CPU.
+		for s.scanner != nil && s.scanner.Yield != nil && s.scanner.Yield() {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(2 * time.Second):
+			}
+		}
+		if err := s.transcribe(ctx, &it); err != nil {
+			log.Printf("transcribe: item %d (%s): %v", it.ID, it.ObjectKey, err)
+			continue
+		}
+		done++
+		log.Printf("transcribe: generated a transcript for item %d (%s)", it.ID, it.ObjectKey)
+	}
+	if done > 0 {
+		log.Printf("transcribe: pass complete, %d items transcribed", done)
+	}
+}
+
+// transcribe generates and records one item's transcript. The row is written
+// only once the WebVTT is on disk, so a row always means a servable track.
+func (s *server) transcribe(ctx context.Context, item *store.Item) error {
+	u, err := s.presignedURL(ctx, item.ObjectKey)
+	if err != nil {
+		return err
+	}
+	lang, err := s.transcriber.Transcribe(ctx, u, transcriptPath(item.ID))
+	if err != nil {
+		return err
+	}
+	return s.library.SetTranscript(store.Transcript{
+		ItemID: item.ID, ETag: item.ETag, Language: lang,
+		Model: filepath.Base(s.transcriber.Model), GeneratedAt: time.Now(),
+	})
+}
+
+// transcriptOf is the item document's view of the same table: the generated
+// track to list, or nil when there is none (and when there is no library at
+// all, which is how a bare test server reads).
+func (s *server) transcriptOf(id int64) *store.Transcript {
+	if s.library == nil {
+		return nil
+	}
+	t, err := s.library.Transcript(id)
+	if err != nil {
+		log.Printf("transcript for item %d: %v", id, err)
+		return nil
+	}
+	return t
 }
 
 func (s *server) handleScanStatus(w http.ResponseWriter, r *http.Request) {
@@ -919,14 +1057,30 @@ func (s *server) handleSubtitle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	name, isVTT := strings.CutSuffix(r.PathValue("file"), ".vtt")
-	ordinal, ordErr := strconv.Atoi(name)
-	if !isVTT || ordErr != nil || ordinal < 0 {
+	if !isVTT {
 		httpErr(w, 404, fmt.Errorf("no such subtitle"))
 		return
 	}
 	item, err := s.library.GetItem(id)
 	if err != nil || item == nil {
 		httpErr(w, 404, fmt.Errorf("no such item"))
+		return
+	}
+	// The generated transcript is not one of the file's own streams: there is
+	// nothing to extract on demand, only what the stage has already written.
+	if name == transcriptOrdinal {
+		vtt := transcriptPath(id)
+		if _, err := os.Stat(vtt); err != nil {
+			httpErr(w, 404, fmt.Errorf("item %d has no generated transcript", id))
+			return
+		}
+		w.Header().Set("Content-Type", "text/vtt")
+		http.ServeFile(w, r, vtt)
+		return
+	}
+	ordinal, ordErr := strconv.Atoi(name)
+	if ordErr != nil || ordinal < 0 {
+		httpErr(w, 404, fmt.Errorf("no such subtitle"))
 		return
 	}
 	track := findSubtitle(item.MediaInfo, ordinal)
@@ -938,7 +1092,7 @@ func (s *server) handleSubtitle(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, 415, fmt.Errorf("subtitle track %d is %s (bitmap), not convertible to WebVTT", ordinal, track.Codec))
 		return
 	}
-	cachePath := filepath.Join("data/subs", fmt.Sprintf("%d-%d.vtt", id, ordinal))
+	cachePath := filepath.Join(subsDir, fmt.Sprintf("%d-%d.vtt", id, ordinal))
 	if _, err := os.Stat(cachePath); err != nil {
 		if track.External {
 			// External sidecar: the subtitle is its own object, not a stream

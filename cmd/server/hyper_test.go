@@ -293,6 +293,16 @@ func fixtureServer(t *testing.T) (*server, http.Handler) {
 			t.Fatal(err)
 		}
 	}
+	// The one episode with no subtitles of its own is the one the
+	// transcription stage has been over: its document lists what whisper
+	// wrote as a track like any other, addressed by the word rather than a
+	// stream number (README 18).
+	if err := library.SetTranscript(store.Transcript{
+		ItemID: idTheJob, ETag: "e9", Language: "en", Model: "ggml-base.en.bin",
+		GeneratedAt: time.Date(2026, time.September, 4, 2, 30, 0, 0, time.UTC),
+	}); err != nil {
+		t.Fatal(err)
+	}
 	// One profile who is partway through the show, partway through the
 	// audiobook, and seven sections into the book.
 	//
@@ -372,6 +382,9 @@ func TestHyperGolden(t *testing.T) {
 	for _, tc := range []struct{ name, target string }{
 		{"root", "/api/?client_id=chris"},
 		{"item-film", "/api/items/4?client_id=chris"},
+		// The episode that had no subtitles of its own, and now has a
+		// generated transcript in the same list.
+		{"item-episode", "/api/items/9?client_id=chris"},
 		{"work-show", "/api/works/tmdb%3A2316?client_id=chris"},
 		{"work-audiobook", "/api/works/audiobook%3Afrank-herbert-dune-1965?client_id=chris"},
 		{"work-album", "/api/works/album%3Aradiohead-ok-computer-1997?client_id=chris"},

@@ -167,8 +167,13 @@ func (s *server) handleItemDoc(w http.ResponseWriter, r *http.Request) {
 // found, plus the address of its WebVTT. A bitmap track (PGS, VobSub) has no
 // href — it cannot be converted, and the route refuses it — so a screen that
 // only offers what carries an href is right by construction.
+//
+// Ordinal is a number for a track the probe found INSIDE the file, and the
+// word "transcript" for the one whisper.cpp wrote for a file that carried
+// none. Either way it is the name in the `.vtt` address, so a client that
+// copies the href never has to know which kind it is holding.
 type subtitle struct {
-	Ordinal   int    `json:"ordinal"`
+	Ordinal   any    `json:"ordinal"`
 	Language  string `json:"language,omitempty"`
 	Title     string `json:"title,omitempty"`
 	Codec     string `json:"codec"`
@@ -177,20 +182,33 @@ type subtitle struct {
 	Href      string `json:"href,omitempty"`
 }
 
-func subtitlesOf(it store.Item) []subtitle {
-	if it.MediaInfo == nil || len(it.MediaInfo.Subtitles) == 0 {
-		return nil
+// transcriptOrdinal is the generated track's place in the list — a word
+// rather than a number, because it is not a stream anything could be
+// extracted from. The .vtt route reads the same word back.
+const transcriptOrdinal = "transcript"
+
+func subtitlesOf(it store.Item, generated *store.Transcript) []subtitle {
+	var out []subtitle
+	if it.MediaInfo != nil {
+		for _, tr := range it.MediaInfo.Subtitles {
+			s := subtitle{
+				Ordinal: tr.Ordinal, Language: tr.Language, Title: tr.Title,
+				Codec: tr.Codec, Supported: tr.Supported, External: tr.External,
+			}
+			if tr.Supported {
+				s.Href = fmt.Sprintf("%s/subtitles/%d.vtt", itemHref(it.ID), tr.Ordinal)
+			}
+			out = append(out, s)
+		}
 	}
-	out := make([]subtitle, 0, len(it.MediaInfo.Subtitles))
-	for _, tr := range it.MediaInfo.Subtitles {
-		s := subtitle{
-			Ordinal: tr.Ordinal, Language: tr.Language, Title: tr.Title,
-			Codec: tr.Codec, Supported: tr.Supported, External: tr.External,
-		}
-		if tr.Supported {
-			s.Href = fmt.Sprintf("%s/subtitles/%d.vtt", itemHref(it.ID), tr.Ordinal)
-		}
-		out = append(out, s)
+	// The generated transcript comes last, and says what it is in its title:
+	// a machine's hearing of the audio, not the author's own subtitles.
+	if generated != nil {
+		out = append(out, subtitle{
+			Ordinal: transcriptOrdinal, Language: generated.Language,
+			Title: "Transcript (generated)", Codec: "webvtt", Supported: true,
+			Href: fmt.Sprintf("%s/subtitles/%s.vtt", itemHref(it.ID), transcriptOrdinal),
+		})
 	}
 	return out
 }
@@ -282,7 +300,7 @@ func (s *server) itemEnvelope(it store.Item, wk *works.Work, full bool, position
 		if it.MediaInfo != nil {
 			doc.Field("media_info", it.MediaInfo)
 		}
-		if subs := subtitlesOf(it); len(subs) > 0 {
+		if subs := subtitlesOf(it, s.transcriptOf(it.ID)); len(subs) > 0 {
 			doc.Field("subtitles", subs)
 		}
 		if it.ProbeError != "" {

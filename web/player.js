@@ -40,6 +40,9 @@
   let castLastState = null, castEndSuppressed = false;
   let castPosition = 0;          // where the television got to, kept for the hand-back
   let endFired = false, passageEndFired = false, passageNaturalEnd = false;
+  // selectedSubOrdinal is the chosen track's ordinal AS TEXT (see subKey): a
+  // number for the file's own streams, the word 'transcript' for a generated
+  // one. burnSubOrdinal stays a number — only the file's own tracks burn in.
   let selectedSubOrdinal = null, burnSubOrdinal = null, selectedAudioOrdinal = null;
   let trickplay = null, trickplayItemId = null;
   let upNextTimer = null, upNextTarget = null;
@@ -338,6 +341,18 @@
   function subs() { return (item && item.subtitles) || []; }
   function supportedSubs() { return subs().filter(s => s.supported && s.href); }
   function burnableSubs() { return subs().filter(s => !s.supported && !s.external); }
+  // A track's key in the select and on the <track> element. An ordinal is a
+  // number for a stream inside the file and the word 'transcript' for the one
+  // the server generated, so the key is text and never arithmetic. (Only
+  // burned-in tracks are still numbers: those are always the file's own, and
+  // the server takes the number back in `subtitle_burn`.)
+  function subKey(s) { return String(s.ordinal); }
+  // The cast ids of whatever is chosen, in the numbering loadMedia handed the
+  // receiver: a track's place in the list it was loaded with, one-based.
+  function castTrackIds(ok) {
+    const i = selectedSubOrdinal == null ? -1 : ok.findIndex(s => subKey(s) === selectedSubOrdinal);
+    return i < 0 ? [] : [i + 1];
+  }
   function subLabel(s) {
     return s.title && s.language ? `${s.title} (${s.language})` : (s.title || s.language || 'Track ' + s.ordinal);
   }
@@ -355,12 +370,12 @@
     }
     sel.style.display = '';
     sel.innerHTML = '<option value="">Subtitles: Off</option>' +
-      ok.map(s => `<option value="${s.ordinal}">${R.esc(subLabel(s))}${s.external ? ' [ext]' : ''}</option>`).join('') +
+      ok.map(s => `<option value="${R.esc(subKey(s))}">${R.esc(subLabel(s))}${s.external ? ' [ext]' : ''}</option>`).join('') +
       burns.map(s => `<option value="burn:${s.ordinal}">${R.esc(burnLabel(s))}</option>`).join('');
-    if (selectedSubOrdinal != null && !ok.some(s => s.ordinal === selectedSubOrdinal)) selectedSubOrdinal = null;
+    if (selectedSubOrdinal != null && !ok.some(s => subKey(s) === selectedSubOrdinal)) selectedSubOrdinal = null;
     if (burnSubOrdinal != null && !burns.some(s => s.ordinal === burnSubOrdinal)) burnSubOrdinal = null;
     sel.value = burnSubOrdinal != null ? 'burn:' + burnSubOrdinal
-      : selectedSubOrdinal == null ? '' : String(selectedSubOrdinal);
+      : selectedSubOrdinal == null ? '' : selectedSubOrdinal;
   }
   function attachLocalTracks() {
     video.querySelectorAll('track').forEach(t => t.remove());
@@ -370,7 +385,7 @@
       tr.src = s.href;              // the document's address, not one built here
       tr.srclang = s.language || '';
       tr.label = subLabel(s);
-      tr.dataset.ordinal = s.ordinal;
+      tr.dataset.ordinal = subKey(s);
       // A cue exists only once its track has been fetched and parsed, so the
       // height the settings panel asked for is put on it then.
       tr.addEventListener('load', () => setCueLine(cueLine));
@@ -380,7 +395,7 @@
   }
   function applyLocalSubSelection() {
     for (const tr of video.querySelectorAll('track')) {
-      tr.track.mode = (selectedSubOrdinal != null && Number(tr.dataset.ordinal) === selectedSubOrdinal)
+      tr.track.mode = (selectedSubOrdinal != null && tr.dataset.ordinal === selectedSubOrdinal)
         ? 'showing' : 'disabled';
     }
   }
@@ -1677,13 +1692,13 @@
       if (ord !== burnSubOrdinal) { burnSubOrdinal = ord; restartFromCurrent(); }
       return;
     }
-    selectedSubOrdinal = v === '' ? null : Number(v);
+    selectedSubOrdinal = v === '' ? null : v;
     if (burnSubOrdinal != null) { burnSubOrdinal = null; restartFromCurrent(); return; }
     if (casting()) {
       const ms = root.cast.framework.CastContext.getInstance().getCurrentSession();
       const media = ms && ms.getMediaSession();
       if (media) {
-        const ids = selectedSubOrdinal == null ? [] : [selectedSubOrdinal + 1];
+        const ids = castTrackIds(supportedSubs());
         media.editTracksInfo(new root.chrome.cast.media.EditTracksInfoRequest(ids),
           () => {}, e => console.warn('editTracksInfo failed', e));
       }
@@ -2003,8 +2018,10 @@
 
     const ok = supportedSubs();
     if (ok.length) {
-      media.tracks = ok.map(s => {
-        const t = new root.chrome.cast.media.Track(s.ordinal + 1, root.chrome.cast.media.TrackType.TEXT);
+      // A cast track id is a number of the load's own making, so it is the
+      // track's PLACE in this list — an ordinal may be a word.
+      media.tracks = ok.map((s, i) => {
+        const t = new root.chrome.cast.media.Track(i + 1, root.chrome.cast.media.TrackType.TEXT);
         t.trackContentId = root.castAbsolute(baseUrl, s.href);
         t.trackContentType = 'text/vtt';
         t.subtype = root.chrome.cast.media.TextTrackType.SUBTITLES;
@@ -2015,8 +2032,7 @@
     }
     const req = new root.chrome.cast.media.LoadRequest(media);
     if (ok.length) {
-      req.activeTrackIds = (selectedSubOrdinal != null && ok.some(s => s.ordinal === selectedSubOrdinal))
-        ? [selectedSubOrdinal + 1] : [];
+      req.activeTrackIds = castTrackIds(ok);
     }
     req.currentTime = spec.startTime;
     req.autoplay = true;

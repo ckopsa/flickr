@@ -1,10 +1,14 @@
 package main
 
 import (
+	"net/http"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"flickr/internal/model"
+	"flickr/internal/store"
 )
 
 func TestFindSubtitle(t *testing.T) {
@@ -159,5 +163,72 @@ func TestBookContentType(t *testing.T) {
 		if got := bookContentType(tc.key); got != tc.want {
 			t.Errorf("bookContentType(%q) = %q, want %q", tc.key, got, tc.want)
 		}
+	}
+}
+
+// The transcription stage's rule, case by case: it hears files, it does not
+// argue with subtitles a file already carries, and it re-runs only when the
+// file itself has changed.
+func TestNeedsTranscript(t *testing.T) {
+	video := func() store.Item {
+		return store.Item{ETag: "e1", MediaInfo: &model.MediaInfo{Medium: model.MediumVideo}}
+	}
+	withSubs := video()
+	withSubs.MediaInfo.Subtitles = []model.SubtitleTrack{{Ordinal: 0, Codec: "subrip", Supported: true}}
+	audio := store.Item{ETag: "e1", MediaInfo: &model.MediaInfo{Medium: model.MediumAudio}}
+	book := store.Item{ETag: "e1", MediaInfo: &model.MediaInfo{Medium: model.MediumText}}
+
+	cases := []struct {
+		name string
+		it   store.Item
+		have *store.Transcript
+		want bool
+	}{
+		{"a silent video is transcribed", video(), nil, true},
+		{"so is an audio file", audio, nil, true},
+		{"a book has no audio to hear", book, nil, false},
+		{"an unprobed file is left alone", store.Item{ETag: "e1"}, nil, false},
+		{"a file with its own subtitles is left alone", withSubs, nil, false},
+		{"a transcript of the same file is not made twice", video(), &store.Transcript{ETag: "e1"}, false},
+		{"a file that changed under its id is heard again", video(), &store.Transcript{ETag: "e0"}, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := needsTranscript(c.it, c.have); got != c.want {
+				t.Errorf("needsTranscript = %v, want %v", got, c.want)
+			}
+		})
+	}
+}
+
+// The generated transcript is served by the same .vtt route as the file's own
+// tracks, under the word the item document put in its address — and 404s
+// (never a 500) on a box where the stage has not run.
+func TestTranscriptIsServedByTheSubtitleRoute(t *testing.T) {
+	t.Chdir(t.TempDir())
+	_, h := fixtureServer(t)
+
+	if w := get(t, h, "/api/items/9/subtitles/transcript.vtt"); w.Code != http.StatusNotFound {
+		t.Fatalf("with nothing generated: %d %s", w.Code, w.Body)
+	}
+	cues := "WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nSo, the job.\n"
+	if err := os.MkdirAll(filepath.Dir(transcriptPath(9)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(transcriptPath(9), []byte(cues), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	w := get(t, h, "/api/items/9/subtitles/transcript.vtt")
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET transcript = %d: %s", w.Code, w.Body)
+	}
+	if ct := w.Header().Get("Content-Type"); ct != "text/vtt" {
+		t.Errorf("content-type = %q, want text/vtt", ct)
+	}
+	if w.Body.String() != cues {
+		t.Errorf("body = %q", w.Body.String())
+	}
+	if w := get(t, h, "/api/items/404/subtitles/transcript.vtt"); w.Code != http.StatusNotFound {
+		t.Errorf("an unknown item = %d, want 404", w.Code)
 	}
 }
