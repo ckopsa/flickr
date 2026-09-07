@@ -26,8 +26,10 @@ var update = flag.Bool("update", false, "rewrite the golden documents under test
 // store, so a fixture that skipped it would not be testing them — and no
 // MinIO, ffmpeg or TMDB is touched by any read here.
 //
-// Item ids are the insertion order below, which is also object-key order, so
-// the golden files' addresses stay put as long as this list does.
+// Item ids are the insertion order below, so the golden files' addresses stay
+// put as long as this list does — which is why the two Radiohead records the
+// artist shelf needs sit at the END of it rather than beside OK Computer:
+// appending leaves every id, and so every golden written before them, alone.
 const (
 	idDunePart1 = 1
 	idDunePart2 = 2
@@ -38,6 +40,8 @@ const (
 	idDeleted   = 7
 	idBeach     = 8
 	idTheJob    = 9
+	idYou       = 10
+	idTelex     = 11
 )
 
 func fixtureItems() []store.Item {
@@ -156,6 +160,29 @@ func fixtureItems() []store.Item {
 				Width: 1280, Height: 720, DurationSeconds: 2760, BitrateBps: 5200000, AudioChannels: 2,
 			},
 		},
+		// Two more records by the same artist, so a shelf is a shelf: an
+		// EARLIER album (the year, not the key, is the shelf's order) and one
+		// nobody dated (which sorts last, after every dated record).
+		{
+			ObjectKey: "Music/Radiohead/Pablo Honey (1993)/01 You.flac",
+			ETag:      "e10", Size: 29000000,
+			Identity: &model.Identity{Kind: "track", Title: "Pablo Honey", Author: "Radiohead",
+				Year: 1993, Part: 1, TrackTitle: "You"},
+			MediaInfo: &model.MediaInfo{
+				Medium: model.MediumAudio, Container: "flac", AudioCodec: "flac",
+				DurationSeconds: 208, BitrateBps: 960000, AudioChannels: 2,
+			},
+		},
+		{
+			ObjectKey: "Music/Radiohead/The Bends/01 Planet Telex.flac",
+			ETag:      "e11", Size: 32000000,
+			Identity: &model.Identity{Kind: "track", Title: "The Bends", Author: "Radiohead",
+				Part: 1, TrackTitle: "Planet Telex"},
+			MediaInfo: &model.MediaInfo{
+				Medium: model.MediumAudio, Container: "flac", AudioCodec: "flac",
+				DurationSeconds: 259, BitrateBps: 960000, AudioChannels: 2,
+			},
+		},
 	}
 }
 
@@ -179,7 +206,9 @@ func fixtureServer(t *testing.T) (*server, http.Handler) {
 		t.Fatal(err)
 	}
 	// The goldens address items by id, so the ids the insert handed out have
-	// to be the ones this file names.
+	// to be the ones this file names: one per fixture row, in the order the
+	// rows are written (ListItems answers in object-key order, which is a
+	// different order once a row is appended rather than inserted).
 	stored, err := library.ListItems()
 	if err != nil {
 		t.Fatal(err)
@@ -187,10 +216,13 @@ func fixtureServer(t *testing.T) (*server, http.Handler) {
 	if len(stored) != len(items) {
 		t.Fatalf("stored %d items, want %d", len(stored), len(items))
 	}
-	for i, it := range stored {
-		if it.ID != int64(i+1) || it.ObjectKey != items[i].ObjectKey {
-			t.Fatalf("item %d came back as id %d (%s); the fixture must stay in object-key order",
-				i+1, it.ID, it.ObjectKey)
+	byID := map[int64]string{}
+	for _, it := range stored {
+		byID[it.ID] = it.ObjectKey
+	}
+	for i, it := range items {
+		if got := byID[int64(i+1)]; got != it.ObjectKey {
+			t.Fatalf("id %d is %q, want %q; the fixture rows are its ids", i+1, got, it.ObjectKey)
 		}
 	}
 	// TMDB enrichment, written the way the enrichment pass writes it: the
@@ -282,6 +314,8 @@ func TestHyperGolden(t *testing.T) {
 		{"work-audiobook", "/api/works/audiobook%3Afrank-herbert-dune-1965?client_id=chris"},
 		{"work-album", "/api/works/album%3Aradiohead-ok-computer-1997?client_id=chris"},
 		{"work-book", "/api/works/book%3Ashirley-jackson-the-haunting-of-hill-house-1959?client_id=chris"},
+		{"library", "/api/library?client_id=chris"},
+		{"artist", "/api/artists/Radiohead?client_id=chris"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			w := get(t, h, tc.target)
@@ -625,7 +659,7 @@ func TestExistingRoutesUnchanged(t *testing.T) {
 	if err := json.Unmarshal(get(t, h, "/api/items").Body.Bytes(), &items); err != nil {
 		t.Fatalf("/api/items: %v", err)
 	}
-	if len(items) != 9 {
+	if len(items) != 11 {
 		t.Errorf("/api/items returned %d items", len(items))
 	}
 	// /api/works/{key}/items is still that work's members, not a document.

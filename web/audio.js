@@ -13,18 +13,22 @@
 // year order, each opening its own pane; the grid shows one tile per artist
 // rather than one per album. index.html calls in at a handful of hooks:
 //
-//   isAudioItem(it)            medium test (buildLibrary, episodeSiblings, …)
-//   artworkUrl(id)             /cover for audio and text items, /poster otherwise
-//   renderAudioCards(grid, items, q)   one tile per audiobook / artist
+//   isAudioItem(it)            medium test (the up-next label, and the panes)
 //   renderAudioDetail(item)    the detail pane's author line and parts list
 //   audioMode(item | null)     entering / leaving audio playback
-//   audioSiblings(item)        prev / next part, for nav and up-next
 //   partLabel(item)            "Part 3" / "Track 7 · Karma Police" / the file name
 //   renderArtist(name)         the #/artist/<name> view; false when unknown
 //   audioBackHash(item)        where Back goes from a track: its artist's shelf
 //
+// NOTHING here groups any more. The work an item belongs to — its parts or
+// tracks, in order — is the server's answer, held by index.html as
+// `currentWork` (GET /api/works/{key}); the shelf is a document of its own
+// (GET /api/artists/{name}), and the grid's artist tile comes down inside
+// GET /api/library. What was `audioWorks()` and `artists()` here was a copy
+// of internal/works.Build and works.Artists, and it is gone.
+//
 // Loaded as a plain script before index.html's own, so nothing here runs at
-// parse time beyond defining functions — the page's state (allItems,
+// parse time beyond defining functions — the page's state (currentWork,
 // currentItem, passage) is read only when a hook is called.
 (function (root) {
   'use strict';
@@ -37,68 +41,8 @@
     return !!it && (it.media_info?.medium === 'audio' || AUDIO_KINDS.has(it.identity?.kind));
   }
 
-  // Tiles ask for artwork by item id. The server's /cover route falls back to
-  // the poster itself, but it only runs an extraction for audio items, so
-  // video tiles keep asking for the poster directly.
-  function artworkUrl(id) {
-    const it = allItems.find(i => i.id === id);
-    const own = isAudioItem(it) || (it?.media_info?.medium && it.media_info.medium !== 'video');
-    return `/api/items/${id}/${own ? 'cover' : 'poster'}`;
-  }
-
   // Zero (and the omitted zero the server sends as undefined) = unnumbered.
   function partNo(it) { return it.identity?.part || 0; }
-
-  // Mirrors internal/works.finish for audio kinds: by part number, the
-  // unnumbered after the numbered and in key order, then by id.
-  function byPartOrder(a, b) {
-    const pa = partNo(a), pb = partNo(b);
-    if (pa !== pb) {
-      if (!pa || !pb) return pa ? -1 : 1;
-      return pa - pb;
-    }
-    return a.object_key.localeCompare(b.object_key) || a.id - b.id;
-  }
-
-  // Mirrors internal/works.Build for the audio kinds: one work per (kind,
-  // author, title), case-insensitively; a file the path could not place is a
-  // work of its own. Title order, key as the tie-break.
-  function audioWorks(items) {
-    const byKey = new Map();
-    for (const it of items) {
-      const kind = it.identity?.kind;
-      const workKind = kind === 'audiobook_part' ? 'audiobook' : kind === 'track' ? 'album' : 'file';
-      const key = workKind === 'file' ? `file:${it.id}`
-        : `${workKind}\0${(it.identity.author || '').toLowerCase()}\0${(it.identity.title || '').toLowerCase()}`;
-      let w = byKey.get(key);
-      if (!w) { w = { key, kind: workKind, title: '', author: '', year: 0, duration: 0, items: [] }; byKey.set(key, w); }
-      w.items.push(it);
-    }
-    const works = [...byKey.values()];
-    for (const w of works) {
-      w.items.sort(byPartOrder);
-      w.title = w.items.find(i => i.identity?.title)?.identity.title || baseName(w.items[0].object_key);
-      w.author = w.items.find(i => i.identity?.author)?.identity.author || '';
-      w.year = w.items.find(i => i.identity?.year)?.identity.year || 0;
-      w.duration = w.items.reduce((s, i) => s + (i.media_info?.duration_seconds || 0), 0);
-    }
-    return works.sort((a, b) => a.title.localeCompare(b.title) || a.key.localeCompare(b.key));
-  }
-
-  function audioWorkOf(item) {
-    return audioWorks(allItems.filter(isAudioItem)).find(w => w.items.some(i => i.id === item.id))
-      || { key: `file:${item.id}`, kind: 'file', title: baseName(item.object_key), author: '', year: 0,
-           duration: item.media_info?.duration_seconds || 0, items: [item] };
-  }
-
-  // The neighbours in play order — what prev/next and up-next move to.
-  // Mirrors internal/works.nextMember (audio works carry no bonus material).
-  function audioSiblings(item) {
-    const w = audioWorkOf(item);
-    const i = w.items.findIndex(m => m.id === item.id);
-    if (i < 0) return null;
-    return { prev: w.items[i - 1] || null, next: w.items[i + 1] || null };
-  }
 
   function partNoun(w) { return w.kind === 'album' ? 'track' : 'part'; }
 
@@ -122,91 +66,21 @@
     return partNo(it) ? `${partNumLabel(it)} · ${title}` : title;
   }
 
-  // Mirrors internal/works.Artists: the album works shelved by artist,
-  // case-insensitively, in name order; each shelf's albums in year order (the
-  // year-less last, then title), the name spelled as the first album spells
-  // it. An album with no artist has no shelf and stays a tile of its own.
-  function artists(works) {
-    const albums = works.filter(w => w.kind === 'album' && w.author)
-      .sort((a, b) => a.author.toLowerCase().localeCompare(b.author.toLowerCase())
-        || ((a.year && b.year) ? a.year - b.year : (a.year ? -1 : b.year ? 1 : 0))
-        || a.title.toLowerCase().localeCompare(b.title.toLowerCase()) || a.key.localeCompare(b.key));
-    const out = [];
-    for (const w of albums) {
-      const last = out[out.length - 1];
-      if (!last || last.name.toLowerCase() !== w.author.toLowerCase()) out.push({ name: w.author, albums: [] });
-      out[out.length - 1].albums.push(w);
-    }
-    return out;
-  }
-
   function artistHash(name) { return '#/artist/' + encodeURIComponent(name); }
-  // The route spells the name as a tile or a link did; match it the way the
-  // shelf groups, case-insensitively.
-  function findArtist(name) {
-    const lower = String(name || '').toLowerCase();
-    return artists(audioWorks(allItems.filter(isAudioItem))).find(a => a.name.toLowerCase() === lower) || null;
-  }
 
-  function albumSub(w) {
-    const n = w.items.length;
-    return [w.year ? String(w.year) : '', n > 1 ? `${n} ${partNoun(w)}s` : ''].filter(Boolean).join(' · ');
-  }
-  function albumTech(w) {
-    const mi = w.items[0].media_info;
-    return [w.kind === 'file' ? 'audio' : w.kind, mi?.audio_codec, w.duration ? fmtTime(w.duration) : null]
-      .filter(Boolean).join(' · ');
-  }
-  // A work's tile: its first member's cover; tapping opens that member's pane,
-  // which lists the whole work.
-  function workCard(w, title, sub) {
-    return makeCard({
-      posterId: w.items[0].id, title, sub, tech: albumTech(w),
-      onClick: () => navigate(itemHash(w.items[0].id)),
-    });
-  }
-
-  // The library grid: one tile per audiobook, one per ARTIST (the shelf of
-  // albums behind it), and one per album nobody filed under an artist. Audio
-  // carries no TMDB genres, so an active genre chip shows none of it. The
-  // search matches an artist by name or by any album on the shelf. Returns
-  // how many tiles were added.
-  function renderAudioCards(grid, items, q) {
-    if (activeGenre || !items.length) return 0;
-    let count = 0;
-    const works = audioWorks(items);
-    const match = (s) => !q || s.toLowerCase().includes(q);
-    for (const w of works) {
-      if (w.kind === 'album' && w.author) continue; // on its artist's shelf below
-      if (!match(w.title) && !match(w.author)) continue;
-      grid.appendChild(workCard(w, w.title, [w.author, albumSub(w)].filter(Boolean).join(' · ')));
-      count++;
+  // The artist's shelf (#/artist/<name>): GET /api/artists/{name} — the
+  // picture beside the name, then the albums as tiles in the order the
+  // document lists them (year order, the year-less last), each opening its
+  // album's pane. Builds its own DOM inside index.html's empty #view-artist,
+  // so the page carries one line for it. Returns false for a name the server
+  // knows no shelf for — the route then falls back to the library.
+  async function renderArtist(name) {
+    let doc;
+    try {
+      doc = await api('/api/artists/' + encodeURIComponent(name));
+    } catch (e) {
+      return false; // a problem+json refusal: no shelf under that name
     }
-    for (const a of artists(works)) {
-      if (!match(a.name) && !a.albums.some(w => match(w.title))) continue;
-      const years = a.albums.map(w => w.year).filter(Boolean);
-      const span = years.length ? (years[0] === years[years.length - 1] ? String(years[0]) : `${years[0]}–${years[years.length - 1]}`) : '';
-      const n = a.albums.length;
-      grid.appendChild(makeCard({
-        posterId: a.albums[0].items[0].id,
-        title: a.name,
-        sub: `${n} album${n === 1 ? '' : 's'}`,
-        tech: ['artist', span].filter(Boolean).join(' · '),
-        onClick: () => navigate(artistHash(a.name)),
-      }));
-      count++;
-    }
-    return count;
-  }
-
-  // The artist's shelf (#/artist/<name>): the first album's cover beside the
-  // name, then the albums as tiles in year order; a tap opens the album's
-  // pane. Builds its own DOM inside index.html's empty #view-artist, so the
-  // page carries one line for it. Returns false for a name no album is filed
-  // under — the route then falls back to the library.
-  function renderArtist(name) {
-    const a = findArtist(name);
-    if (!a) return false;
     const view = $('view-artist');
     view.innerHTML = '';
     const back = document.createElement('button');
@@ -216,20 +90,28 @@
     view.appendChild(back);
     const head = document.createElement('div');
     head.id = 'artist-head';
-    const cover = document.createElement('img');
-    cover.id = 'artist-cover';
-    cover.alt = '';
-    cover.src = artworkUrl(a.albums[0].items[0].id);
-    cover.onerror = () => { cover.hidden = true; };
-    head.appendChild(cover);
-    const n = a.albums.length, tracks = a.albums.reduce((s, w) => s + w.items.length, 0);
+    const art = doc.links?.artwork?.href;
+    if (art) {
+      const cover = document.createElement('img');
+      cover.id = 'artist-cover';
+      cover.alt = '';
+      cover.src = art;
+      cover.onerror = () => { cover.hidden = true; };
+      head.appendChild(cover);
+    }
+    const n = doc.album_count || 0, tracks = doc.track_count || 0;
     head.insertAdjacentHTML('beforeend',
-      `<div><h2 id="artist-name">${esc(a.name)}</h2>` +
+      `<div><h2 id="artist-name">${esc(doc.name)}</h2>` +
       `<div id="artist-sub">${n} album${n === 1 ? '' : 's'} · ${tracks} track${tracks === 1 ? '' : 's'}</div></div>`);
     view.appendChild(head);
     const shelf = document.createElement('div');
     shelf.id = 'artist-albums';
-    for (const w of a.albums) shelf.appendChild(workCard(w, w.title, albumSub(w)));
+    for (const al of doc.albums || []) {
+      shelf.appendChild(makeCard({
+        artwork: al.links?.artwork?.href, title: al.title, sub: al.subtitle, tech: al.tech,
+        onClick: () => navigate(itemHash(al.item_id, null)),
+      }));
+    }
     view.appendChild(shelf);
     showView('view-artist');
     return true;
@@ -237,9 +119,12 @@
 
   // Back from a track's pane goes to its artist's shelf, the way an episode's
   // goes to its show; anything else answers null and Back goes to the grid.
+  // Every album with an artist is on that artist's shelf, so the work saying
+  // it is an album by somebody is the whole test.
   function audioBackHash(item) {
-    if (item?.identity?.kind !== 'track' || !item.identity.author) return null;
-    return findArtist(item.identity.author) ? artistHash(item.identity.author) : null;
+    const w = currentWork;
+    if (!isAudioItem(item) || w?.kind !== 'album' || !w.author) return null;
+    return artistHash(w.author);
   }
 
   // The pane's content: cover, title, author, where this item sits in the
@@ -248,9 +133,9 @@
   // episode); from the detail pane it opens that member's own page.
   function fillAudioPane(w, item) {
     const cover = $('audio-cover');
-    cover.hidden = false;
     cover.onerror = () => { cover.hidden = true; };
-    cover.src = artworkUrl(item.id);
+    cover.hidden = !w.artwork; // the work's own cover, as the document gave it
+    if (w.artwork) cover.src = w.artwork;
     $('audio-title').textContent = w.title + (w.year ? ` (${w.year})` : '');
     $('audio-author').textContent = w.author;
     const many = w.items.length > 1;
@@ -289,8 +174,8 @@
   // is not audio.
   function renderAudioDetail(item) {
     const pane = $('audio-pane');
-    if (!isAudioItem(item)) { pane.hidden = true; return; }
-    const w = audioWorkOf(item);
+    const w = currentWork;
+    if (!isAudioItem(item) || !w) { pane.hidden = true; return; }
     const year = item.identity?.year;
     $('detail-year').textContent = [year ? `(${year})` : '', w.author].filter(Boolean).join(' · ');
     $('detail-epnav').hidden = true;
@@ -305,7 +190,8 @@
     const on = isAudioItem(item);
     document.body.classList.toggle('audio-mode', on);
     if (!on) return;
-    const w = audioWorkOf(item);
+    const w = currentWork;
+    if (!w) return;
     fillAudioPane(w, item);
     $('audio-pane').hidden = false;
     const own = trackTitle(item);
@@ -313,6 +199,6 @@
       ? `${w.title} · ${partNumLabel(item)} of ${w.items.length}${own ? ' · ' + own : ''}` : w.title;
   }
 
-  Object.assign(root, { isAudioItem, artworkUrl, audioWorks, audioSiblings, partLabel, artists,
-                        renderAudioCards, renderAudioDetail, audioMode, renderArtist, audioBackHash });
+  Object.assign(root, { isAudioItem, partLabel, renderAudioDetail, audioMode,
+                        renderArtist, audioBackHash });
 })(typeof window !== 'undefined' ? window : this);

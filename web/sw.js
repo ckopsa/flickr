@@ -28,7 +28,11 @@
 // v13: the router asks the server what a hash means (GET /api/-/route) and
 // passage.js lost the show-form resolution to internal/passage — a v12 shell
 // serving the new index.html would call functions that are no longer there.
-const CACHE = 'flickr-shell-v13';
+// v14: the grid stops regrouping too. index.html draws GET /api/library's
+// tiles and audio.js lost audioWorks()/artists(), so a v13 shell has neither
+// the grouping code nor the document that replaced it. Both halves of the
+// old client are gone now; this bump is what makes the new pair meet.
+const CACHE = 'flickr-shell-v14';
 const SHELL = ['/', '/index.html', '/passage.js', '/audio.js', '/audio.css', '/reader.js', '/pdfreader.js',
                '/vendor/jszip.min.js', '/vendor/epub.min.js',
                '/vendor/pdf.min.mjs', '/vendor/pdf.worker.min.mjs',

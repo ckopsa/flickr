@@ -383,7 +383,15 @@ let usersApiLive = true;   // false => /api/users 404'd, localStorage-only profi
 let hls = null, sessionId = null, currentItem = null, seekOffset = 0, method = null;
 let baseUrl = location.origin, remotePlayer = null, remoteController = null;
 let allItems = [], currentShow = null, detailItem = null;
-let itemsLoaded = false, itemsReady = null; // deep links await the /api/items fetch
+// The server's own picture of the library, and of the work on screen. The
+// grid draws GET /api/library's tiles in the order that document lists them,
+// and every list this page used to regroup by hand — a show's episodes, a
+// film's bonus material, an album's tracks, the neighbours up-next walks — is
+// read off the work document (GET /api/works/{key}). allItems survives only
+// for the fields those documents do not carry yet (media_info, identity),
+// which step 6 of docs/hypermedia.md takes away.
+let libraryDoc = null, currentWork = null;
+let itemsLoaded = false, itemsReady = null; // deep links await the library fetch
 let selectedSubOrdinal = null; // per-session TEXT subtitle choice, default Off
 let burnSubOrdinal = null;     // embedded bitmap track burned in server-side (subtitle_burn)
 let selectedAudioOrdinal = null; // per-session audio-track choice, sent as audio_track in /play
@@ -823,90 +831,106 @@ $('audio').onchange = () => {
 };
 
 // ---------------------------------------------------------------------------
-// library (Task B)
+// the library document (GET /api/library) and the work document
+// (GET /api/works/{key})
 // ---------------------------------------------------------------------------
-// Mirrors internal/works.Build: every file lands under a show or a movie.
-// shows: title -> { eps, extras }; movies: one entry per non-episode title,
-// with its bonus material in movieExtras (item id -> extras). Bonus material
-// (kind "extra") never becomes a tile of its own — that is the whole point.
-// Every medium has a home now: audio items are grouped into their works by
-// web/audio.js, a book is a tile the reader opens. The set stays as the
-// place a kind goes when it must be kept off the grid.
-const NON_VIDEO_KINDS = new Set([]);
-function buildLibrary(items) {
-  const movies = [], shows = new Map(), pending = [], audio = [];
-  const group = name => {
-    if (!shows.has(name)) shows.set(name, { eps: [], extras: [] });
-    return shows.get(name);
-  };
-  for (const it of items) {
-    const kind = it.identity?.kind, title = it.identity?.title;
-    // An audiobook part or a track is one of its work's members (audio.js);
-    // a book IS a tile (the catch-all), read in the reader pane.
-    if (NON_VIDEO_KINDS.has(kind)) continue;
-    if (isAudioItem(it)) { audio.push(it); continue; }
-    if (kind === 'episode' && title) group(title).eps.push(it);
-    else if (kind === 'extra' && title) pending.push(it);
-    else movies.push(it);
-  }
-  const movieByTitle = new Map();
-  for (const m of movies) {
-    const t = (m.identity?.title || '').toLowerCase();
-    if (t && !movieByTitle.has(t)) movieByTitle.set(t, m);
-  }
-  const movieExtras = new Map();
-  for (const it of pending) {
-    const title = it.identity.title, lower = title.toLowerCase();
-    const showName = showNameFor(shows, title);
-    if (showName) { shows.get(showName).extras.push(it); continue; }
-    const movie = movieByTitle.get(lower);
-    if (movie) {
-      if (!movieExtras.has(movie.id)) movieExtras.set(movie.id, []);
-      movieExtras.get(movie.id).push(it);
-      continue;
-    }
-    group(title).extras.push(it); // orphan bonus material: one tile, not many
-  }
-  const byKey = (a, b) => a.object_key.localeCompare(b.object_key);
-  // Unnumbered episodes sit after their season's numbered ones, ordered by
-  // key so a ripped block stays contiguous. Matches internal/works.finish.
-  // (Season/episode 0 arrive as undefined — the server omits zero values.)
-  const seasonNo = it => it.identity.season || 0;
-  const epNo = it => it.identity.episode || Infinity;
-  for (const g of shows.values()) {
-    g.eps.sort((a, b) => (seasonNo(a) - seasonNo(b)) ||
-                         (epNo(a) - epNo(b)) || byKey(a, b));
-    g.extras.sort(byKey);
-  }
-  for (const list of movieExtras.values()) list.sort(byKey);
-  return { movies, shows, movieExtras, audio };
-}
+// The browser used to regroup /api/items into shows, albums and artists on
+// every render — a second copy of works.Build and works.Artists, in another
+// language, drifting from them. It does not any more: the server says what
+// the tiles are and in what order (cmd/server/library.go), and what a work's
+// members are and in what order (the work document). What is left here is
+// the fetching, the remembering and the drawing.
 function isExtra(it) { return it?.identity?.kind === 'extra'; }
-// Show groups are keyed by the title as the show's own files spell it; an
-// item's title may differ in case, so look it up case-insensitively.
-function showNameFor(shows, title) {
-  if (!title) return null;
-  if (shows.has(title)) return title;
-  const lower = title.toLowerCase();
-  return [...shows.keys()].find(k => k.toLowerCase() === lower) || null;
+function itemById(id) { return allItems.find(i => i.id === id) || null; }
+// Who is asking, spelled for a query string. The profile NAME is the
+// client_id everywhere in this API.
+function profileParam() { return encodeURIComponent(clientId || 'anonymous'); }
+
+// One work as this page holds it: the document's own fields, and its members
+// resolved back to the items allItems still carries — a member envelope does
+// not carry media_info or identity yet, and the panes below still read both.
+function workFromDoc(doc) {
+  const members = doc.members || [];
+  return {
+    href: doc.self, key: doc.work_key, kind: doc.work_kind, title: doc.title,
+    author: doc.author || '', year: doc.year || 0,
+    artwork: (doc.links?.cover || doc.links?.poster)?.href || '',
+    items: members.map(m => itemById(m.id)).filter(Boolean),
+    duration: members.reduce((s, m) => s + (m.duration_seconds || 0), 0),
+  };
 }
 
-function makeCard({ posterId, title, sub, tech, onClick }) {
+const workDocs = new Map();  // work href -> its document
+const itemWorks = new Map(); // item id   -> the href of the work it belongs to
+function forgetWorks() { workDocs.clear(); itemWorks.clear(); }
+
+// A work document, fetched once. Every member it names is remembered as
+// belonging to it, so a show's episodes cost one fetch between them.
+async function loadWork(href) {
+  if (!href) return null;
+  let doc = workDocs.get(href);
+  if (!doc) {
+    doc = await api(href + (href.includes('?') ? '&' : '?') + 'client_id=' + profileParam());
+    workDocs.set(href, doc);
+  }
+  for (const m of doc.members || []) itemWorks.set(m.id, href);
+  return doc;
+}
+
+// The work an item belongs to. The item's own document says which
+// (links.work) for an item nothing has named yet — a deep link straight to
+// an episode; a tile and a member list have both said already.
+async function workOf(item) {
+  if (!item) return null;
+  try {
+    let href = itemWorks.get(item.id);
+    if (!href) {
+      const doc = await api(`/api/items/${item.id}`);
+      href = doc.links?.work?.href;
+      if (href) itemWorks.set(item.id, href);
+    }
+    const doc = href ? await loadWork(href) : null;
+    return doc ? workFromDoc(doc) : null;
+  } catch (e) {
+    console.warn('work document unavailable', e);
+    return null;
+  }
+}
+
+// A work document that arrived some other way — GET /api/-/route answers a
+// #/show/<title> hash with the whole envelope — is worth keeping: the caches
+// are keyed by the document's own address, so nothing fetches it twice.
+function rememberWork(doc) {
+  if (doc?.self) {
+    workDocs.set(doc.self, doc);
+    for (const m of doc.members || []) itemWorks.set(m.id, doc.self);
+  }
+  return doc;
+}
+
+// A tile. `artwork` is the picture's address as the DOCUMENT gave it — the
+// poster or the file's own cover, chosen by the server — and "" for a thing
+// that has no picture at all, which is the text tile below without a
+// round-trip to find out.
+function makeCard({ artwork, title, sub, tech, onClick }) {
   const c = document.createElement('div');
   c.className = 'card';
   c.onclick = onClick;
   const wrap = document.createElement('div');
   wrap.className = 'poster-wrap';
-  const img = document.createElement('img');
-  img.loading = 'lazy';
-  img.alt = '';
-  img.src = artworkUrl(posterId); // poster, or an audio item's or a book's own cover
-  img.onerror = () => { // no artwork at all: styled text tile with title/resolution
-    img.remove();
+  const textTile = () => { // no artwork: styled text tile with title/resolution
     wrap.classList.add('text-tile');
     wrap.innerHTML = `<div class="tile-title">${esc(title)}</div><div class="tile-sub">${esc(tech)}</div>`;
   };
-  wrap.appendChild(img);
+  if (!artwork) textTile();
+  else {
+    const img = document.createElement('img');
+    img.loading = 'lazy';
+    img.alt = '';
+    img.src = artwork;
+    img.onerror = () => { img.remove(); textTile(); };
+    wrap.appendChild(img);
+  }
   c.appendChild(wrap);
   c.insertAdjacentHTML('beforeend',
     `<div class="c-title">${esc(title)}</div>` +
@@ -916,24 +940,20 @@ function makeCard({ posterId, title, sub, tech, onClick }) {
 }
 
 // ---------------------------------------------------------------------------
-// genre chips: hidden entirely unless some item carries enrichment.genres
+// genre chips: the library document's genre facet — the commonest genres
+// over the tiles, in the order the document lists them, and nothing at all
+// when no work carries one. The chip does not regroup anything: it filters
+// the tiles the grid already has.
 // ---------------------------------------------------------------------------
-function itemGenres(it) {
-  const g = it?.enrichment?.genres;
-  return Array.isArray(g) ? g.filter(x => typeof x === 'string' && x) : [];
-}
+function genreFacet() { return libraryDoc?.facets?.genre || []; }
 function renderGenreRow() {
   const row = $('genre-row');
-  const freq = new Map();
-  for (const it of allItems) {
-    for (const g of itemGenres(it)) freq.set(g, (freq.get(g) || 0) + 1);
-  }
-  if (!freq.size) { row.hidden = true; row.innerHTML = ''; activeGenre = null; return; }
-  const top = [...freq.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
-    .slice(0, 12).map(e => e[0]);
-  if (activeGenre && !top.includes(activeGenre)) activeGenre = null;
+  const facet = genreFacet();
+  if (!facet.length) { row.hidden = true; row.innerHTML = ''; activeGenre = null; return; }
+  const names = facet.map(f => f.value);
+  if (activeGenre && !names.includes(activeGenre)) activeGenre = null;
   row.innerHTML = '';
-  for (const g of [null, ...top]) {
+  for (const g of [null, ...names]) {
     const b = document.createElement('button');
     b.textContent = g || 'All';
     if (g === activeGenre) b.className = 'active';
@@ -943,60 +963,57 @@ function renderGenreRow() {
   row.hidden = false;
 }
 
+// The grid IS the library document: one card per tile, in the document's
+// order, filtered by the search box and the active genre chip. No grouping,
+// no sorting, no counting happens here — every one of those was a rule the
+// server also had, and now only the server has.
 function renderGrid() {
   const q = $('search').value.trim().toLowerCase();
   const grid = $('grid');
   grid.innerHTML = '';
-  if (!allItems.length) {
+  const tiles = libraryDoc?.items || [];
+  if (!tiles.length) {
     grid.innerHTML = '<div id="empty">No items yet — run a scan.</div>';
     $('lib-count').textContent = '';
     return;
   }
-  const { movies, shows, audio } = buildLibrary(allItems);
   let count = 0;
-  for (const [name, g] of [...shows.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
-    if (q && !name.toLowerCase().includes(q)) continue;
-    const members = g.eps.concat(g.extras);
-    if (activeGenre && !members.some(e => itemGenres(e).includes(activeGenre))) continue;
-    // Only NUMBERED seasons are counted: a show of unnumbered files knows how
-    // many episodes it has, not how many seasons.
-    const seasons = new Set(g.eps.map(e => e.identity.season).filter(Boolean)).size;
-    const first = g.eps[0] || g.extras[0];
-    const parts = [];
-    if (seasons) parts.push(`${seasons} season${seasons > 1 ? 's' : ''}`);
-    if (g.eps.length) parts.push(`${g.eps.length} episode${g.eps.length > 1 ? 's' : ''}`);
-    if (g.extras.length) parts.push(`${g.extras.length} extra${g.extras.length > 1 ? 's' : ''}`);
+  for (const t of tiles) {
+    if (activeGenre && !(t.genres || []).includes(activeGenre)) continue;
+    if (q && !String(t.search || '').includes(q)) continue;
     grid.appendChild(makeCard({
-      posterId: first.id,
-      title: first.enrichment?.title || name,
-      sub: parts.join(' · '),
-      tech: fmtRes(first.media_info),
-      onClick: () => navigate(showHash(name)),
+      artwork: t.links?.artwork?.href, title: t.title, sub: t.subtitle, tech: t.tech,
+      onClick: () => navigate(tileHash(t)),
     }));
     count++;
   }
-  for (const it of movies.sort((a, b) => displayTitle(a).localeCompare(displayTitle(b)))) {
-    const t = displayTitle(it);
-    if (q && !t.toLowerCase().includes(q) && !baseName(it.object_key).toLowerCase().includes(q)) continue;
-    if (activeGenre && !itemGenres(it).includes(activeGenre)) continue;
-    const year = it.enrichment?.year || it.identity?.year;
-    grid.appendChild(makeCard({
-      posterId: it.id,
-      title: t,
-      sub: year ? String(year) : '',
-      tech: techLine(it),
-      onClick: () => navigate(itemHash(it.id)),
-    }));
-    count++;
-  }
-  count += renderAudioCards(grid, audio, q); // one tile per audiobook / album
   $('lib-count').textContent = `${count} title${count === 1 ? '' : 's'}`;
   if (!count) grid.innerHTML = '<div id="empty">Nothing matches your search.</div>';
 }
+// Where a tile goes when it is tapped. The hash grammar is still the
+// client's (README "Deep links and passages"), so the tile's kind picks the
+// spelling: an artist's shelf, a show's episode list, or the member the tile
+// opens at (`item_id` — the film itself, track one, the book).
+function tileHash(t) {
+  if (t.kind === 'artist') return artistHash(t.title);
+  if (t.work_kind === 'show') return showHash(t.title);
+  return itemHash(t.item_id, null);
+}
 $('search').oninput = renderGrid;
 
+// One fetch for the grid (the library document) and one for the item fields
+// the panes still read. A scan that changed the library invalidates every
+// work document this page cached, so they go together.
 async function loadItems() {
-  allItems = await api('/api/items');
+  forgetWorks();
+  const [items, lib] = await Promise.all([api('/api/items'), api(`/api/library?client_id=${profileParam()}`)]);
+  allItems = items;
+  libraryDoc = lib;
+  // A tile has already said which work its member belongs to; remembering it
+  // saves the item fetch when that tile is opened.
+  for (const t of libraryDoc.items || []) {
+    if (t.item_id && t.links?.self?.href) itemWorks.set(t.item_id, t.links.self.href);
+  }
   itemsLoaded = true;
   renderGenreRow();
   renderGrid();
@@ -1037,7 +1054,10 @@ function renderCwCards(entries) {
     const img = document.createElement('img');
     img.loading = 'lazy';
     img.alt = '';
-    img.src = artworkUrl(en.id);
+    // The resume list is not a document yet (docs/hypermedia.md step 4), so
+    // this row is the one place that still guesses at a picture: the poster,
+    // then the item's own cover.
+    img.src = `/api/items/${en.id}/poster`;
     img.onerror = () => {
       if (!img.dataset.cover) { img.dataset.cover = '1'; img.src = `/api/items/${en.id}/cover`; return; }
       img.remove();
@@ -1163,20 +1183,6 @@ function hashNamesItem(id) {
   const h = location.hash || '';
   return h === '#/item/' + id || h.startsWith('#/item/' + id + '?');
 }
-// The work document names the show; the renderers still group /api/items
-// themselves (hyper 3 hands them the document instead) and those groups are
-// keyed by the title the show's own files spell — so a member of the work
-// says which group it is.
-function showNameOf(doc) {
-  const { shows } = buildLibrary(allItems);
-  for (const m of doc.members || []) {
-    const it = allItems.find(i => i.id === m.id);
-    const name = showNameFor(shows, it?.identity?.title);
-    if (name) return name;
-  }
-  return showNameFor(shows, doc.title) || doc.title;
-}
-
 async function applyRoute() {
   const seq = ++routeSeq;
   if (!itemsLoaded) showView('view-loading'); // deep link: brief loading state
@@ -1184,6 +1190,11 @@ async function applyRoute() {
   if (seq !== routeSeq) return; // superseded by a newer navigation
   currentRoute = r;
   const routedItem = r.view === 'item' ? r.document.id : null;
+  // The item document the answer carries already names the work it belongs
+  // to, so the detail pane below does not have to ask for it again.
+  if (routedItem != null && r.document.links?.work?.href) {
+    itemWorks.set(routedItem, r.document.links.work.href);
+  }
   // leaving the item that's playing (browser back/forward included): stop it
   if (currentItem && routedItem !== currentItem.id) closePlayer();
   if (r.problem) {
@@ -1195,9 +1206,13 @@ async function applyRoute() {
     if ((location.hash || '#/') !== '#/') { location.replace('#/'); return; }
   }
   if (r.view === 'work') {
-    renderShow(showNameOf(r.document));
+    // The answer's `document` IS the work envelope (hyper 1) — the show pane
+    // draws straight from it, and the panes below it inherit the same
+    // document rather than fetching it again.
+    renderShow(rememberWork(r.document));
   } else if (r.view === 'artist') {
-    if (!renderArtist(r.document.title)) { pendingAutoplay = null; pendingPlay = null; location.replace('#/'); return; }
+    if (!await renderArtist(r.document.title)) { pendingAutoplay = null; pendingPlay = null; location.replace('#/'); return; }
+    if (seq !== routeSeq) return;
   } else if (r.view === 'item') {
     const it = allItems.find(i => i.id === routedItem);
     if (!it) { pendingAutoplay = null; pendingPlay = null; location.replace('#/'); return; }
@@ -1213,7 +1228,11 @@ async function applyRoute() {
       // opens it on arrival; "Keep reading" re-routes the open book bare.
       const tp = isTextPassage(r.passage) ? r.passage : null;
       if (Reader.isOpen(it.id) && passageQuery(Reader.passage()) === passageQuery(tp)) showView('view-detail');
-      else { renderDetail(it); if (tp || pendingAutoplay === it.id) openReader(it, tp); }
+      else {
+        await renderDetail(it);
+        if (seq !== routeSeq) return; // superseded while the work document loaded
+        if (tp || pendingAutoplay === it.id) openReader(it, tp);
+      }
       pendingAutoplay = null; pendingPlay = null;
       return;
     }
@@ -1229,12 +1248,14 @@ async function applyRoute() {
       // arrive the same way via the up-next / prev-next route replace, with
       // t/end already dropped (passageForNext), so they start at the top.
       setPassage(rp);
-      if (!samePlaying) renderDetail(it);
+      if (!samePlaying) await renderDetail(it);
+      if (seq !== routeSeq) return;
       playItem(it, rp.t ?? 0);
     } else if (samePlaying) {
       showView('view-detail'); // "Keep watching" dropped the passage from the route: nothing to restart
     } else {
-      renderDetail(it);
+      await renderDetail(it);
+      if (seq !== routeSeq) return;
       if (pendingAutoplay === it.id) playItem(it, null);
       else if (pendingPlay && pendingPlay.id === it.id) {
         // prev/next click ('nav'): restart unless mid-episode progress exists;
@@ -1259,12 +1280,22 @@ function showView(id) {
   if (id === 'view-library') renderContinueWatching(); // refresh resume points
 }
 
-function renderShow(name, note) {
-  currentShow = name;
-  const { shows } = buildLibrary(allItems);
-  const g = shows.get(name) || { eps: [], extras: [] };
-  const eps = g.eps;
-  $('show-title').textContent = (eps[0]?.enrichment?.title) || name;
+// The episodes a show is watched through, and the bonus material that hangs
+// off it: the work document's members, in the work document's order, bonus
+// material aside. Both lists were grouped and sorted in this file until now.
+function showEpisodes(doc) {
+  return (doc.members || []).map(m => itemById(m.id)).filter(it => it && !isExtra(it));
+}
+function showExtras(doc) {
+  return (doc.members || []).map(m => itemById(m.id)).filter(it => it && isExtra(it));
+}
+
+// The show pane, drawn from one work document (GET /api/works/{key}).
+function renderShow(doc, note) {
+  currentWork = workFromDoc(doc);
+  currentShow = currentWork.title;
+  const eps = showEpisodes(doc);
+  $('show-title').textContent = currentWork.title;
   $('show-note').textContent = note || '';
   $('show-note').hidden = !note;
   const list = $('episode-list');
@@ -1296,7 +1327,7 @@ function renderShow(name, note) {
     } else {
       // today's plain row
       div.innerHTML = `<div class="title">${esc(epLabel(ep))}` +
-        (en.title && en.title !== name ? ` · ${esc(en.title)}` : '') +
+        (en.title && en.title !== currentWork.title ? ` · ${esc(en.title)}` : '') +
         `</div><div class="meta">${esc(techLine(ep))}</div>`;
     }
     div.onclick = () => navigate(itemHash(ep.id));
@@ -1305,10 +1336,11 @@ function renderShow(name, note) {
 
   // Bonus material lives here, below the episodes — off the main grid, but
   // still one click from the show it belongs to.
+  const bonus = showExtras(doc);
   const extras = $('extras-list');
   extras.innerHTML = '';
-  $('extras-head').hidden = extras.hidden = !g.extras.length;
-  for (const ex of g.extras) {
+  $('extras-head').hidden = extras.hidden = !bonus.length;
+  for (const ex of bonus) {
     const div = document.createElement('div');
     div.className = 'item';
     div.innerHTML = `<div class="title">${esc(extraLabel(ex))}</div>` +
@@ -1339,17 +1371,22 @@ $('show-back').onclick = () => navigate('#/');
 // ---------------------------------------------------------------------------
 // detail + playback pane (Task C)
 // ---------------------------------------------------------------------------
-function renderDetail(item) {
+// The detail pane. The work this item belongs to is the server's answer
+// (GET /api/items/{id} → links.work → GET /api/works/{key}), and everything
+// this pane says ABOUT the work — the back target, the picture, the members
+// beside it, a film's bonus material — comes off that document.
+async function renderDetail(item) {
   detailItem = item;
-  const lib = buildLibrary(allItems);
+  currentWork = await workOf(item);
+  if (detailItem !== item) return; // a newer render superseded this one
+  const work = currentWork;
   // back target: the show view for anything that belongs to a show (bonus
   // material included), else the grid
-  const belongsToShow = item.identity?.kind === 'episode' || isExtra(item);
-  currentShow = belongsToShow ? showNameFor(lib.shows, item.identity.title) : null;
+  currentShow = work?.kind === 'show' ? work.title : null;
   const poster = $('detail-poster');
-  poster.hidden = false;
   poster.onerror = () => { poster.hidden = true; };
-  poster.src = artworkUrl(item.id);
+  poster.hidden = !work?.artwork;
+  if (work?.artwork) poster.src = work.artwork;
   const isEp = item.identity?.kind === 'episode';
   $('detail-title').textContent = isEp
     ? `${displayTitle(item)} — ${epLabel(item)}`
@@ -1394,7 +1431,7 @@ function renderDetail(item) {
   // a movie's bonus material: reachable from the film, never from the grid
   const exBox = $('detail-extras');
   exBox.innerHTML = '';
-  const mExtras = lib.movieExtras.get(item.id) || [];
+  const mExtras = work && work.kind !== 'show' ? work.items.filter(isExtra) : [];
   if (mExtras.length) exBox.innerHTML = '<span class="label">Extras</span>';
   for (const ex of mExtras) {
     const a = document.createElement('a');
@@ -1475,15 +1512,15 @@ async function playItem(item, startAt) {
 // ---------------------------------------------------------------------------
 // episode navigation (prev/next) + auto-advance on natural end
 // ---------------------------------------------------------------------------
+// The neighbours prev/next and up-next move to: the work's own members in
+// the work's own order, bonus material aside. One rule for every kind now —
+// the show's episodes, an audiobook's parts, an album's tracks — because the
+// order is the server's and the server orders them all the same way.
 function episodeSiblings(item) {
-  if (isAudioItem(item)) return audioSiblings(item); // parts and tracks: the same order, the same up-next
-  if (item?.identity?.kind !== 'episode' || !item.identity.title) return null;
-  const { shows } = buildLibrary(allItems); // already sorted by season, then episode
-  const eps = shows.get(item.identity.title)?.eps; // extras are never siblings
-  if (!eps) return null;
-  const i = eps.findIndex(e => e.id === item.id);
+  const seq = (currentWork?.items || []).filter(m => !isExtra(m));
+  const i = item ? seq.findIndex(m => m.id === item.id) : -1;
   if (i < 0) return null;
-  return { prev: eps[i - 1] || null, next: eps[i + 1] || null };
+  return { prev: seq[i - 1] || null, next: seq[i + 1] || null };
 }
 function epCode(it) {
   if (!(it.identity?.episode > 0)) return baseName(it.object_key); // unnumbered
@@ -1760,9 +1797,12 @@ function workKey(item) {
     ? 'show:' + item.identity.title : 'item:' + item?.id;
 }
 // The work's items in playing order, so a mark on a later episode is later.
+// A run spans a show's episodes and nothing else, so anything but a show
+// answers with no order at all.
 function workOrder(item) {
-  if (item?.identity?.kind !== 'episode' || !item.identity.title) return [];
-  return (buildLibrary(allItems).shows.get(item.identity.title)?.eps || []).map(e => e.id);
+  const w = currentWork;
+  if (w?.kind !== 'show' || !w.items.some(m => m.id === item?.id)) return [];
+  return w.items.filter(m => !isExtra(m)).map(m => m.id);
 }
 // A mark lands at the current position — the receiver's when casting, the
 // same clock the end detection reads — snapped to a chapter start within 2s
