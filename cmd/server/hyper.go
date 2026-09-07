@@ -5,12 +5,11 @@ package main
 // what may be done to it; the browser renders what it is told.
 //
 // These three sit BESIDE the existing routes, which are untouched: nothing
-// here changes a JSON shape anything already reads, and no client asks for
-// these documents yet. Two relations they publish name documents that are
-// not served yet — /api/library (hyper 3) and /api/-/passage (hyper 4) —
-// which is deliberate and marked at each site: a link to a document that
-// will exist is still the truth about where it will be, and it is the only
-// way a screen can be built against the finished contract.
+// here changes a JSON shape anything already reads. Every relation they
+// publish now names a document that is served — /api/library came with
+// hyper 3 (library.go), and /api/-/passage with hyper 4 (passage.go), in
+// both its forms: an item and two times, and the work-and-two-places form
+// the work document's action points at.
 
 import (
 	"fmt"
@@ -71,9 +70,7 @@ func (s *server) handleRootDoc(w http.ResponseWriter, r *http.Request) {
 		cont += "?client_id=" + url.QueryEscape(profile)
 	}
 	doc.
-		// /api/library is hyper 3's document (flickr-aq1) and is not served
-		// yet. The root names it anyway: it is the shelf every other
-		// document's remedy points back to.
+		// The shelf every other document's remedy points back to.
 		Link("library", "/api/library", "Library").
 		Link("continue", cont, "Continue watching").
 		Link("artists", "/api/artists", "Artists").
@@ -322,8 +319,8 @@ func itemTitle(it store.Item) string {
 }
 
 // playInput is the sketch every play action publishes. `passage` is the
-// object hyper 4 will take (t, end, until, from, to); it is named here so a
-// screen knows the field exists and the server owns its rules.
+// object play takes (t, end, until, from, to — passage.go): the server
+// resolves it onto the session and owns its rules from there.
 func playInput() map[string]string {
 	return map[string]string{"seek_seconds": "number?", "passage": "passage?"}
 }
@@ -621,12 +618,11 @@ func (s *server) workEnvelope(wk *works.Work, profile string, positions map[int6
 		}
 		doc.Unavailable("read", notReadable(wk.Kind))
 	}
-	// The passage document is hyper 4's (flickr-dtp): GET /api/-/passage
-	// mints a link from a from/to pair spelled in the grammar `places`
-	// publishes, and answers with the link and its sentence. The action is
-	// named here now because the work is where a person picks the two
-	// places; until that route is served, calling it 404s — which is as true
-	// as leaving it out and far more use to a screen being built.
+	// GET /api/-/passage mints a link from a from/to pair spelled in the
+	// grammar `places` publishes, and answers with the link and its
+	// sentence. The work is where a person picks the two places, which is
+	// why the action is named here: the two tokens are handed back exactly
+	// as this document spelled them.
 	doc.Action("passage", hyper.Action{
 		Method: "GET",
 		Href:   "/api/-/passage?work=" + url.QueryEscape(wk.Key),

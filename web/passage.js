@@ -24,9 +24,10 @@
 //                            the item form
 //
 // Seconds may be integers or decimals. The player also MAKES passages (mark
-// in, mark out, copy the link — the second half of this file); the link it
-// mints is exactly this grammar. Everything in this file is pure: it
-// is loaded by index.html as a plain script (globals) and by
+// in, mark out, copy the link) — that half is the server's now, on the
+// session document (docs/hypermedia.md §Passages are session state), and
+// what stayed here is the grammar and the clock. Everything in this file is
+// pure: it is loaded by index.html as a plain script (globals) and by
 // web/passage_test.mjs through the CommonJS export at the bottom, so the
 // grammar has tests without a build step.
 (function (root) {
@@ -133,93 +134,14 @@
     return { t: null, end: null, until: p.until, untilEp: null, ep: null, from: null, to: null };
   }
 
-  // --- making a passage while watching ----------------------------------------
+  // --- making a passage: not here any more -------------------------------------
   //
-  // The producer side. The player keeps a MARK STATE — { t, inItem, end,
-  // endItem }: the in point (seconds into the item with id inItem) and the
-  // out point (seconds into endItem) — and these functions are the whole
-  // logic of it: where a mark lands, what marking does to the state, which
-  // flags an item shows, and the link that comes out. Nothing is stored
-  // anywhere: a passage IS its URL, and the day planner keeps those.
-
-  // A mark's seconds as the grammar spells them: whole seconds stay
-  // integers, anything else is rounded to one decimal (79.5). Nonsense is 0.
-  function markTime(pos) {
-    const n = Number(pos);
-    if (!Number.isFinite(n) || n < 0) return 0;
-    return Math.round(n * 10) / 10;
-  }
-
-  // snapToChapter: the chapter start within `tolerance` seconds of pos (the
-  // nearest, if several), else pos itself. A mark set a beat after a scene
-  // change meant the scene change.
-  function snapToChapter(pos, chapterStarts, tolerance) {
-    const tol = tolerance == null ? 2 : tolerance;
-    let best = pos, bestD = Infinity;
-    for (const s of chapterStarts || []) {
-      if (typeof s !== 'number' || !Number.isFinite(s)) continue;
-      const d = Math.abs(s - pos);
-      if (d <= tol && d < bestD) { best = s; bestD = d; }
-    }
-    return best;
-  }
-
-  const EMPTY_MARKS = { t: null, inItem: null, end: null, endItem: null };
-
-  // markBounds(state, kind, pos, itemId, order): the state after marking
-  // `kind` ('in' | 'out') at pos seconds into itemId. `order` is the ids of
-  // the work's items in playing order (a show's episodes; omit for a single
-  // film), so a mark on a later episode counts as later. An out point at or
-  // before the in point swaps the two — and marking in past the out point
-  // does the same; the person said where the passage is, not which end they
-  // meant. Two marks on the very same instant are one point, not a passage:
-  // the out is dropped.
-  function markBounds(state, kind, pos, itemId, order) {
-    const s = Object.assign({}, EMPTY_MARKS, state || {});
-    const idx = id => { const i = (order || []).indexOf(id); return i < 0 ? 0 : i; };
-    const cmp = (a, b) => idx(a.item) !== idx(b.item) ? idx(a.item) - idx(b.item) : a.pos - b.pos;
-    const m = { item: itemId, pos: markTime(pos) };
-    let i = s.t != null ? { item: s.inItem, pos: s.t } : null;
-    let o = s.end != null ? { item: s.endItem, pos: s.end } : null;
-    if (kind === 'in') i = m; else o = m;
-    if (i && o) {
-      const c = cmp(i, o);
-      if (c === 0) o = null;
-      else if (c > 0) [i, o] = [o, i];
-    }
-    return { t: i ? i.pos : null, inItem: i ? i.item : null,
-             end: o ? o.pos : null, endItem: o ? o.item : null };
-  }
-
-  // clearMark removes one end; null when nothing is left.
-  function clearMark(state, kind) {
-    const s = Object.assign({}, EMPTY_MARKS, state || {});
-    if (kind === 'in') { s.t = null; s.inItem = null; } else { s.end = null; s.endItem = null; }
-    return s.t == null && s.end == null ? null : s;
-  }
-
-  // marksOn: the bounds itemId shows on its scrubber — each mark only on
-  // the item it was set in.
-  function marksOn(state, itemId) {
-    if (!state) return { t: null, end: null };
-    return { t: state.inItem === itemId ? state.t : null,
-             end: state.endItem === itemId ? state.end : null };
-  }
-
-  // markPassage: the mark state as a passage record — `until` carries the
-  // out point's item when it is a later episode than the in point's.
-  function markPassage(state) {
-    if (!state) return null;
-    const until = state.endItem != null && state.endItem !== state.inItem ? state.endItem : null;
-    return { t: state.t, end: state.end, until, untilEp: null, ep: null, from: null, to: null };
-  }
-
-  // passageLink: the absolute URL of the marked passage, or null until an
-  // in point exists. base is the page's own address (origin + pathname).
-  function passageLink(base, state) {
-    if (!state || state.t == null || state.inItem == null) return null;
-    return String(base || '') + '#/item/' + state.inItem + passageQuery(markPassage(state));
-  }
+  // Marking in and out, the snap to a chapter start, the swap of a backwards
+  // pair, the run's `until` and the minted link were all in this file. They
+  // are the SERVER's now (cmd/server/session.go and cmd/server/passage.go):
+  // the player posts mark_in / mark_out to the session and renders the marks
+  // and the sentence that come back. What is left here is the clock — the
+  // one thing the browser owns, because it is the browser that is playing.
 
   // --- text locators ---------------------------------------------------------
   // A text passage's bounds are LOCATORS, four spellings of a place in a
@@ -308,7 +230,6 @@
 
   const api = { splitHash, parsePassage, passageQuery, isTimedPassage,
                 passageEndAt, passageEnded, runContinues, passageForNext,
-                markTime, snapToChapter, markBounds, clearMark, marksOn, markPassage, passageLink,
                 parseLocator, formatLocator, sectionFromCFI, locatorSection,
                 isTextPassage, textPassageEnded };
   if (typeof module === 'object' && module.exports) module.exports = api;

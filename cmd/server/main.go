@@ -30,6 +30,7 @@ import (
 	"github.com/minio/minio-go/v7/pkg/credentials"
 
 	"flickr/internal/decision"
+	"flickr/internal/hyper"
 	"flickr/internal/model"
 	"flickr/internal/pipeline"
 	"flickr/internal/scanner"
@@ -48,12 +49,20 @@ type server struct {
 	state    *store.State
 	scanner  *scanner.Scanner
 	sessions *pipeline.SessionManager
+	// plays is one row per PLAY — direct play included, where there is no
+	// ffmpeg session to name it — and it is what GET /api/sessions/{id}
+	// answers: the url, the decision, the passage, the marks (session.go).
+	// Its zero value is usable, so a test server needs no wiring.
+	plays    playSessions
 	enricher *tmdb.Enricher // nil = TMDB enrichment disabled
 	s3       *minio.Client
 	bucket   string
-	policy   model.ServerPolicy
-	hw       *pipeline.HWReport
-	baseURL  string // LAN-reachable address for devices that can't resolve localhost
+	// presign, when set, stands in for the S3 presigner — the seam a test
+	// stands the play routes up through without MinIO.
+	presign func(ctx context.Context, objectKey string) (string, error)
+	policy  model.ServerPolicy
+	hw      *pipeline.HWReport
+	baseURL string // LAN-reachable address for devices that can't resolve localhost
 	// trickplayBusy guards the background trickplay stage: full-file decodes
 	// are expensive, so at most one stage pass runs at a time.
 	trickplayBusy atomic.Bool
@@ -171,6 +180,13 @@ func main() {
 			for _, id := range srv.sessions.ReapIdle(sessionIdleTimeout) {
 				log.Printf("reaped session %s: no stream fetch for %s (client gone)", id, sessionIdleTimeout)
 			}
+			// The session ROWS go on the same timer: a transcode's row when
+			// its ffmpeg session has gone, a direct play's when nobody has
+			// touched it — nothing else says that client is still there.
+			for _, id := range srv.plays.reapIdle(sessionIdleTimeout,
+				func(pid string) bool { return srv.sessions.Get(pid) != nil }) {
+				log.Printf("reaped play session %s (client gone)", id)
+			}
 		}
 	}()
 
@@ -265,6 +281,15 @@ func (s *server) routes() *http.ServeMux {
 	mux.HandleFunc("POST /api/scan", s.handleScan)
 	mux.HandleFunc("GET /api/scan", s.handleScanStatus)
 	mux.HandleFunc("GET /api/system", s.handleSystem)
+	// The session document and its actions (session.go), and the minted
+	// passage link (passage.go).
+	mux.HandleFunc("GET /api/sessions/{id}", s.handleSessionDoc)
+	mux.HandleFunc("POST /api/sessions/{id}/progress", s.handleSessionProgress)
+	mux.HandleFunc("POST /api/sessions/{id}/keep_watching", s.handleKeepWatching)
+	mux.HandleFunc("POST /api/sessions/{id}/next", s.handleSessionNext)
+	mux.HandleFunc("POST /api/sessions/{id}/mark/{kind}", s.handleSessionMark)
+	mux.HandleFunc("GET /api/sessions/{id}/link", s.handleSessionLink)
+	mux.HandleFunc("GET /api/-/passage", s.handlePassageDoc)
 	mux.HandleFunc("DELETE /api/sessions/{id}", s.handleStopSession)
 	mux.HandleFunc("POST /api/progress", s.handleSetProgress)
 	mux.HandleFunc("GET /api/progress", s.handleGetProgress)
@@ -461,6 +486,11 @@ type decisionInput struct {
 	// subtitle track to burn into the video — intended for bitmap tracks
 	// (PGS/VobSub) that cannot be served as WebVTT. Forces a video re-encode.
 	SubtitleBurn *int `json:"subtitle_burn"`
+	// Passage is the optional passage this play is inside (play only; the
+	// decision engine has no opinion about it). The server resolves it,
+	// seeds the seek from its `t`, and keeps it on the session — passage.go
+	// and session.go.
+	Passage *passageInput `json:"passage"`
 }
 
 func (s *server) itemAndDecision(w http.ResponseWriter, r *http.Request) (*store.Item, *decisionInput, *model.PlayDecision, bool) {
@@ -526,73 +556,6 @@ func (s *server) handleDecision(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, d)
-}
-
-func (s *server) handlePlay(w http.ResponseWriter, r *http.Request) {
-	item, in, d, ok := s.itemAndDecision(w, r)
-	if !ok {
-		return
-	}
-	resp := map[string]any{"decision": d}
-
-	switch d.Method {
-	case model.DirectPlay:
-		u, err := s.s3.PresignedGetObject(r.Context(), s.bucket, item.ObjectKey, 6*time.Hour, url.Values{})
-		if err != nil {
-			httpErr(w, 500, err)
-			return
-		}
-		resp["url"] = u.String()
-
-	case model.Transcode:
-		u, err := s.s3.PresignedGetObject(r.Context(), s.bucket, item.ObjectKey, 6*time.Hour, url.Values{})
-		if err != nil {
-			httpErr(w, 500, err)
-			return
-		}
-		// Seeking into a stream whose audio must be re-encoded needs an
-		// output-side trim (see SeekAudioPrerollSeconds), which requires
-		// decoded video too — upgrade a copy-video plan and say so.
-		if in.SeekSeconds > 0 && d.Target.AudioCodec != "" && d.Target.VideoCodec == "" && !d.Target.AudioOnly {
-			d.Target.VideoCodec = s.policy.TranscodeVideoCodec
-			d.Target.VideoBitrateBps = s.policy.TranscodeVideoBitrateBps
-			d.Trace = append(d.Trace, model.TraceStep{
-				Check: "seek_adjustment", Passed: true,
-				Detail: fmt.Sprintf(
-					"re-encoding video (was copy): seeking to %.0fs with re-encoded audio needs a decoded pre-roll trim",
-					in.SeekSeconds),
-			})
-		}
-		sess, err := s.sessions.Create(u.String(), *d.Target, in.SeekSeconds)
-		if err != nil {
-			httpErr(w, 500, err)
-			return
-		}
-		// Generous timeout: seeks with audio pre-roll must download and
-		// decode ~10s of media first, and the storage box may be slow.
-		if err := sess.WaitForPlaylist(45 * time.Second); err != nil {
-			// Grab the ffmpeg log before Stop deletes the session dir, so
-			// the client sees why instead of a bare timeout.
-			tail := readTail(filepath.Join("data/streams", sess.ID, "ffmpeg.log"), 500)
-			s.sessions.Stop(sess.ID)
-			if tail != "" {
-				err = fmt.Errorf("%s; ffmpeg log tail: %s", err, tail)
-			}
-			httpErr(w, 500, err)
-			return
-		}
-		// ABR sessions hand the client the master playlist; hls.js and cast
-		// receivers both speak master playlists natively.
-		resp["url"] = "/streams/" + sess.ID + "/" + sess.PlaylistName()
-		resp["session_id"] = sess.ID
-		if d.Target.VideoCodec != "" {
-			resp["video_encoder"] = pipeline.ResolveEncoder(s.sessions.HW, d.Target.VideoCodec)
-		}
-
-	case model.Deny:
-		w.WriteHeader(http.StatusForbidden)
-	}
-	writeJSON(w, resp)
 }
 
 func (s *server) handleOverrideIdentity(w http.ResponseWriter, r *http.Request) {
@@ -800,8 +763,13 @@ func (s *server) handleSystem(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"hardware": s.hw, "base_url": s.baseURL})
 }
 
+// handleStopSession is DELETE /api/sessions/{id} — the session document's
+// `stop` action. A transcode's id IS its ffmpeg session's, so one route
+// stops the stream and drops the row; a direct play has only the row.
 func (s *server) handleStopSession(w http.ResponseWriter, r *http.Request) {
-	s.sessions.Stop(r.PathValue("id"))
+	id := r.PathValue("id")
+	s.sessions.Stop(id)
+	s.plays.drop(id)
 	writeJSON(w, map[string]string{"status": "stopped"})
 }
 
@@ -860,10 +828,19 @@ func placeOf(in progressInput) (*model.Locator, error) {
 	return loc, nil
 }
 
+// handleSetProgress is the legacy POST /api/progress — kept for the clients
+// and tools that still write here, and holding the same rule the session's
+// own progress action does: while a passage is on for this item and this
+// profile, the place is not moved. The rule belongs to the passage, not to
+// the route (docs/hypermedia.md §Passages are session state).
 func (s *server) handleSetProgress(w http.ResponseWriter, r *http.Request) {
 	var in progressInput
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 		httpErr(w, 400, err)
+		return
+	}
+	if row, on := s.plays.passageOn(in.ItemID, in.ClientID); on {
+		hyper.WriteProblem(w, passageOnProblem(row))
 		return
 	}
 	loc, err := placeOf(in)

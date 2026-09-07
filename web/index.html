@@ -402,21 +402,26 @@ let upNextTimer = null, upNextTarget = null; // auto-advance countdown
 let castLastState = null;       // last seen RemotePlayer.playerState (fire end-detection on transitions only)
 let castEndSuppressed = false;  // our own stop/load in flight: IDLE isn't a natural end
 let endFired = false;           // one natural-end per stream load (re-armed on seeking back)
+// The SESSION DOCUMENT of the current play (docs/hypermedia.md §Passages
+// are session state): what /api/items/{id}/play answered — the url, the
+// decision, the passage resolved, the marks, and the actions this player
+// may take (progress, keep_watching, stop, next, mark_in, mark_out, link).
+// The client composes no URL of its own from it: it follows what is there.
+let session = null;
 // passage session (see passage.js and README "Deep links and passages"):
 // { t, end, until, from, to } while the player is inside a passage, null in
-// normal viewing. Every /api/progress write is gated on this being null: a
-// scene replayed for a talk is not where the person is in the film — the
-// saved place belongs to normal viewing.
+// normal viewing. The clock is the client's, so this is what the end
+// predicates read; the RULES are the server's — a progress write during a
+// passage is refused with 409, and keep_watching is the way out.
 let passage = null;
 let swReloadPending = false; // a new service worker took control mid-stream; reload when the player closes
 let passageEndFired = false;    // the end bound (or the run's last item) has been reached and the panel shown
 let passageNaturalEnd = false;  // …by the item ending on its own rather than by the `end` bound
-// making a passage (the producer side; logic in passage.js): the in/out
-// marks set from the player, { t, inItem, end, endItem }, and the WORK they
-// belong to (a show, or one film). Marks outlive an episode advance so a run
-// can be marked out on a later episode; they die with the player or when a
-// different work starts. Never stored: the passage is its link.
-let markState = null, markWork = null;
+// Making a passage is the SERVER's now: the marks live on the session
+// document (session.marks — { in, out }, each { item_id, seconds }), the
+// snap to a chapter and the swap of a backwards pair happen there, and
+// actions.link mints the link and the sentence that says it. The chips
+// below only post the marks and render what comes back.
 const video = document.getElementById('video');
 const scrub = document.getElementById('scrub');
 const $ = id => document.getElementById(id);
@@ -478,7 +483,13 @@ const profiles = {
 async function api(path, opts) {
   const r = await fetch(path, opts);
   const body = await r.json().catch(() => ({}));
-  if (!r.ok) { const e = new Error(body.error || r.statusText); e.status = r.status; throw e; }
+  // A refusal is an answer: a problem+json says it in `detail` (or `title`)
+  // and names a remedy; the older routes say it in `error`.
+  if (!r.ok) {
+    const e = new Error(body.error || body.detail || body.title || r.statusText);
+    e.status = r.status; e.problem = body;
+    throw e;
+  }
   return body;
 }
 
@@ -1454,10 +1465,10 @@ function closePlayer() {
   hideUpNext();
   Reader.close(); // a book shares this exit (no-op when none is open)
   setPassage(null); // the next normal play is normal
-  clearMarks();     // a half-made passage does not outlive the player
   if (casting()) { castEndSuppressed = true; remoteController.stop(); }
   else { video.pause(); video.removeAttribute('src'); video.load(); }
-  stopSession();
+  stopSession(); // the session document goes with it, marks and all
+  renderMarks();
   currentItem = null;
   audioMode(null);
   $('tap-to-play').hidden = true;
@@ -1479,8 +1490,7 @@ async function playItem(item, startAt) {
   hideUpNext();
   currentItem = item;
   seekOffset = 0;
-  if (markState && markWork !== workKey(item)) clearMarks(); // marks belong to one work
-  else renderMarks(); // the chips name the episode a mark sits in, relative to this one
+  renderMarks(); // repainted from the new session once the play answers
   $('detail-info').hidden = true;
   $('player-pane').hidden = false;
   $('now-playing').textContent = itemTitle(item);
@@ -1565,6 +1575,13 @@ async function playEpisodeFromNav(it) {
   playItem(it, startAt);
 }
 
+// The next member of the work, as the session document names it — the
+// server's own order, not a list this page regrouped. The link is resolved
+// through itemById, which still holds the fields the panes read.
+function sessionNext() {
+  const m = /\/api\/items\/(\d+)$/.exec(session?.links?.next?.href || '');
+  return m ? itemById(Number(m[1])) : null;
+}
 function hideUpNext() {
   if (upNextTimer) { clearInterval(upNextTimer); upNextTimer = null; }
   upNextTarget = null;
@@ -1625,8 +1642,11 @@ function onPlaybackEnded() {
   if (passage) {
     // Inside a passage the item's own end is not a finish to record. In a
     // run it is the cue for the next episode — until the `until` item (or
-    // the last episode there is) has played; then the passage is over.
-    if (runContinues(passage, currentItem.id) && next) { showUpNext(next); return; }
+    // the last episode there is) has played; then the passage is over. WHICH
+    // episode is next is the session document's answer (links.next): the
+    // work's own order is the server's, not the grid's.
+    const runNext = sessionNext() || next;
+    if (runContinues(passage, currentItem.id) && runNext) { showUpNext(runNext); return; }
     passageNaturalEnd = true;
     onPassageEnd(`${itemTitle(currentItem)} has ended`);
     return;
@@ -1638,21 +1658,28 @@ function onPlaybackEnded() {
 }
 video.addEventListener('ended', onPlaybackEnded); // covers direct play AND hls.js
 
-// The one road to POST /api/progress. A passage session writes NO progress:
-// a scene replayed for a talk is not where the person is in the film, and a
-// two-episode run for the day's plan is not a binge — the saved place belongs
-// to normal viewing. (There is no pause/unload write today; if one is added
-// it goes through here.) The reader reports through here too, with `place`
-// = { locator, fraction, section } instead of a clock position.
+// The one road to a progress write, and it goes through the session:
+// actions.progress is the address, and the answer to a write during a
+// passage is 409 — a scene replayed for a talk is not where the person is
+// in the film. That refusal is the server's answer, not an error: no retry,
+// nothing said on screen. (There is no pause/unload write today; if one is
+// added it goes through here.) The reader reports through here too, with
+// `place` = { locator, fraction, section } instead of a clock position; it
+// has no session document until hyper 5, so for it the old client-side gate
+// is still the only rule there is.
 function saveProgress(positionSeconds, place) {
-  if (passage || !currentItem) return;
-  fetch('/api/progress', {
+  if (!currentItem) return;
+  // The session's action, but only while it is THIS item's session — a book
+  // opened over a player that is still up has none of its own.
+  const act = session?.item_id === currentItem.id ? session.actions?.progress : null;
+  if (!act && passage) return;
+  fetch(act ? act.href : '/api/progress', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       item_id: currentItem.id, client_id: clientId || 'anonymous',
       position_seconds: positionSeconds, ...(place || {}),
     }),
-  });
+  }).catch(() => { /* the network, or a refusal; neither is the player's business */ });
 }
 
 // ---------------------------------------------------------------------------
@@ -1692,6 +1719,14 @@ function setPassage(p) {
   resetPassageEnd();
   renderPassageMarks();
 }
+// The bound this item is to stop at. The server worked it out (a run's
+// `end` belongs to its LAST member, and the document says so per session);
+// the clock-side predicate stands in for a passage the player holds without
+// a session — the reader's, and a route applied before play answers.
+function passageEndNow() {
+  const p = session?.passage;
+  return p ? (p.ends_at ?? null) : passageEndAt(passage, currentItem?.id);
+}
 function resetPassageEnd() {
   passageEndFired = false;
   passageNaturalEnd = false;
@@ -1699,15 +1734,19 @@ function resetPassageEnd() {
 }
 // Two bound marks on the scrubber: the start (`t`) and, on the item the
 // `end` applies to, the end. Later items of a run carry neither. A passage
-// being MADE (markState) takes the flags while it exists — the same flags,
-// so a passage looks the same whether it is played or marked.
+// being MADE (the session's marks) takes the flags while it exists — the
+// same flags, so a passage looks the same whether it is played or marked;
+// each mark shows only on the item it was set in.
 function renderPassageMarks() {
   scrub.querySelectorAll('.bound').forEach(b => b.remove());
   const dur = duration();
   if (!(dur > 0)) return;
   const id = currentItem?.id;
-  const b = markState ? marksOn(markState, id)
-          : passage ? { t: passage.t, end: passageEndAt(passage, id) } : null;
+  const m = session?.marks;
+  const b = (m?.in || m?.out)
+          ? { t: m.in?.item_id === id ? m.in.seconds : null,
+              end: m.out?.item_id === id ? m.out.seconds : null }
+          : passage ? { t: passage.t, end: passageEndNow() } : null;
   if (!b) return;
   const marks = [['start', b.t, 'Passage starts at '], ['end', b.end, 'Passage ends at ']];
   for (const [cls, t, label] of marks) {
@@ -1722,7 +1761,7 @@ function renderPassageMarks() {
 // The time readout while inside a passage: elapsed / extent of the passage
 // itself ("2:14 / 5:30 in passage"); a run's unbounded item just says so.
 function passageReadout(pos) {
-  const endAt = passageEndAt(passage, currentItem?.id);
+  const endAt = passageEndNow();
   if (endAt == null) return `${fmtTime(pos)} · in passage`;
   const start = passage.t ?? 0;
   return `${fmtTime(pos - start)} / ${fmtTime(endAt - start)} in passage`;
@@ -1732,7 +1771,7 @@ function passageReadout(pos) {
 // the receiver's current time.
 function checkPassageEnd() {
   if (!passage || !currentItem || passageEndFired || !isPlaying()) return;
-  const endAt = passageEndAt(passage, currentItem.id);
+  const endAt = passageEndNow();
   if (!passageEnded(position(), endAt)) return;
   if (casting()) {
     // Sender-side stop: the default receiver knows nothing about passages,
@@ -1745,20 +1784,34 @@ function checkPassageEnd() {
   onPassageEnd(`Paused at ${fmtTime(endAt)}`);
 }
 // The passage is over — by its end bound or by the last item of a run ending
-// on its own. Not a natural end: no finished-write, no up-next.
+// on its own. Not a natural end: no finished-write, no up-next. The two ways
+// out are the session document's: the keep_watching action, labelled as the
+// server labels it (a film is watched on, an album listened on), and the
+// back link, which names the item to go back to.
 function onPassageEnd(sub) {
   passageEndFired = true;
   hideUpNext();
   $('passage-end-sub').textContent = sub;
+  const keep = session?.actions?.keep_watching;
+  $('passage-keep').textContent = keep?.label || 'Keep watching';
+  const back = session?.links?.back;
+  $('passage-back').title = back?.title ? 'Back to ' + back.title : '';
   $('passage-end').hidden = false;
 }
 // "Keep watching": leave passage mode — bounds cleared, normal behaviour from
 // the current position on, progress writes included. The route drops the
 // passage too, so a reload or Play from here is normal viewing.
-function keepWatching() {
+async function keepWatching() {
   if (!currentItem) return;
   const wasNaturalEnd = passageNaturalEnd;
   const id = currentItem.id;
+  // The passage is the session's, so leaving it is a write: the server
+  // clears it and answers the session as it now is — progress accepted
+  // from here on. A session that has already gone needs no telling.
+  const act = session?.actions?.keep_watching;
+  if (act) {
+    try { session = await api(act.href, { method: 'POST' }); } catch (e) { /* already over */ }
+  }
   setPassage(null);
   if (currentRoute?.passage) location.replace(itemHash(id, null));
   if (wasNaturalEnd) {
@@ -1783,93 +1836,86 @@ video.addEventListener('timeupdate', checkPassageEnd);
 // bound is the same choice as "Keep watching".
 video.addEventListener('play', () => {
   if (!passageEndFired || passageNaturalEnd) return;
-  if (passageEnded(position(), passageEndAt(passage, currentItem?.id))) keepWatching();
+  if (passageEnded(position(), passageEndNow())) keepWatching();
 });
 
 // ---------------------------------------------------------------------------
 // making a passage while watching: mark in, mark out, copy the link
-// (logic in passage.js; this is the chips, the flags and the clipboard)
 // ---------------------------------------------------------------------------
-// A show's episodes are one work (a run can span them); anything else is a
-// work of its own.
-function workKey(item) {
-  return item?.identity?.kind === 'episode' && item.identity.title
-    ? 'show:' + item.identity.title : 'item:' + item?.id;
-}
-// The work's items in playing order, so a mark on a later episode is later.
-// A run spans a show's episodes and nothing else, so anything but a show
-// answers with no order at all.
-function workOrder(item) {
-  const w = currentWork;
-  if (w?.kind !== 'show' || !w.items.some(m => m.id === item?.id)) return [];
-  return w.items.filter(m => !isExtra(m)).map(m => m.id);
-}
+// The logic is the server's: mark_in and mark_out post the position, and the
+// session document comes back with the marks as the server kept them — the
+// snap to a chapter start within two seconds, the swap when the out point is
+// before the in point, and a mark on a later member of the work turned into
+// the run's `until`. actions.link mints the passage's URL and the sentence
+// that says it. This side is the chips, the flags and the clipboard.
+
 // A mark lands at the current position — the receiver's when casting, the
-// same clock the end detection reads — snapped to a chapter start within 2s
-// (the chapters the scrubber ticks: a tap a beat after the scene change
-// meant the scene change).
-function markAt(kind) {
-  if (!currentItem) return;
-  const starts = (currentItem.media_info?.chapters || []).map(c => c.start_seconds);
-  const pos = snapToChapter(position(), starts, 2);
-  markWork = workKey(currentItem);
-  markState = markBounds(markState, kind, pos, currentItem.id, workOrder(currentItem));
+// same clock the end detection reads.
+async function markAt(kind, body) {
+  const act = session?.actions?.['mark_' + kind];
+  if (!act) return;
+  try { session = await api(act.href, { method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body || { seconds: position() }) }); } catch (e) { return; }
   renderMarks();
 }
-function clearMarkAt(kind) {
-  markState = clearMark(markState, kind);
-  if (!markState) markWork = null;
-  renderMarks();
-}
-function clearMarks() {
-  markState = null; markWork = null;
-  renderMarks();
-}
+const clearMarkAt = kind => markAt(kind, { clear: true });
 // A mark's label on its chip: the time, prefixed by the episode when the
 // mark sits in another episode of the run than the one playing.
 function markLabel(t, itemId) {
   if (itemId === currentItem?.id) return fmtTime(t);
-  const it = allItems.find(i => i.id === itemId);
+  const it = itemById(itemId);
   return (it ? epCode(it) + ' ' : '') + fmtTime(t);
 }
-function passageLinkHere() {
-  return passageLink(location.origin + location.pathname, markState);
-}
 function renderMarks() {
-  const s = markState;
-  const chips = [['in', 'Mark in', 'In ', s?.t, s?.inItem], ['out', 'Mark out', 'Out ', s?.end, s?.endItem]];
-  for (const [kind, label, prefix, t, itemId] of chips) {
-    const set = t != null;
+  const m = session?.marks || {};
+  const chips = [['in', 'Mark in', 'In ', m.in], ['out', 'Mark out', 'Out ', m.out]];
+  for (const [kind, label, prefix, mark] of chips) {
+    const set = !!mark;
     $('chip-mark-' + kind).classList.toggle('set', set);
-    $('btn-mark-' + kind).textContent = set ? prefix + markLabel(t, itemId) : label;
+    $('btn-mark-' + kind).textContent = set ? prefix + markLabel(mark.seconds, mark.item_id) : label;
     $('btn-mark-' + kind).title = set
       ? `Re-mark the ${kind} point at the current position` : `Mark the passage's ${kind === 'in' ? 'start' : 'end'} at the current position`;
     $('btn-mark-' + kind + '-clear').hidden = !set;
   }
-  const link = passageLinkHere();
-  $('btn-mark-link').hidden = !link; // appears once an in point exists
-  if (!link) $('passage-link').hidden = true;
-  else if (!$('passage-link').hidden) showPassageLink(link, false); // marks moved: the shown link follows
+  // The link appears once an in point exists — which is the server's rule
+  // too: without one it is an `unavailable` with the reason in words.
+  const canLink = !!session?.actions?.link;
+  $('btn-mark-link').hidden = !canLink;
+  if (!canLink) $('passage-link').hidden = true;
+  else if (!$('passage-link').hidden) refreshPassageLink(false); // marks moved: the shown link follows
   renderPassageMarks();
 }
+// The minted link is the server's: actions.link answers { href, sentence }
+// — "S03E22 2:22 – 14:14 of Beach Games" — and the panel shows both.
+async function mintedPassage() {
+  const act = session?.actions?.link;
+  if (!act) return null;
+  try { return await api(act.href); } catch (e) { return null; }
+}
 let copiedTimer = null;
-function showPassageLink(link, copied) {
+function showPassageLink(doc, copied) {
   const note = $('passage-link-note');
   if (copiedTimer) { clearTimeout(copiedTimer); copiedTimer = null; }
-  note.textContent = copied ? 'Copied' : 'Passage link';
+  note.textContent = copied ? 'Copied' : (doc.sentence || 'Passage link');
   note.classList.toggle('copied', copied);
-  $('passage-link-url').textContent = link;
+  $('passage-link-url').textContent = doc.href;
   $('passage-link').hidden = false;
-  if (copied) copiedTimer = setTimeout(() => showPassageLink(link, false), 2000);
+  if (copied) copiedTimer = setTimeout(() => showPassageLink(doc, false), 2000);
+}
+async function refreshPassageLink(copied) {
+  const doc = await mintedPassage();
+  if (!doc) { $('passage-link').hidden = true; return; }
+  showPassageLink(doc, copied);
 }
 // Copy: the clipboard when there is one, and the text every time — a phone on
 // plain http has no clipboard API but can still long-press and copy.
 async function copyPassageLink() {
-  const link = passageLinkHere();
-  if (!link) return;
+  const doc = await mintedPassage();
+  if (!doc) return;
   let copied = false;
-  try { await navigator.clipboard.writeText(link); copied = true; } catch (e) { /* no clipboard API, or refused */ }
-  showPassageLink(link, copied);
+  try { await navigator.clipboard.writeText(doc.href); copied = true; } catch (e) { /* no clipboard API, or refused */ }
+  showPassageLink(doc, copied);
 }
 $('btn-mark-in').onclick = () => markAt('in');
 $('btn-mark-out').onclick = () => markAt('out');
@@ -1955,6 +2001,7 @@ function renderChapters() {
 
 async function stopSession() {
   if (sessionId) { fetch('/api/sessions/' + sessionId, { method: 'DELETE' }); sessionId = null; }
+  session = null;
   if (hls) { hls.destroy(); hls = null; }
 }
 
@@ -1973,6 +2020,11 @@ async function startPlayback(item, seekSeconds) {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         capabilities: caps, client_id: clientId || 'anonymous', seek_seconds: seekSeconds,
+        // The passage this play is inside, if any: the server resolves it,
+        // seeds the seek from `t`, publishes the bound to stop at, and
+        // refuses progress writes until "keep watching".
+        ...(passage ? { passage: { t: passage.t, end: passage.end, until: passage.until,
+                                   from: passage.from, to: passage.to } } : {}),
         // playback selections: chosen audio stream, and an embedded bitmap
         // subtitle track to burn into the picture (forces a video re-encode)
         ...(selectedAudioOrdinal != null ? { audio_track: selectedAudioOrdinal } : {}),
@@ -1983,12 +2035,16 @@ async function startPlayback(item, seekSeconds) {
     $('status').textContent = 'Error: ' + e.message;
     return;
   }
+  session = resp; // the session document; every action below comes off it
   renderTrace(resp.decision, resp.video_encoder);
   method = resp.decision.method;
   if (method === 'deny') return;
   const isHls = method === 'transcode';
-  sessionId = isHls ? resp.session_id : null;
+  // Every play has a session now, direct play included: its id is what the
+  // stop action addresses, and the marks it carries are the chips'.
+  sessionId = resp.id || null;
   seekOffset = isHls ? seekSeconds : 0;
+  renderMarks();
 
   if (casting()) {
     try {
@@ -2091,7 +2147,7 @@ setInterval(() => {
   checkPassageEnd(); // cast has no timeupdate on this side; the tick is its clock
   // Sought back below the bound after it fired: the panel goes, the bound re-arms.
   if (passageEndFired && !passageNaturalEnd && isPlaying()) {
-    const endAt = passageEndAt(passage, currentItem?.id);
+    const endAt = passageEndNow();
     if (endAt != null && position() < endAt - 1) resetPassageEnd();
   }
   // Transcode tail: the final HLS fragment can end a hair short of the media
