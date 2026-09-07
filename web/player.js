@@ -53,6 +53,7 @@
   const DOUBLE_TAP_MS = 300;     // how long a single tap waits for its twin
   const IDLE_MS = 3000;          // how long a still pointer waits before the chrome goes
   const CLIP_SECONDS = 30;       // how long a clip is before anything is dragged
+  const RATES = [0.75, 1, 1.25, 1.5, 1.75, 2];  // the speeds, YouTube's list
 
   // --- capability profiles -----------------------------------------------------
   // What the PLAYING device can take. The dropdown simulates other devices;
@@ -117,6 +118,7 @@
     ['J / L', 'Back 30s / forward 30s'],
     ['↑ / ↓', 'Volume'],
     ['M', 'Mute'],
+    ['Shift+. / Shift+,', 'Faster / slower'],
     ['F', 'Fullscreen'],
     ['C', 'Next subtitle track'],
     ['N', 'Next episode'],
@@ -182,6 +184,9 @@
           '<input type="range" id="vol" min="0" max="1" step="0.05" value="1" aria-label="Volume">' +
           '<select id="subs" title="Subtitles" style="display:none"></select>' +
           '<select id="audio" title="Audio track" style="display:none"></select>' +
+          '<select id="rate" title="Playback speed" aria-label="Playback speed">' +
+            RATES.map(r => `<option value="${r}">${rateLabel(r)}</option>`).join('') +
+          '</select>' +
           '<button id="btn-autoplay"></button>' +
           '<button id="btn-clip" title="Mark a clip" aria-pressed="false" hidden>✂ Clip</button>' +
           '<button id="btn-pip" title="Picture in picture" aria-label="Picture in picture" hidden>⧉</button>' +
@@ -231,6 +236,7 @@
     syncPlayButton();
     syncMuteButton();
     syncFullscreenButton();
+    syncRateControl();
     setAutoplay(autoplayNext);
     renderSubSelector();
     renderAudioSelector();
@@ -253,6 +259,7 @@
     if (b.id === 'mini-play') togglePlay();
     else if (b.id === 'mini-back') seekTo(position() - 30);
     else if (b.id === 'mini-fwd') seekTo(position() + 30);
+    else if (b.id === 'mini-rate') { cycleRate(); return; }
     syncPlayButton();
   }
 
@@ -514,6 +521,7 @@
       video.src = resp.url;
       tryPlay();
     }
+    applyRate();
     attachLocalTracks();
   }
 
@@ -1016,6 +1024,52 @@
     b.setAttribute('aria-label', b.title);
   }
 
+  // --- playback speed ----------------------------------------------------------
+  //
+  // A 1.5x audiobook is not a 1.5x film, so the choice is remembered PER
+  // MEDIUM: two keys in localStorage, read back when the next sitting starts,
+  // and a book listened to fast leaves the next film alone. hls.js plays
+  // THROUGH the media element, so one playbackRate is the whole of applying
+  // it — and the default cast receiver has no rate to set at all, which is why
+  // the control goes away while casting rather than lying about the
+  // television's speed.
+  function rateLabel(r) { return r + '\u00d7'; }
+  function rateKey() { return item && item.medium === 'audio' ? 'rateAudio' : 'rateVideo'; }
+  function rate() {
+    const r = parseFloat(localStorage[rateKey()]);
+    return RATES.indexOf(r) < 0 ? 1 : r;
+  }
+  function setRate(r) {
+    if (RATES.indexOf(r) < 0) r = 1;
+    localStorage[rateKey()] = String(r);
+    applyRate();
+    syncRateControl();
+  }
+  function applyRate() {
+    if (video && !casting()) video.playbackRate = rate();
+  }
+  function rateIndex() {
+    const i = RATES.indexOf(rate());
+    return i < 0 ? RATES.indexOf(1) : i;
+  }
+  // Shift+. and Shift+, walk the list and stop at its ends, the way YouTube's
+  // do; the bar's button wraps instead, because a bar has room for one tap
+  // and not for six options.
+  function stepRate(dir) {
+    setRate(RATES[Math.max(0, Math.min(RATES.length - 1, rateIndex() + dir))]);
+  }
+  function cycleRate() { setRate(RATES[(rateIndex() + 1) % RATES.length]); }
+  function syncRateControl() {
+    const r = rate(), gone = casting();
+    const sel = $('rate');
+    if (sel) { sel.hidden = gone; sel.value = String(r); }
+    const b = $('mini-rate');
+    if (!b) return;
+    b.hidden = gone;
+    b.textContent = rateLabel(r);
+    b.setAttribute('aria-label', 'Playback speed: ' + rateLabel(r));
+  }
+
   // Fullscreen is the DEVICE WRAPPER's, never the <video>'s. Taking the
   // wrapper full keeps the scrub bar on screen — its chapter ticks, its
   // passage flags, its trickplay previews — which the native fullscreen
@@ -1059,6 +1113,8 @@
     else if (k === 'ArrowUp') nudgeVolume(0.1);
     else if (k === 'ArrowDown') nudgeVolume(-0.1);
     else if (k === 'm') toggleMute();
+    else if (k === '>') stepRate(1);
+    else if (k === '<') stepRate(-1);
     else if (k === 'f') toggleFullscreen();
     else if (k === 'c') cycleSubs();
     else if (k === 'n') advance();
@@ -1184,6 +1240,9 @@
   function bindDevice() {
     video.addEventListener('ended', onPlaybackEnded);
     video.addEventListener('timeupdate', checkPassageEnd);
+    // A new source starts at 1x in some browsers: the remembered speed is put
+    // back the moment there is something to apply it to.
+    video.addEventListener('loadedmetadata', applyRate);
     // Pressing play — the button, the picture, a key — while paused at the
     // end bound is the same choice as "Keep watching".
     video.addEventListener('play', () => {
@@ -1253,6 +1312,7 @@
     element.addEventListener('change', e => {
       if (e.target.id === 'subs') return onSubChange(e.target.value);
       if (e.target.id === 'audio') return onAudioChange(e.target.value);
+      if (e.target.id === 'rate') return setRate(parseFloat(e.target.value));
     });
 
     // Pointers, not clicks: the same three listeners serve a mouse and a
@@ -1436,7 +1496,7 @@
       ms.setPositionState({
         duration: dur,
         position: Math.min(Math.max(position(), 0), dur),
-        playbackRate: (video && video.playbackRate) || 1,
+        playbackRate: casting() ? 1 : rate(),
       });
     } catch (e) { /* a clock the browser would not take */ }
     ms.playbackState = isPlaying() ? 'playing' : 'paused';
@@ -1552,6 +1612,7 @@
     // The room changed: theatre mode follows the picture, and the chrome comes
     // back up (and stays up, while this page is the remote).
     document.body.classList.toggle('theatre', inTheatre());
+    syncRateControl();
     wake();
     if (item) {
       // Coming back from the television, position() reads the LOCAL video —

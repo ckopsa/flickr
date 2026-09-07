@@ -513,6 +513,8 @@
   #mini-work { font-size: 12px; color: var(--muted); }
   #mini-controls { display: flex; gap: 6px; flex: 0 0 auto; }
   #mini-controls button { min-width: 40px; }
+  /* the speed reads as a number, so it does not jiggle as it counts */
+  #rate, #mini-rate { font-variant-numeric: tabular-nums; }
   #mini-progress { position: absolute; left: 0; right: 0; bottom: 0; height: 2px; background: #2a2c33; }
   #mini-fill { width: 0; height: 100%; background: var(--accent); }
   /* the bar is over the page, so the page ends above it */

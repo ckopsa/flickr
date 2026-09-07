@@ -936,7 +936,11 @@
         '<button id="mini-back" title="Back 30s" aria-label="Back 30 seconds">⏪</button>' +
         '<button id="mini-play" title="Play/Pause" aria-label="Play/Pause">⏵</button>' +
         '<button id="mini-fwd" title="Forward 30s" aria-label="Forward 30 seconds">⏩</button>' +
-        // The three above are the DEVICE's and player.js answers them. This one
+        // The speed, as a tap that walks the list rather than a menu: the bar
+        // has room for one word. player.js writes the word and hides it while
+        // the television is playing, which has no speed to set.
+        '<button id="mini-rate" title="Playback speed" aria-label="Playback speed">1×</button>' +
+        // The four above are the DEVICE's and player.js answers them. This one
         // is the document's: the session's own stop, said in the server's words,
         // so a sitting can be ended from the bar without opening it back up.
         control('stop', action(doc, 'stop'), { id: 'mini-stop' }) +
