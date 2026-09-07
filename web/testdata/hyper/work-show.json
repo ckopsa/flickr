@@ -104,6 +104,15 @@
             "position_seconds": "number"
           },
           "label": "Save the place"
+        },
+        "watched": {
+          "method": "POST",
+          "href": "/api/items/8/watched",
+          "input": {
+            "client_id": "string?",
+            "watched": "true"
+          },
+          "label": "Mark watched"
         }
       },
       "unavailable": {
@@ -161,6 +170,15 @@
             "position_seconds": "number"
           },
           "label": "Save the place"
+        },
+        "watched": {
+          "method": "POST",
+          "href": "/api/items/9/watched",
+          "input": {
+            "client_id": "string?",
+            "watched": "true"
+          },
+          "label": "Mark watched"
         }
       },
       "unavailable": {
@@ -209,6 +227,15 @@
             "position_seconds": "number"
           },
           "label": "Save the place"
+        },
+        "watched": {
+          "method": "POST",
+          "href": "/api/items/7/watched",
+          "input": {
+            "client_id": "string?",
+            "watched": "true"
+          },
+          "label": "Mark watched"
         }
       },
       "unavailable": {
@@ -218,6 +245,7 @@
       }
     }
   ],
+  "similar": [],
   "links": {
     "backdrop": {
       "href": "/api/items/8/backdrop"

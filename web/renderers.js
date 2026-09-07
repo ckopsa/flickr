@@ -107,14 +107,39 @@
   function control(name, act, opts) {
     if (!act) return '';
     const o = opts || {};
+    // `data` is what the button sends BACK: a value the action's own `input`
+    // named as a literal rather than as a type, written on the button for the
+    // kernel to make the body out of. Nothing here invents one.
+    const data = o.data || {};
     return '<button class="act' + (o.cls ? ' ' + esc(o.cls) : '') + '"' +
       ' data-act="' + esc(name) + '"' +
       ' data-href="' + esc(act.href) + '"' +
       ' data-method="' + esc(act.method || 'POST') + '"' +
+      Object.keys(data).map(k => ' data-' + esc(k) + '="' + esc(data[k]) + '"').join('') +
       (o.title ? ' title="' + esc(o.title) + '"' : '') +
       (o.hidden ? ' hidden' : '') +
       (o.id ? ' id="' + esc(o.id) + '"' : '') +
       '>' + esc(o.label || act.label || name) + '</button>';
+  }
+
+  // The tick, and the way back off it — the item's `watched` action, drawn on
+  // its own page and on every row in a list.
+  //
+  // Which WAY the press goes is the server's: the label says it in words
+  // ("Mark watched", "Mark unwatched") and the action's `input` carries the
+  // value to send back, so all that is decided here is the mark drawn on the
+  // button — a ✓ to tick a thing off, a ↺ to undo one. `wide` is the page's
+  // shape, which has room for the words beside the mark; a row has not.
+  function watchedControl(doc, cls, wide) {
+    const act = action(doc, 'watched');
+    if (!act) return '';
+    const want = String((act.input && act.input.watched) || 'true') !== 'false';
+    const mark = want ? '✓' : '↺';
+    return control('watched', act, {
+      cls: cls, title: act.label,
+      data: { watched: want ? 'true' : 'false' },
+      label: wide ? mark + ' ' + (act.label || '') : mark,
+    });
   }
 
   // The controls a document offers that nothing above has drawn already.
@@ -149,9 +174,14 @@
   function card(t, cls) {
     const art = artwork(t);
     const title = t.title || '';
+    // The corner of the poster: how many episodes of this show have just
+    // arrived. The count is the document's own (`new_episodes`), so nothing
+    // here decides what "new" is — a tile without one wears no badge.
+    const badge = t.new_episodes > 0
+      ? '<span class="new-badge">' + esc(t.new_episodes + ' new') + '</span>' : '';
     const wrap = art
-      ? '<div class="poster-wrap"><img loading="lazy" alt="" src="' + esc(art) + '"></div>'
-      : '<div class="poster-wrap text-tile"><div class="tile-title">' + esc(title) +
+      ? '<div class="poster-wrap"><img loading="lazy" alt="" src="' + esc(art) + '">' + badge + '</div>'
+      : '<div class="poster-wrap text-tile">' + badge + '<div class="tile-title">' + esc(title) +
         '</div><div class="tile-sub">' + esc(t.subtitle || t.tech || '') + '</div></div>';
     // A tile is a div, so the keyboard would walk straight past it: tabindex
     // puts it in the tab order and the role says what activating it does.
@@ -214,6 +244,20 @@
     const recent = ((doc && doc.recently_added) || []).filter(t => matches(t, state));
     if (recent.length) {
       html += bandSection('Recently added', recent, 'band-row', ' id="recent-row"');
+    }
+    // Then the shows something landed in this fortnight — the server's own
+    // selection again, each tile already carrying the count its badge draws.
+    const fresh = ((doc && doc.new_episodes) || []).filter(t => matches(t, state));
+    if (fresh.length) {
+      html += bandSection('New episodes', fresh, 'band-row', ' id="new-row"');
+    }
+    // Then what this profile might like, under the server's own heading —
+    // "Because you watched Frozen" is a sentence about a title, and the
+    // document writes it: nothing here scores or names anything.
+    const because = (doc && doc.because) || null;
+    const picks = ((because && because.items) || []).filter(t => matches(t, state));
+    if (picks.length) {
+      html += bandSection(because.title, picks, 'band-row', ' id="because-row"');
     }
     const named = {};
     for (const b of (doc.bands || [])) {
@@ -342,10 +386,15 @@
       // and the hash beside them says WHERE it is taken — at the item's own
       // page, whose document carries the place to pick up from.
       const act = action(en, 'resume');
+      const drop = action(en, 'forget');
       return '<div class="cw-card" tabindex="0" role="button"' +
         (act ? ' data-act="resume" data-href="' + esc(act.href) + '"' +
                ' data-method="' + esc(act.method || 'POST') + '"' : '') +
         ' data-nav="' + esc(itemHash(en.id)) + '" data-autoplay="1">' +
+        // The × in the corner: the row's own `forget` action, drawn as a
+        // control INSIDE the control the row is — the kernel reads the
+        // innermost [data-act], so it drops the row rather than resuming it.
+        control('forget', drop, { cls: 'cw-forget', label: '×', title: drop && drop.label }) +
         wrap +
         '<div class="cw-bar"><div style="width:' + pct.toFixed(1) + '%"></div></div>' +
         '<div class="c-title">' + esc(title) + '</div>' +
@@ -391,10 +440,14 @@
       (m.overview ? '<div class="overview">' + esc(m.overview) + '</div>' : '');
     const cls = 'item' + (still ? ' enriched' : '') + (o.current ? ' current' : '') +
       (m.watched ? ' watched' : '');
+    // The tick sits at the end of the row, where a person ticks an episode
+    // off. It is a control inside a control: the kernel reads the innermost
+    // [data-act], so pressing it marks the row rather than opening it.
     return '<div class="' + cls + '" tabindex="0" role="link"' +
       ' data-nav="' + esc(itemHash(m.id)) + '">' +
       (still ? '<img class="still" loading="lazy" alt="" src="' + esc(still) + '">' : '') +
       '<div>' + meta + '</div>' +
+      watchedControl(m, 'watch') +
       '</div>';
   }
 
@@ -573,6 +626,17 @@
       '<div id="artist-albums">' + ((doc.albums || []).map(a => card(a)).join('')) + '</div>';
   }
 
+  // --- more like this ----------------------------------------------------------
+
+  // The work document's own `similar` tiles, drawn with the library's card at
+  // the foot of a member's page. The row is the server's — which titles are
+  // alike, and how many of them — so this is a heading and a filter of one.
+  function similarRow(wk) {
+    const tiles = (wk && wk.similar) || [];
+    if (!tiles.length) return '';
+    return bandSection('More like this', tiles, 'band-row', ' id="similar-row"');
+  }
+
   // --- item --------------------------------------------------------------------
 
   // The detail pane. `ctx.work` is the work document the kernel fetched by
@@ -587,9 +651,10 @@
     const back = href(doc, 'backdrop');
     const chapters = ((doc.media_info && doc.media_info.chapters) || [])
       .filter(() => doc.medium !== 'text');
-    // Play stands alone up here. The curatorial actions are drawn too — but
-    // inside the Details disclosure, so `drawn` names them as handled.
-    const drawn = ['play', 'read'].concat(ADMIN);
+    // Play stands alone up here, with the tick beside it. The curatorial
+    // actions are drawn too — but inside the Details disclosure, so `drawn`
+    // names all of them as handled.
+    const drawn = ['play', 'read', 'watched'].concat(ADMIN);
     const prev = link(doc, 'prev'), next = link(doc, 'next');
     const bonus = wk && wk.work_kind !== 'show' ? extras(wk) : [];
     const siblings = wk && wk.work_kind !== 'show' ? walked(wk) : [];
@@ -607,7 +672,7 @@
           detailMeta(doc, wk) +
           '<p id="detail-overview"' + (doc.overview ? '' : ' hidden') + '>' + esc(doc.overview || '') + '</p>' +
           castLine(doc) +
-          primary(doc) + restControls(doc, drawn) +
+          primary(doc) + watchedControl(doc, 'watch-wide', true) + restControls(doc, drawn) +
           '<div id="detail-chapters">' + chapters.map(ch =>
             '<button data-seek="' + esc(ch.start_seconds) + '">' +
             esc((ch.title || '') + ' · ' + fmtTime(ch.start_seconds)) + '</button>').join('') + '</div>' +
@@ -628,7 +693,8 @@
             siblings.map(m => memberRow(m, { current: m.id === doc.id })).join('') +
           '</div></div>'
         : '') +
-      details(doc);
+      details(doc) +
+      similarRow(wk);
   }
 
   // The genres this title is filed under: the work's list when the kernel has
@@ -936,7 +1002,15 @@
         '<button id="mini-back" title="Back 30s" aria-label="Back 30 seconds">⏪</button>' +
         '<button id="mini-play" title="Play/Pause" aria-label="Play/Pause">⏵</button>' +
         '<button id="mini-fwd" title="Forward 30s" aria-label="Forward 30 seconds">⏩</button>' +
-        // The three above are the DEVICE's and player.js answers them. This one
+        // The speed, as a tap that walks the list rather than a menu: the bar
+        // has room for one word. player.js writes the word and hides it while
+        // the television is playing, which has no speed to set.
+        '<button id="mini-rate" title="Playback speed" aria-label="Playback speed">1×</button>' +
+        // The moon opens the sleep timer. Its list is the device's own element,
+        // moved in here by player.js — the bar keeps the device in a hidden
+        // box, so a menu drawn inside it could never be seen.
+        '<button id="mini-sleep" title="Sleep timer" aria-label="Sleep timer">🌙</button>' +
+        // The five above are the DEVICE's and player.js answers them. This one
         // is the document's: the session's own stop, said in the server's words,
         // so a sitting can be ended from the bar without opening it back up.
         control('stop', action(doc, 'stop'), { id: 'mini-stop' }) +
@@ -988,7 +1062,7 @@
 
   const api = {
     library, libraryGrid, hero, work, artist, item, session, miniPlayer, continueShelf, search,
-    card, memberRow, control, restControls, trace, identityForm,
+    card, memberRow, control, watchedControl, restControls, trace, identityForm,
     esc, fmtTime, fmtRuntime, hashFor, itemHash, showHash, artistHash, searchHash,
     idIn,
     linkHref: href, actionOf: action, unavailableReason: why, artworkOf: artwork,

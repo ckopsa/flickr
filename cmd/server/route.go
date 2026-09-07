@@ -304,7 +304,7 @@ func (s *server) handleRouteDoc(w http.ResponseWriter, r *http.Request) {
 	var doc *hyper.Envelope
 	switch target.View {
 	case "work":
-		doc = s.workEnvelope(target.Work, profile, positions)
+		doc = s.workEnvelope(target.Work, ws, profile, positions)
 	case "artist":
 		doc = artistEnvelope(target.Artist)
 	case "item":

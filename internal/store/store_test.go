@@ -403,4 +403,23 @@ func TestStatePlace(t *testing.T) {
 	if p, _ := s.GetPosition(2, "kid"); p.Locator != nil || p.PositionSeconds != 12 {
 		t.Errorf("after clock write: %+v", p)
 	}
+	// ClearPlace drops the row itself — forgetting the place, not moving it
+	// to zero — and only for the profile that asked.
+	if err := s.SetPosition(2, "adult", 99); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ClearPlace(2, "kid"); err != nil {
+		t.Fatal(err)
+	}
+	if all, err := s.PositionsFor("kid"); err != nil || len(all) != 1 || all[0].ItemID != 1 {
+		t.Errorf("after ClearPlace: %v, %v", all, err)
+	}
+	if p, _ := s.GetPosition(2, "adult"); p.PositionSeconds != 99 {
+		t.Errorf("another profile's place went with it: %+v", p)
+	}
+	// Clearing a row that is not there is not an error: the place is gone
+	// either way, which is what the caller asked for.
+	if err := s.ClearPlace(2, "kid"); err != nil {
+		t.Errorf("clearing an absent row: %v", err)
+	}
 }

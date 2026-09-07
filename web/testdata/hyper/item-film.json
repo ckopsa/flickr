@@ -167,6 +167,15 @@
       "method": "POST",
       "href": "/api/items/4/reprobe",
       "label": "Probe this file again"
+    },
+    "watched": {
+      "method": "POST",
+      "href": "/api/items/4/watched",
+      "input": {
+        "client_id": "string?",
+        "watched": "true"
+      },
+      "label": "Mark watched"
     }
   },
   "unavailable": {

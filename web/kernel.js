@@ -782,6 +782,61 @@
     paintAutoplay();
     paintTenFoot();
     $('settings').hidden = false;
+    watchActivity(true);
+  }
+
+  function closeSettings() {
+    $('settings').hidden = true;
+    watchActivity(false);
+  }
+
+  // --- household activity ------------------------------------------------------
+  //
+  // Who is playing what, right now — the server's own list, followed from the
+  // root (`links.activity`). It is READ while the panel is up and nowhere
+  // else: a dashboard nobody is looking at is a poll nobody asked for, so the
+  // timer starts with the panel and stops with it.
+  //
+  // Rows are the document's words — the profile, the work, the member's own
+  // label, how it is being sent and where they have got to — and there is
+  // nothing to press: the document offers no action, and neither does this.
+  const ACTIVITY_MS = 5000;
+  let activityTimer = null;
+
+  function watchActivity(on) {
+    if (activityTimer) clearInterval(activityTimer);
+    activityTimer = null;
+    if (!on) return;
+    paintActivity();
+    activityTimer = setInterval(paintActivity, ACTIVITY_MS);
+  }
+
+  async function paintActivity() {
+    const box = $('settings-activity');
+    const l = rootDoc && rootDoc.links && rootDoc.links.activity;
+    if (!box) return;
+    if (!l) { box.textContent = 'This server does not report activity.'; return; }
+    let doc;
+    try {
+      doc = await api(l.href);
+    } catch (e) {
+      box.textContent = e.detail || 'Activity could not be read.';
+      return;
+    }
+    if ($('settings').hidden) return; // the panel closed while we were asking
+    const rows = (doc && doc.items) || [];
+    box.innerHTML = rows.length
+      ? rows.map(a =>
+          '<div class="act-row">' +
+            '<span class="act-who">' + esc(a.profile || '') + '</span>' +
+            '<span class="act-what">' + esc(a.work_title || a.title || '') +
+              (a.label && a.label !== a.work_title
+                ? ' <span class="act-part">' + esc(a.label) + '</span>' : '') +
+            '</span>' +
+            '<span class="act-how">' +
+              esc([a.position, a.method].filter(Boolean).join(' · ')) + '</span>' +
+          '</div>').join('')
+      : '<div class="act-none">Nothing is playing.</div>';
   }
 
   // --- ten-foot mode -----------------------------------------------------------
@@ -914,7 +969,7 @@
     if (e.key !== 'Backspace' && e.key !== 'Escape') return false;
     if (typingIn(e.target)) return false;
     if (!$('gate').hidden) return false; // who is watching has no way past
-    if (!$('settings').hidden) { $('settings').hidden = true; e.preventDefault(); return true; }
+    if (!$('settings').hidden) { closeSettings(); e.preventDefault(); return true; }
     if (!$('stage').hidden) {
       if (e.key === 'Escape') return false;
       if (playsOn()) collapse(); else closeStage();
@@ -1066,6 +1121,16 @@
     const name = el.dataset.act;
     const req = { href: el.dataset.href, method: el.dataset.method || 'POST', name };
     if (el.dataset.clear) req.body = { clear: true };
+    // The tick sends back the value the DOCUMENT chose: the action's `input`
+    // carried it as a literal and the button carries it here, so which way
+    // the mark goes was never the browser's decision.
+    if (el.dataset.watched) req.body = { watched: el.dataset.watched === 'true' };
+    // Marking a thing watched, and dropping a row off the resume shelf, both
+    // move a PLACE — and the place is what the row's ✓, the shelf and a
+    // show's Next up are all drawn from. So the answer is followed by
+    // forgetting every cached document and re-reading the view, rather than
+    // by patching the screen where it stands.
+    if (name === 'watched' || name === 'forget') { await write(req); return; }
     // `read` is the kernel's: a book's sitting is the reader pane, not the
     // device. Everything else is the device's, and it takes the action as it
     // was written on the button.
@@ -1076,6 +1141,24 @@
     // The two minting actions are the same answer shown the same way.
     if (name === 'passage' || name === 'link') { await mint(req); return; }
     await root.Player.invoke(req, { item: currentItem, work: currentWork });
+  }
+
+  // One write, and the view read again after it. A refusal is said out loud
+  // and nothing is re-read: the screen still shows what the server still
+  // holds.
+  async function write(req) {
+    try {
+      await api(req.href, {
+        method: req.method,
+        headers: req.body ? { 'Content-Type': 'application/json' } : undefined,
+        body: req.body ? JSON.stringify(req.body) : undefined,
+      });
+    } catch (err) {
+      note(err instanceof Problem ? err.detail : String(err.message || err));
+      return;
+    }
+    forget();
+    applyRoute();
   }
 
   // A form is an action with a BODY: the fields a renderer drew from the
@@ -1132,8 +1215,8 @@
     $('search').oninput = onSearchInput;
     $('search').onkeydown = onSearchKey;
     $('gear').onclick = openSettings;
-    $('settings-close').onclick = () => { $('settings').hidden = true; };
-    $('settings').onclick = e => { if (e.target.id === 'settings') $('settings').hidden = true; };
+    $('settings-close').onclick = closeSettings;
+    $('settings').onclick = e => { if (e.target.id === 'settings') closeSettings(); };
     $('settings-autoplay').onclick = () => { root.Player.setAutoplay(!root.Player.autoplay()); paintAutoplay(); };
     $('settings-tenfoot').onclick = () => setTenFoot(!tenFoot);
     // Remembered if it was ever chosen, guessed if it was not.

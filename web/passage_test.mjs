@@ -5,6 +5,7 @@ import assert from 'node:assert/strict';
 // Node cannot see named exports through its IIFE, so take the default.
 import passage from './passage.js';
 const { splitHash, parsePassage, passageQuery, isTimedPassage,
+        nextChapterStart,
         passageEndAt, passageEnded, runContinues, passageForNext,
         parseLocator, formatLocator, sectionFromCFI,
         isTextPassage, textPassageEnded } = passage;
@@ -230,4 +231,45 @@ test('textPassageEnded: the book ending ends any passage, nothing else fires on 
   assert.equal(textPassageEnded(null, at({ atEnd: true }), cmp), false);
   assert.equal(textPassageEnded(parseLocator('ch:4'), null, cmp), false);
   assert.equal(textPassageEnded(parseLocator('ch:4'), at({ section: undefined }), cmp), false);
+});
+
+// --- the sleep timer's bound -------------------------------------------------
+
+// media_info.chapters, as the probe writes them.
+const CH = [{ start_seconds: 0, title: 'Frozen Heart' },
+            { start_seconds: 1200, title: 'Do You Want to Build a Snowman' },
+            { start_seconds: 4740, title: 'Let It Go' }];
+
+test('nextChapterStart: the end of the chapter is where the next one starts', () => {
+  assert.equal(nextChapterStart(CH, 0), 1200);
+  assert.equal(nextChapterStart(CH, 1), 1200);
+  assert.equal(nextChapterStart(CH, 1199.5), 1200);
+  assert.equal(nextChapterStart(CH, 3000), 4740);
+});
+
+test('nextChapterStart: a position on a mark is IN that chapter', () => {
+  // Standing exactly on "Let It Go" means listening to it, not to the end of
+  // the one before: the bound is the next mark, and there is none.
+  assert.equal(nextChapterStart(CH, 1200), 4740);
+  assert.equal(nextChapterStart(CH, 4740), null);
+});
+
+test('nextChapterStart: no bound to stop at is null, not a guess', () => {
+  assert.equal(nextChapterStart([], 0), null);
+  assert.equal(nextChapterStart(null, 0), null);
+  assert.equal(nextChapterStart(undefined, 0), null);
+  assert.equal(nextChapterStart([{ start_seconds: 0 }], 10), null); // one chapter is no boundary
+  assert.equal(nextChapterStart(CH, 9999), null);                   // past the last mark
+});
+
+test('nextChapterStart: the marks need not be in order, and a mark with no clock is not one', () => {
+  assert.equal(nextChapterStart([{ start_seconds: 4740 }, { start_seconds: 1200 }], 0), 1200);
+  assert.equal(nextChapterStart([{ title: 'no clock' }, null, { start_seconds: 60 }], 0), 60);
+  assert.equal(nextChapterStart([{ start_seconds: '1200' }], 0), null); // a string is not a clock
+  assert.equal(nextChapterStart([{ start_seconds: NaN }, { start_seconds: 30 }], 0), 30);
+});
+
+test('nextChapterStart: a position that is not a number reads as the start', () => {
+  assert.equal(nextChapterStart(CH, undefined), 1200);
+  assert.equal(nextChapterStart(CH, NaN), 1200);
 });

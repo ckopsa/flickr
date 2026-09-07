@@ -738,6 +738,15 @@ func (s *State) SetPlace(itemID int64, clientID string, pos float64, loc *model.
 	return tx.Commit()
 }
 
+// ClearPlace drops a profile's row for one item: the place forgotten rather
+// than moved. It is a DELETE and not a write of zero, because a row at zero
+// is still a row — the resume list would have to learn to ignore it, and
+// "watched" and "never opened" would look the same.
+func (s *State) ClearPlace(itemID int64, clientID string) error {
+	_, err := s.db.Exec(`DELETE FROM playback_state WHERE item_id=? AND client_id=?`, itemID, clientID)
+	return err
+}
+
 // GetPosition returns the profile's row for the item, or the zero Position
 // (0 seconds, nil locator) when there is none.
 func (s *State) GetPosition(itemID int64, clientID string) (Position, error) {

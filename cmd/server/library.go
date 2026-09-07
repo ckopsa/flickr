@@ -191,7 +191,11 @@ func tileFor(w *works.Work, subtitle string) *hyper.Envelope {
 // the band it belongs to on it: a row draws the tiles that name it, and the
 // "recently added" row carries the band along, so a tile out of its row
 // still knows where it came from.
-func tileOf(sh shelf) *hyper.Envelope {
+//
+// `now` is the clock the "3 new" badge is measured against: a show whose
+// episodes have just arrived says so on its own tile, wherever that tile is
+// drawn, so the grid badges it without asking a second question.
+func tileOf(sh shelf, now time.Time) *hyper.Envelope {
 	var t *hyper.Envelope
 	if sh.Artist != nil {
 		t = artistTile(sh.Artist)
@@ -200,6 +204,9 @@ func tileOf(sh shelf) *hyper.Envelope {
 	}
 	if sh.Band != "" {
 		t.Field("band", sh.Band)
+	}
+	if n, _ := newEpisodesIn(sh.Work, now); n > 0 {
+		t.Field("new_episodes", n)
 	}
 	return t
 }
@@ -425,21 +432,27 @@ const recentlyAddedTiles = 12
 // record — a new album puts the artist back at the front, which is what a
 // person means by "that's new".
 func shelfAddedAt(sh shelf, byKey map[string]*works.Work) time.Time {
-	var newest time.Time
-	add := func(w *works.Work) {
-		if w == nil {
-			return
-		}
-		for _, it := range w.Items {
-			if it.AddedAt.After(newest) {
-				newest = it.AddedAt
+	newest := workAddedAt(sh.Work)
+	if sh.Artist != nil {
+		for _, al := range sh.Artist.Albums {
+			if at := workAddedAt(byKey[al.Key]); at.After(newest) {
+				newest = at
 			}
 		}
 	}
-	add(sh.Work)
-	if sh.Artist != nil {
-		for _, al := range sh.Artist.Albums {
-			add(byKey[al.Key])
+	return newest
+}
+
+// workAddedAt is when one work's newest file arrived; the zero time for a
+// work whose files all predate the arrival column.
+func workAddedAt(w *works.Work) time.Time {
+	var newest time.Time
+	if w == nil {
+		return newest
+	}
+	for _, it := range w.Items {
+		if it.AddedAt.After(newest) {
+			newest = it.AddedAt
 		}
 	}
 	return newest
@@ -473,6 +486,254 @@ func recentlyAdded(order []shelf, byKey map[string]*works.Work, n int) []shelf {
 		out = append(out, d.sh)
 	}
 	return out
+}
+
+// ── new episodes ────────────────────────────────────────────────────────
+
+// newEpisodeWindow is how long an episode counts as new. A fortnight, because
+// that is the span a person means by "did the new one land?" — long enough to
+// hold last week's episode and the one before it, short enough that a row of
+// new episodes is a row of episodes nobody has seen yet.
+const newEpisodeWindow = 14 * 24 * time.Hour
+
+// newEpisodeTiles is how many shows the row holds.
+const newEpisodeTiles = 12
+
+// newEpisodesIn is how many EPISODES of one show arrived inside the window,
+// and when the newest of them did. Bonus material is not an episode — a
+// featurette added on Tuesday does not make a show new — and a file with no
+// arrival time at all counts as old, the way the recently-added row treats
+// one. Anything that is not a show has no answer to give.
+func newEpisodesIn(w *works.Work, now time.Time) (int, time.Time) {
+	if w == nil || w.Kind != "show" {
+		return 0, time.Time{}
+	}
+	cut := now.Add(-newEpisodeWindow)
+	n, newest := 0, time.Time{}
+	for _, it := range w.Items {
+		if identityKind(it) != "episode" || !it.AddedAt.After(cut) {
+			continue
+		}
+		n++
+		if it.AddedAt.After(newest) {
+			newest = it.AddedAt
+		}
+	}
+	return n, newest
+}
+
+// newEpisodes is the "New episodes" row: the shows with an episode inside the
+// window, the show whose newest one landed last at the front, at most n. Like
+// recentlyAdded it is a SELECTION of the grid's own shelves — the same tiles,
+// each already carrying its count — so the row is one more ordering of the
+// library rather than a second kind of thing. Ties keep the grid's order.
+func newEpisodes(order []shelf, now time.Time, n int) []shelf {
+	type dated struct {
+		sh shelf
+		at time.Time
+	}
+	var fresh []dated
+	for _, sh := range order {
+		if count, at := newEpisodesIn(sh.Work, now); count > 0 {
+			fresh = append(fresh, dated{sh, at})
+		}
+	}
+	sort.SliceStable(fresh, func(i, j int) bool { return fresh[i].at.After(fresh[j].at) })
+	if len(fresh) > n {
+		fresh = fresh[:n]
+	}
+	out := make([]shelf, 0, len(fresh))
+	for _, d := range fresh {
+		out = append(out, d.sh)
+	}
+	return out
+}
+
+// ── because you watched, and more like this ─────────────────────────────
+//
+// Two rows off one rule: things are alike here when they share genres. It is
+// a thin rule and it is stated once — the row on the home is that rule aimed
+// at a title this profile has watched, and the row at the foot of an item's
+// page is the same rule aimed at the title on screen.
+//
+// Genres are TMDB's, so only films and shows carry any: a library of records
+// and books scores every pair 0 and neither row is ever drawn, which is the
+// right answer rather than a guess dressed up as one.
+
+// becauseTiles is how many titles the home's "Because you watched" row holds;
+// similarTiles how many "More like this" holds at the foot of a page, where a
+// row is a footnote rather than the shelf.
+const (
+	becauseTiles = 12
+	similarTiles = 8
+)
+
+// sharedGenres is how alike two works are: how many genres they have in
+// common, and nothing else.
+func sharedGenres(a, b *works.Work) int {
+	if a == nil || b == nil {
+		return 0
+	}
+	have := make(map[string]bool, len(a.Genres))
+	for _, g := range a.Genres {
+		if g != "" {
+			have[g] = true
+		}
+	}
+	n := 0
+	for _, g := range b.Genres {
+		if have[g] {
+			n++
+		}
+	}
+	return n
+}
+
+// alike is every work that shares a genre with wk and passes keep, best
+// first: most genres in common, then the newest arrival, then the library's
+// own order. It caps nothing — the two rows have different lengths and each
+// takes what it wants off the front.
+func alike(wk *works.Work, ws []works.Work, keep func(*works.Work) bool) []*works.Work {
+	type scored struct {
+		w  *works.Work
+		by int
+		at time.Time
+	}
+	var out []scored
+	for i := range ws {
+		c := &ws[i]
+		if !keep(c) {
+			continue
+		}
+		if n := sharedGenres(wk, c); n > 0 {
+			out = append(out, scored{c, n, workAddedAt(c)})
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].by != out[j].by {
+			return out[i].by > out[j].by
+		}
+		return out[i].at.After(out[j].at)
+	})
+	picks := make([]*works.Work, 0, len(out))
+	for _, s := range out {
+		picks = append(picks, s.w)
+	}
+	return picks
+}
+
+// similarWorks is the "More like this" row: up to n works like wk, itself
+// left out. It knows nothing about who is asking — a work is like another
+// work whoever opened it.
+func similarWorks(wk *works.Work, ws []works.Work, n int) []*works.Work {
+	picks := alike(wk, ws, func(c *works.Work) bool { return c.Key != wk.Key })
+	if len(picks) > n {
+		picks = picks[:n]
+	}
+	return picks
+}
+
+// watched says whether this profile has been in a work at all: any member
+// with a playback row. A title already started is not a recommendation,
+// however little of it was played.
+func watched(w *works.Work, positions map[int64]store.Position) bool {
+	for _, it := range w.Items {
+		if _, ok := positions[it.ID]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+// becauseSeeds is what this profile has watched, strongest signal first: the
+// works they finished, then the ones they are furthest into, ties to the most
+// recently touched. A row built on the second seed is still a row built on
+// something they chose.
+func becauseSeeds(ws []works.Work, positions map[int64]store.Position) []*works.Work {
+	type seed struct {
+		w    *works.Work
+		into float64
+		at   float64
+	}
+	var seeds []seed
+	for i := range ws {
+		w := &ws[i]
+		pr, ok := works.WorkProgress(w, positions)
+		if !ok {
+			continue
+		}
+		seeds = append(seeds, seed{w, pr.Fraction, pr.UpdatedAt})
+	}
+	sort.SliceStable(seeds, func(i, j int) bool {
+		if seeds[i].into != seeds[j].into {
+			return seeds[i].into > seeds[j].into
+		}
+		return seeds[i].at > seeds[j].at
+	})
+	out := make([]*works.Work, 0, len(seeds))
+	for _, s := range seeds {
+		out = append(out, s.w)
+	}
+	return out
+}
+
+// because is the home's row: the strongest seed that has anything to suggest,
+// and up to n unwatched shelves that share a genre with it. Shelves, not
+// works, so the row is drawn with the very tiles the grid draws — and a work
+// with no tile of its own (an album its artist's shelf stands for) is not
+// recommended out of a row it could never be tapped in.
+//
+// nil when nobody is asking, when they have watched nothing, or when nothing
+// in the library is like anything they watched.
+func because(order []shelf, ws []works.Work, positions map[int64]store.Position, n int) (*works.Work, []shelf) {
+	if len(positions) == 0 {
+		return nil, nil
+	}
+	shelfOf := map[string]shelf{}
+	for _, sh := range order {
+		if sh.Work != nil {
+			shelfOf[sh.Work.Key] = sh
+		}
+	}
+	for _, seed := range becauseSeeds(ws, positions) {
+		var picks []shelf
+		for _, w := range alike(seed, ws, func(c *works.Work) bool {
+			return c.Key != seed.Key && !watched(c, positions)
+		}) {
+			if sh, ok := shelfOf[w.Key]; ok {
+				picks = append(picks, sh)
+				if len(picks) == n {
+					break
+				}
+			}
+		}
+		if len(picks) > 0 {
+			return seed, picks
+		}
+	}
+	return nil, nil
+}
+
+// becauseRow is the row as the document carries it: the heading in words, and
+// the tiles under it. The heading is written here because it is a sentence
+// about a title, and a client that had to compose it would be composing the
+// verb too.
+type becauseRow struct {
+	Title string            `json:"title"`
+	Items []*hyper.Envelope `json:"items"`
+}
+
+// becauseTitle is that sentence, in the verb the medium uses: a film is
+// watched, a record listened to, a book read.
+func becauseTitle(w *works.Work) string {
+	verb := "watched"
+	switch w.Medium {
+	case model.MediumAudio:
+		verb = "listened to"
+	case model.MediumText:
+		verb = "read"
+	}
+	return "Because you " + verb + " " + w.Title
 }
 
 // ── the facets ──────────────────────────────────────────────────────────
@@ -523,28 +784,38 @@ func genreFacet(order []shelf) []facet {
 // the order it draws them, the rows it draws them under (`bands`, each tile
 // naming its own), and the facets its chips offer.
 //
-// The profile is carried where the grid honours one, which today is nowhere:
-// the same shelf is shown to everybody, and where a person stands in a work
-// is the work document's answer. The document names who asked all the same,
-// so the resume link below it can.
+// The grid itself is the same shelf for everybody — where a person stands in
+// a work is the work document's answer — but one row is not: "Because you
+// watched" is built from what THIS profile has played, so the document names
+// who asked and reads their positions.
 func (s *server) handleLibrary(w http.ResponseWriter, r *http.Request) {
 	ws, err := s.worksFor(r)
 	if err != nil {
 		hyper.WriteProblem(w, serverProblem(err))
 		return
 	}
+	profile := profileOf(r)
+	positions, err := s.positionsFor(profile)
+	if err != nil {
+		hyper.WriteProblem(w, serverProblem(err))
+		return
+	}
+	now := time.Now()
 	order := libraryOrder(ws, works.Artists(ws))
 	tiles := make([]*hyper.Envelope, 0, len(order))
 	for _, sh := range order {
-		tiles = append(tiles, tileOf(sh))
+		tiles = append(tiles, tileOf(sh, now))
 	}
 	byKey := works.ByKey(ws)
 	recent := make([]*hyper.Envelope, 0, recentlyAddedTiles)
 	for _, sh := range recentlyAdded(order, byKey, recentlyAddedTiles) {
-		recent = append(recent, tileOf(sh))
+		recent = append(recent, tileOf(sh, now))
+	}
+	fresh := make([]*hyper.Envelope, 0, newEpisodeTiles)
+	for _, sh := range newEpisodes(order, now, newEpisodeTiles) {
+		fresh = append(fresh, tileOf(sh, now))
 	}
 
-	profile := profileOf(r)
 	doc := hyper.Doc("/api/library", "library", "Library")
 	if profile != "" {
 		doc.Field("profile", profile)
@@ -557,7 +828,17 @@ func (s *server) handleLibrary(w http.ResponseWriter, r *http.Request) {
 		Field("bands", bandsOf(order)).
 		Field("items", tiles).
 		Field("recently_added", recent).
-		Field("facets", map[string][]facet{"genre": genreFacet(order)}).
+		Field("new_episodes", fresh)
+	// The one row that is this profile's own. It is left OUT rather than
+	// written empty: a heading over nothing is worse than no heading.
+	if seed, picks := because(order, ws, positions, becauseTiles); seed != nil {
+		row := becauseRow{Title: becauseTitle(seed), Items: make([]*hyper.Envelope, 0, len(picks))}
+		for _, sh := range picks {
+			row.Items = append(row.Items, tileOf(sh, now))
+		}
+		doc.Field("because", row)
+	}
+	doc.Field("facets", map[string][]facet{"genre": genreFacet(order)}).
 		Link("root", "/api/", "flickr").
 		Link("continue", cont, "Continue watching").
 		Link("artists", "/api/artists", "Artists")

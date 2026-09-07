@@ -82,6 +82,9 @@ func (s *server) handleRootDoc(w http.ResponseWriter, r *http.Request) {
 		// `?q=`, and the client reaches it by the hash its box spells.
 		Link("search", "/api/search", "Search").
 		Link("continue", cont, "Continue watching").
+		// Who is playing what, right now — the household's, not this
+		// profile's, so it carries nobody's name (activity.go).
+		Link("activity", "/api/activity", "Activity").
 		Link("artists", "/api/artists", "Artists").
 		Link("works", "/api/works", "Works").
 		Link("items", "/api/items", "Items").
@@ -344,6 +347,24 @@ func (s *server) itemEnvelope(it store.Item, wk *works.Work, full bool, position
 		Method: "POST", Href: "/api/progress",
 		Input: progressInputSketch(it), Label: "Save the place",
 	})
+	// Watched, and unwatched again — on the item's own page and on every row
+	// in a list, because a row is where a person ticks an episode off. Which
+	// WAY the press goes is the server's: the label says it in words and the
+	// input carries the value to send back, so the screen decides nothing but
+	// where to draw it. An unprobed file has no end to mark, and says so.
+	if watchable(it) {
+		label, want := "Mark watched", "true"
+		if works.Finished(it, positions[it.ID]) {
+			label, want = "Mark unwatched", "false"
+		}
+		doc.Action("watched", hyper.Action{
+			Method: "POST", Href: base + "/watched",
+			Input: map[string]string{"watched": want, "client_id": "string?"},
+			Label: label,
+		})
+	} else {
+		doc.Unavailable("watched", notMarkable(it))
+	}
 
 	if full {
 		doc.Action("identity", hyper.Action{
@@ -714,13 +735,17 @@ func (s *server) handleWorkDoc(w http.ResponseWriter, r *http.Request) {
 		hyper.WriteProblem(w, serverProblem(err))
 		return
 	}
-	hyper.WriteDoc(w, http.StatusOK, s.workEnvelope(wk, profile, positions))
+	hyper.WriteDoc(w, http.StatusOK, s.workEnvelope(wk, ws, profile, positions))
 }
 
 // workEnvelope is that document, apart from the request that asked for it:
 // the route resolver (route.go) answers a #/show/<title> hash with the very
 // same document, and one work is one document however it was reached.
-func (s *server) workEnvelope(wk *works.Work, profile string, positions map[int64]store.Position) *hyper.Envelope {
+//
+// `ws` is the library the work sits in, which the document needs for one
+// field only: `similar`, the titles like this one (library.go). A work knows
+// nothing about its neighbours by itself.
+func (s *server) workEnvelope(wk *works.Work, ws []works.Work, profile string, positions map[int64]store.Position) *hyper.Envelope {
 	doc := hyper.Doc(workHref(wk.Key), "work", wk.Title)
 	// The work's own kind ("show", "album", "book") is not the DOCUMENT's
 	// kind, which is always "work". The envelope's name wins, so the work's
@@ -763,6 +788,16 @@ func (s *server) workEnvelope(wk *works.Work, profile string, positions map[int6
 		members = append(members, s.itemEnvelope(it, wk, false, positions))
 	}
 	doc.Field("members", members)
+
+	// What else in the library is like this — the "More like this" row at the
+	// foot of a member's page, as the tiles the grid already draws. The list
+	// is filtered the way the shelves are: a kids profile is not offered a
+	// title it would be refused at the door.
+	similar := make([]*hyper.Envelope, 0, similarTiles)
+	for _, like := range similarWorks(wk, s.visibleTo(ws, profile), similarTiles) {
+		similar = append(similar, workTile(like))
+	}
+	doc.Field("similar", similar)
 
 	doc.Link("items", workHref(wk.Key)+"/items", "")
 	if rep != nil {

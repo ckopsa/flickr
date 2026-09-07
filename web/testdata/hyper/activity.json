@@ -1,0 +1,46 @@
+{
+  "self": "/api/activity",
+  "kind": "activity",
+  "title": "Activity",
+  "count": 1,
+  "items": [
+    {
+      "self": "/api/items/8",
+      "kind": "activity_entry",
+      "title": "Beach Games",
+      "session_id": "a1c9f2",
+      "profile": "chris",
+      "item_id": 8,
+      "label": "S03E22 · Beach Games",
+      "work_title": "The Office",
+      "method": "transcode",
+      "position_seconds": 745,
+      "position": "12:25",
+      "started_at": "2026-09-05T20:00:00Z",
+      "links": {
+        "artwork": {
+          "href": "/api/items/8/still"
+        },
+        "item": {
+          "href": "/api/items/8",
+          "title": "Beach Games"
+        },
+        "work": {
+          "href": "/api/works/tmdb%3A2316",
+          "title": "The Office"
+        }
+      }
+    }
+  ],
+  "links": {
+    "library": {
+      "href": "/api/library",
+      "title": "Library"
+    },
+    "root": {
+      "href": "/api/",
+      "title": "flickr"
+    }
+  }
+}
+

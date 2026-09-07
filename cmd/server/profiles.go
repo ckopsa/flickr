@@ -97,6 +97,16 @@ func (s *server) worksFor(r *http.Request) ([]works.Work, error) {
 	return kidWorks(ws), nil
 }
 
+// visibleTo is the same filter for a caller that already holds the library
+// and the name of who is asking — the work document, which builds the whole
+// projection to find one work and then hands the rest to `similar`.
+func (s *server) visibleTo(ws []works.Work, profile string) []works.Work {
+	if !s.kidProfile(profile) {
+		return ws
+	}
+	return kidWorks(ws)
+}
+
 // playProfile is who is playing: the client_id in the play body, which is
 // what the player sends, or the profile the request itself carries.
 func playProfile(r *http.Request, clientID string) string {

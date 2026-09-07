@@ -48,6 +48,11 @@
         }
       },
       "actions": {
+        "forget": {
+          "method": "DELETE",
+          "href": "/api/progress?item_id=1\u0026client_id=chris",
+          "label": "Remove from Continue watching"
+        },
         "play": {
           "method": "POST",
           "href": "/api/items/1/play",
@@ -75,6 +80,15 @@
             "seek_seconds": "number?"
           },
           "label": "▶ Resume"
+        },
+        "watched": {
+          "method": "POST",
+          "href": "/api/items/1/watched",
+          "input": {
+            "client_id": "string?",
+            "watched": "true"
+          },
+          "label": "Mark watched"
         }
       },
       "unavailable": {
@@ -154,6 +168,11 @@
         }
       },
       "actions": {
+        "forget": {
+          "method": "DELETE",
+          "href": "/api/progress?item_id=3\u0026client_id=chris",
+          "label": "Remove from Continue watching"
+        },
         "progress": {
           "method": "POST",
           "href": "/api/progress",
@@ -185,6 +204,15 @@
             "passage": "passage?"
           },
           "label": "Keep reading"
+        },
+        "watched": {
+          "method": "POST",
+          "href": "/api/items/3/watched",
+          "input": {
+            "client_id": "string?",
+            "watched": "true"
+          },
+          "label": "Mark watched"
         }
       },
       "unavailable": {
@@ -243,6 +271,11 @@
         }
       },
       "actions": {
+        "forget": {
+          "method": "DELETE",
+          "href": "/api/progress?item_id=8\u0026client_id=chris",
+          "label": "Remove from Continue watching"
+        },
         "play": {
           "method": "POST",
           "href": "/api/items/8/play",
@@ -270,6 +303,15 @@
             "seek_seconds": "number?"
           },
           "label": "▶ Resume"
+        },
+        "watched": {
+          "method": "POST",
+          "href": "/api/items/8/watched",
+          "input": {
+            "client_id": "string?",
+            "watched": "true"
+          },
+          "label": "Mark watched"
         }
       },
       "unavailable": {

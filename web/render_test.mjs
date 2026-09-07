@@ -242,6 +242,73 @@ test('recently added is the first row, above the bands', () => {
   assert.ok(!R.library(bare, {}).includes('id="recent-row"'));
 });
 
+// What just landed comes next, and the count rides the tile: the fixture
+// library's episodes arrived months ago, so the row the server writes is
+// empty and the tiles are put here by hand — the same tiles, with the field
+// the derivation adds when a show is new.
+test('new episodes is a row of its own, under what arrived lately', () => {
+  const doc = golden('library');
+  const show = Object.assign({}, doc.items.find(t => t.work_kind === 'show'), { new_episodes: 3 });
+  const html = R.library(Object.assign({}, doc, {
+    items: doc.items.map(t => t.work_kind === 'show' ? show : t),
+    new_episodes: [show],
+  }), {});
+
+  assert.ok(html.indexOf('id="recent-row"') < html.indexOf('id="new-row"'));
+  assert.ok(html.indexOf('id="new-row"') < html.indexOf('data-band='));
+  const row = html.split('id="new-row"')[1].split('</section>')[0];
+  assert.deepEqual(cardTitles(row), [unesc(R.esc(show.title))]);
+  assert.match(row, /<h3>New episodes<\/h3>/);
+  assert.match(row, /class="new-badge">3 new</);
+
+  // The badge is the document's count, not the row's: the same tile in the
+  // grid wears it too, and a tile without one wears nothing.
+  assert.equal(html.match(/class="new-badge"/g).length, 2);
+  assert.ok(!R.library(doc, {}).includes('new-badge'));
+  assert.ok(!R.library(doc, {}).includes('id="new-row"'));
+});
+
+// The recommendation row is the server's, heading and all: the fixture's two
+// enriched titles share no genre, so — as with the row above — the document
+// is given one here rather than pretending the library has one.
+test('because you watched is a row under the server\'s own heading', () => {
+  const doc = golden('library');
+  const because = { title: 'Because you watched Frozen', items: [doc.items[0]] };
+  const html = R.library(Object.assign({}, doc, { because: because }), {});
+
+  assert.ok(html.indexOf('id="because-row"') < html.indexOf('data-band='));
+  const row = html.split('id="because-row"')[1].split('</section>')[0];
+  assert.match(row, /<h3>Because you watched Frozen<\/h3>/);
+  assert.deepEqual(cardTitles(row), [unesc(R.esc(doc.items[0].title))]);
+
+  // No row in the document is no row on the page — and no heading either.
+  assert.ok(!R.library(doc, {}).includes('id="because-row"'));
+  assert.ok(!R.library(Object.assign({}, doc, { because: { title: 'x', items: [] } }), {})
+    .includes('id="because-row"'));
+});
+
+// The item page's foot: the WORK document's `similar`, drawn with the same
+// card the library draws, and nothing at all when the work has no neighbours.
+test('more like this is the work document\'s own row', () => {
+  const item = golden('item-film');
+  const work = golden('work-show');
+  assert.ok(!R.item(item, { work: work }).includes('id="similar-row"'),
+    'a work with an empty `similar` draws no row');
+
+  const like = Object.assign({}, work, { similar: golden('library').items.slice(0, 2) });
+  const html = R.item(item, { work: like });
+  const row = html.split('id="similar-row"')[1].split('</section>')[0];
+  assert.match(row, /<h3>More like this<\/h3>/);
+  assert.deepEqual(cardTitles(row), like.similar.map(t => unesc(R.esc(t.title))));
+  // It is the last thing on the page, under the details disclosure.
+  assert.ok(html.indexOf('id="detail-details"') < html.indexOf('id="similar-row"'));
+  // And every address in it still came out of the document.
+  for (const a of addresses(html)) {
+    if (a.startsWith('#')) continue;
+    assert.ok(flat(item).includes(a) || flat(like).includes(a), 'composed address: ' + a);
+  }
+});
+
 // Search filters INSIDE the sections, and a section it empties disappears
 // rather than standing as a heading over nothing.
 test('a section the search empties is not drawn', () => {
@@ -428,6 +495,47 @@ test('the show pane leads with Next up, and the play action rides it', () => {
   assert.equal((cold.match(/data-act="play"/g) || []).length, 1);
 });
 
+// The mark, on the row and on the page. Which way it goes is the document's:
+// the label says it in words and the action's `input` carries the value the
+// button sends back, so the browser decides neither.
+test('every episode row carries the tick its document offers', () => {
+  const doc = golden('work-show');
+  const html = R.work(doc);
+  for (const m of doc.members) {
+    const act = m.actions.watched;
+    assert.ok(act, m.label + ': the member offers no watched action');
+    assert.ok(html.includes('data-href="' + R.esc(act.href) + '"'), m.label + ': no tick href');
+    assert.ok(html.includes('data-watched="' + act.input.watched + '"'),
+      m.label + ': the tick does not carry the value the action named');
+    assert.ok(html.includes('title="' + R.esc(act.label) + '"'), m.label + ': no label on the tick');
+  }
+  // A member the server will not let anyone mark is a row with no tick.
+  const bare = JSON.parse(JSON.stringify(doc));
+  for (const m of bare.members) delete m.actions.watched;
+  assert.ok(!R.work(bare).includes('data-act="watched"'));
+});
+
+test('the tick beside Play says which way the next press goes', () => {
+  const doc = golden('item-film');
+  const act = doc.actions.watched;
+  const html = R.item(doc, {});
+  const above = html.split('<details id="detail-details">')[0];
+  assert.ok(above.includes('data-act="watched"'), 'the tick stands beside Play, not in the fold');
+  assert.ok(above.includes('data-href="' + R.esc(act.href) + '"'));
+  assert.ok(above.includes(R.esc(act.label)), 'labelled in the server\'s own words');
+  assert.ok(above.includes('data-watched="true"'), 'and it sends back what the action named');
+  // The other way round: the same control, the server's other label.
+  const seen = JSON.parse(JSON.stringify(doc));
+  seen.actions.watched = Object.assign({}, act, {
+    label: 'Mark unwatched', input: { watched: 'false', client_id: 'string?' },
+  });
+  const back = R.item(seen, {});
+  assert.ok(back.includes('data-watched="false"'));
+  assert.ok(back.includes('Mark unwatched'));
+  // ↺ rather than ✓: the mark is the only thing this side chooses.
+  assert.ok(back.includes('↺') && !back.includes('✓'));
+});
+
 test('a record pane lists its members with the server\'s own labels', () => {
   const html = R.work(golden('work-album'));
   assert.ok(html.includes('Track 1 · Airbag'));
@@ -448,6 +556,27 @@ test('the resume shelf draws the work title, the place and one action', () => {
     assert.ok(html.includes('data-href="' + R.esc(act.href) + '"'), en.title + ': no resume href');
     assert.ok(html.includes(R.esc(act.label)), en.title + ': no resume label');
   }
+});
+
+// Netflix's ×: the other thing a person does to a resume row.
+test('every resume row carries the × that takes it off the shelf', () => {
+  const doc = golden('continue');
+  const html = R.continueShelf(doc);
+  for (const en of doc.items) {
+    const act = en.actions.forget;
+    assert.ok(act, en.title + ': the row offers no forget action');
+    assert.ok(html.includes('data-href="' + R.esc(act.href) + '"'), en.title + ': no forget href');
+    assert.ok(html.includes('data-method="' + act.method + '"'), en.title + ': no forget method');
+    assert.ok(html.includes('title="' + R.esc(act.label) + '"'), en.title + ': no forget label');
+  }
+  // The × is a control INSIDE the row's own control, and it is drawn before
+  // the picture so a tap on it never lands on the row underneath.
+  const card = html.split('class="cw-card"')[1];
+  assert.ok(card.indexOf('data-act="forget"') < card.indexOf('poster-wrap'));
+  // A row the document does not afford dropping has no × at all.
+  const kept = JSON.parse(JSON.stringify(doc));
+  for (const en of kept.items) delete en.actions.forget;
+  assert.ok(!R.continueShelf(kept).includes('data-act="forget"'));
 });
 
 test('the player chrome is the session document, and nothing else', () => {
