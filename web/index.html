@@ -224,9 +224,24 @@
   .rd-keep:hover { background: #33579e; }
   /* the picture is a control: a click pauses it, a double tap seeks (player.js) */
   video { width: 100%; max-height: 58vh; background: #000; border-radius: 8px; cursor: pointer; }
-  body.casting video { opacity: 0.25; }
-  #cast-overlay { display: none; font-size: 14px; color: var(--accent); margin: 6px 0; }
-  body.casting #cast-overlay { display: block; }
+  /* casting: the page IS the remote (#cast-remote, player.js). A dimmed
+     picture of what the television is showing is neither watchable nor a
+     control, so the video goes and the artwork stands in its place; the
+     transport below already drives the receiver, so it only grows a thumb. */
+  body.casting video, body.casting #tap-to-play, body.casting #seek-ripple { display: none; }
+  #cast-remote { display: none; }
+  body.casting #cast-remote { display: flex; gap: 20px; align-items: center; flex-wrap: wrap;
+    padding: 20px; border: 1px solid #3a3d47; border-radius: 8px; background: #1b1d24; }
+  #cast-art { width: 240px; max-width: 45vw; border-radius: 6px; background: #000; }
+  #cast-what { flex: 1; min-width: 220px; display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
+  #cast-title { font-size: 22px; font-weight: 600; line-height: 1.2; }
+  #cast-work { font-size: 14px; color: var(--muted); }
+  #cast-to { font-size: 14px; color: var(--accent); }
+  #btn-cast-stop { margin-top: 8px; }
+  body.casting #controls button { min-width: 56px; font-size: 20px; padding: 10px 16px; }
+  body.casting #controls input[type=range] { width: 160px; }
+  /* nothing to take fullscreen when the picture is on the other device */
+  body.casting #btn-fs { display: none; }
   #scrub { position: relative; height: 22px; margin: 10px 0 2px; cursor: pointer; }
   #scrub .rail { position: absolute; left: 0; right: 0; top: 8px; height: 6px; background: #2a2c33; border-radius: 3px; }
   #scrub .avail { position: absolute; left: 0; top: 8px; height: 6px; background: #3d4250; border-radius: 3px; width: 0; }

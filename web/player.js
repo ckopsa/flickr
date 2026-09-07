@@ -116,7 +116,20 @@
       '<button id="tap-to-play" hidden>▶ Tap to play</button>' +
       // What a double tap answers with, so the finger knows it landed.
       '<div id="seek-ripple" hidden></div>' +
-      '<div id="cast-overlay">▶ Casting to <span id="cast-device"></span></div>' +
+      // While casting, the page is the REMOTE: no dimmed picture of what the
+      // television is showing, but the artwork, the names and the device,
+      // over the same transport below. What it says is the session
+      // document's, filled in by paintCastRemote; CSS shows it (body.casting
+      // in index.html) and hides the video.
+      '<div id="cast-remote">' +
+        '<img id="cast-art" alt="" hidden>' +
+        '<div id="cast-what">' +
+          '<div id="cast-title"></div>' +
+          '<div id="cast-work"></div>' +
+          '<div id="cast-to">▶ Casting to <span id="cast-device"></span></div>' +
+          '<button id="btn-cast-stop">Stop casting</button>' +
+        '</div>' +
+      '</div>' +
       '<div id="transport">' +
         '<div id="scrub"><div class="rail"></div><div class="avail"></div><div class="fill"></div>' +
           '<div id="thumb" hidden><div id="thumb-img"></div><div id="thumb-time"></div></div></div>' +
@@ -260,6 +273,20 @@
     if (tr) tr.innerHTML = t.trace;
   }
 
+  // The remote's face, and every word of it the SESSION DOCUMENT's: the
+  // artwork it carries, its own name for what plays and the work it belongs
+  // to. Painted on adopt, so a document swap redraws it.
+  function paintCastRemote() {
+    const art = $('cast-art');
+    if (!art) return;
+    const href = R.artworkOf(session);
+    art.hidden = !href;
+    if (href) art.src = href;
+    const links = (session && session.links) || {};
+    $('cast-title').textContent = (session && session.title) || '';
+    $('cast-work').textContent = (links.work && links.work.title) || '';
+  }
+
   function renderChapters() {
     const pane = $('chapters');
     if (!pane || !scrub) return;
@@ -396,6 +423,7 @@
   function adopt(s) {
     session = s;
     K.renderSession(s);
+    paintCastRemote();
   }
 
   // holdSession lets the reader's sitting share this one's exit: a book's
@@ -784,6 +812,7 @@
       if (t.id === 'btn-mute') { toggleMute(); return; }
       if (t.id === 'btn-fs') { toggleFullscreen(); return; }
       if (t.id === 'btn-autoplay') { setAutoplay(!autoplayNext); return; }
+      if (t.id === 'btn-cast-stop') { stopCasting(); return; }
     });
 
     // The picture is a control too, now that no native bar is drawn over it.
@@ -972,6 +1001,7 @@
       const s = root.cast.framework.CastContext.getInstance().getCurrentSession();
       const dev = s && s.getCastDevice();
       if ($('cast-device')) $('cast-device').textContent = (dev && dev.friendlyName) || 'Chromecast';
+      paintCastRemote();
       video.pause();
     }
     if (item) {
@@ -979,6 +1009,13 @@
       const act = R.actionOf(item, 'play');
       if (act) startPlayback(act, pos > 5 ? pos : 0);
     }
+  }
+
+  // Stop casting hands the sitting back to this page: ending the session
+  // fires IS_CONNECTED_CHANGED, and the handler above restarts the play here.
+  function stopCasting() {
+    const f = root.cast && root.cast.framework;
+    if (f) f.CastContext.getInstance().endCurrentSession(true);
   }
 
   // The receiver is handed the SESSION DOCUMENT, not a pile of fields this
