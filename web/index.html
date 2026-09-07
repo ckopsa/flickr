@@ -544,6 +544,67 @@
     google-cast-launcher { width: 44px; height: 44px; }
   }
 
+  /* --- ten foot: the same page, read from a sofa ----------------------------
+
+     Not a breakpoint. A television is a WIDE screen at a distance, driven by
+     four arrows, and every one of those is the opposite of what a wide desktop
+     window wants — so it is a mode kernel.js puts on <body> (from the gear, or
+     guessed from a TV user agent), not a media query. Three things change: the
+     type is set for a room, the posters come six to a row rather than as many
+     as fit, and the focus ring LIFTS the card, because a 2px outline is
+     invisible across a lounge. Everything else is the page as it was. */
+  body[data-ten-foot] { font-size: 17px; }
+  body[data-ten-foot] header, body[data-ten-foot] #view, body[data-ten-foot] #stage {
+    padding-inline: max(48px, calc((100% - 1720px) / 2)); }
+  body[data-ten-foot] header { padding-block: 18px; gap: 16px; }
+  body[data-ten-foot] header h1 { font-size: 24px; }
+  body[data-ten-foot] button, body[data-ten-foot] select,
+  body[data-ten-foot] input[type=text], body[data-ten-foot] input[type=number] {
+    font-size: 17px; padding: 10px 18px; }
+  body[data-ten-foot] #search { width: 340px; }
+  /* six to a row, and the rows scroll as rows of six */
+  body[data-ten-foot] .band { margin-top: 30px; }
+  body[data-ten-foot] .band > h3, body[data-ten-foot] #cw h3 { font-size: 19px; margin-bottom: 14px; }
+  body[data-ten-foot] .band-grid { grid-template-columns: repeat(6, 1fr); gap: 26px; }
+  body[data-ten-foot] .band-row, body[data-ten-foot] #cw-row { gap: 26px; }
+  body[data-ten-foot] .band-row > .card, body[data-ten-foot] .cw-card {
+    flex: 0 0 calc((100% - 5 * 26px) / 6); }
+  body[data-ten-foot] .card .c-title, body[data-ten-foot] .cw-card .c-title { font-size: 16px; }
+  body[data-ten-foot] .card .c-sub, body[data-ten-foot] .cw-card .c-sub,
+  body[data-ten-foot] .cw-card .cw-act { font-size: 14px; }
+  body[data-ten-foot] .hero-title { font-size: 40px; }
+  body[data-ten-foot] .hero-line { font-size: 18px; }
+  body[data-ten-foot] .hero-act, body[data-ten-foot] #detail-play,
+  body[data-ten-foot] .act.primary { font-size: 20px; padding: 14px 38px; }
+  body[data-ten-foot] #hero { min-height: 380px; }
+  body[data-ten-foot] #detail-body h2 { font-size: 34px; }
+  body[data-ten-foot] #detail-poster { width: 260px; }
+  body[data-ten-foot] #detail-overview, body[data-ten-foot] #detail-cast { font-size: 18px; max-width: 900px; }
+  body[data-ten-foot] .item { padding: 15px 20px; }
+  body[data-ten-foot] .item .title { font-size: 18px; }
+  body[data-ten-foot] .item .meta, body[data-ten-foot] #show-progress { font-size: 15px; }
+  body[data-ten-foot] .season > summary { font-size: 17px; padding: 15px 20px; }
+  /* the lift needs room to grow into, and a scrolling row would clip it */
+  body[data-ten-foot] .band-grid, body[data-ten-foot] .band-row, body[data-ten-foot] #cw-row {
+    padding-block: 14px; }
+  body[data-ten-foot] .card, body[data-ten-foot] .cw-card, body[data-ten-foot] #hero {
+    transition: transform 140ms ease; }
+  body[data-ten-foot] .card:focus, body[data-ten-foot] .cw-card:focus,
+  body[data-ten-foot] #hero:focus {
+    outline: none; position: relative; z-index: 2; transform: scale(1.08); }
+  /* an episode row is already the width of the page: it lights up, it does
+     not grow */
+  body[data-ten-foot] .item:focus { background: #1e222c; }
+  body[data-ten-foot] .card:focus .poster-wrap, body[data-ten-foot] .cw-card:focus .poster-wrap {
+    outline: 4px solid var(--accent); outline-offset: 4px; }
+  body[data-ten-foot] #hero:focus, body[data-ten-foot] .item:focus {
+    outline: 4px solid var(--accent); outline-offset: 2px; }
+  /* everything that is not a card keeps the ring, drawn thick enough to see */
+  body[data-ten-foot] button:focus, body[data-ten-foot] select:focus,
+  body[data-ten-foot] input:focus, body[data-ten-foot] a:focus,
+  body[data-ten-foot] summary:focus {
+    outline: 4px solid var(--accent); outline-offset: 3px; }
+
   /* where the keyboard is: one ring, the accent, on everything that acts.
      [tabindex] catches whatever else is made focusable later. */
   button:focus-visible, select:focus-visible, input:focus-visible, a:focus-visible,
@@ -567,6 +628,9 @@
   @media (prefers-reduced-motion: reduce) {
     .poster-wrap, #detail-poster { animation: none; }
     .poster-wrap img { transition: none; }
+    /* the ten-foot ring is still a lift — it just arrives rather than grows */
+    body[data-ten-foot] .card, body[data-ten-foot] .cw-card, body[data-ten-foot] #hero {
+      transition: none; }
     ::view-transition-group(*), ::view-transition-old(*), ::view-transition-new(*) {
       animation: none !important; }
   }
@@ -602,6 +666,9 @@
     </div>
     <div class="set-row">
       <button id="settings-autoplay"></button>
+    </div>
+    <div class="set-row">
+      <button id="settings-tenfoot"></button>
     </div>
     <div class="set-row">
       <button id="scan">Scan library</button>
@@ -656,6 +723,9 @@
 <!-- the passage grammar and the clock predicates: pure functions, shared with
      web/passage_test.mjs -->
 <script src="passage.js"></script>
+<!-- the D-pad's arithmetic: which card an arrow points at, over bounding
+     rects alone, so web/focus_test.mjs can drive it with no DOM at all -->
+<script src="focus.js"></script>
 <!-- the cast bridge: the session document read into a load, shared with the
      custom receiver (web/receiver.html) and tested by web/cast_test.mjs -->
 <script src="cast.js"></script>

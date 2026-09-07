@@ -55,7 +55,7 @@
 // v19: the readers' dark page; v20: the book's own choice about its
 // pictures (session.display), the 🖼 button in both panes.
 const CACHE = 'flickr-shell-v23';
-const SHELL = ['/', '/index.html', '/passage.js', '/cast.js', '/audio.css',
+const SHELL = ['/', '/index.html', '/passage.js', '/focus.js', '/cast.js', '/audio.css',
                '/renderers.js', '/player.js', '/kernel.js',
                '/reader.js', '/pdfreader.js',
                '/vendor/jszip.min.js', '/vendor/epub.min.js',

@@ -690,7 +690,129 @@
   }
   function openSettings() {
     paintAutoplay();
+    paintTenFoot();
     $('settings').hidden = false;
+  }
+
+  // --- ten-foot mode -----------------------------------------------------------
+  //
+  // A television is a screen nobody touches, read from a sofa and driven by
+  // four arrows and an OK button. Ten-foot mode is that room: the attribute on
+  // <body> is the whole of the layout (index.html sets the type scale, the
+  // six-up grid and a focus ring that LIFTS the card), and the arrows below
+  // are the rest — because a web page moves focus for none of them.
+  //
+  // Guessed on the first visit and remembered after: a wide screen, no finger,
+  // and a user agent that says television. Any one of those alone is a desktop
+  // at a desk, which is not this room. The gear overrules the guess either way.
+  const TV_UA = /\b(smart-?tv|googletv|appletv|hbbtv|netcast|web0s|webos|tizen|viera|bravia|aftb|aftm|aftt|crkey|playstation|xbox)\b/i;
+
+  function looksLikeTV() {
+    try {
+      return window.innerWidth >= 1280 &&
+        !matchMedia('(pointer: coarse)').matches &&
+        TV_UA.test(navigator.userAgent || '');
+    } catch (e) { return false; }
+  }
+
+  let tenFoot = false;
+  function setTenFoot(on) {
+    tenFoot = !!on;
+    document.body.toggleAttribute('data-ten-foot', tenFoot);
+    try { localStorage.tenFoot = tenFoot ? 'on' : 'off'; } catch (e) { /* no storage: the guess stands */ }
+    paintTenFoot();
+  }
+  function paintTenFoot() {
+    const b = $('settings-tenfoot');
+    if (b) b.textContent = 'Ten-foot mode: ' + (tenFoot ? 'on' : 'off');
+  }
+
+  // What the arrows may land on, in document order, each with the box it
+  // occupies. Anything the layout folded away has no box — the view under a
+  // raised stage, a closed season — and a thing with no box is not there to be
+  // reached.
+  const FOCUSABLE = 'a[href], button:not([disabled]), select:not([disabled]), ' +
+    'input:not([disabled]), summary, [tabindex]:not([tabindex="-1"])';
+
+  // A panel over the page takes the arrows with it: nothing behind the gate or
+  // the gear is reachable for as long as one of them is up.
+  function focusRoot() {
+    if (!$('gate').hidden) return $('gate');
+    if (!$('settings').hidden) return $('settings');
+    return document;
+  }
+
+  function focusables() {
+    const out = [];
+    for (const el of focusRoot().querySelectorAll(FOCUSABLE)) {
+      const box = el.getBoundingClientRect();
+      if (box.width <= 0 || box.height <= 0) continue;
+      out.push({ el: el, box: box });
+    }
+    return out;
+  }
+
+  const ARROWS = { ArrowLeft: 'left', ArrowRight: 'right', ArrowUp: 'up', ArrowDown: 'down' };
+
+  // The DEVICES own the arrows for as long as they are up: the player seeks
+  // with them and the reader turns pages with them, and both bind the same
+  // document keydown this file does. Focus inside the stage — or nowhere at
+  // all — is theirs; a control the viewer has already stepped out to is not.
+  function stageOwnsArrows(t) {
+    const stage = $('stage');
+    if (!stage || stage.hidden) return false;
+    return !t || t === document.body || !t.closest || !!t.closest('#stage');
+  }
+
+  function typingIn(t) {
+    return !!(t && (t.isContentEditable || /^(INPUT|SELECT|TEXTAREA)$/.test(t.tagName)));
+  }
+
+  // Move the ring one step in the arrow's direction, and say whether it moved:
+  // an arrow that reaches nothing is left to whoever else wants it.
+  function moveFocus(dir) {
+    const items = focusables();
+    if (!items.length) return false;
+    const active = document.activeElement;
+    const here = items.find(c => c.el === active);
+    const i = root.Focus.pick(here ? here.box : null, items.map(c => c.box), dir);
+    if (i < 0) return false;
+    const el = items[i].el;
+    el.focus();
+    // A card the row has scrolled past is brought into the room rather than
+    // focused off the edge of it.
+    if (el.scrollIntoView) el.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    return true;
+  }
+
+  function onArrow(e) {
+    const dir = ARROWS[e.key];
+    if (!dir || e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return false;
+    if (typingIn(e.target) || stageOwnsArrows(e.target)) return false;
+    if (!moveFocus(dir)) return false;
+    e.preventDefault(); // the arrows would scroll the page out from under the ring
+    return true;
+  }
+
+  // Back, as a remote sends it. The panels close first, then the sitting, then
+  // the page's own history. Escape while the stage is up is left alone: the
+  // device's Escape already leaves fullscreen and the help card before it
+  // leaves the sitting, and that order is better than this one.
+  function onBackKey(e) {
+    if (e.key !== 'Backspace' && e.key !== 'Escape') return false;
+    if (typingIn(e.target)) return false;
+    if (!$('gate').hidden) return false; // who is watching has no way past
+    if (!$('settings').hidden) { $('settings').hidden = true; e.preventDefault(); return true; }
+    if (!$('stage').hidden) {
+      if (e.key === 'Escape') return false;
+      if (playsOn()) collapse(); else closeStage();
+      applyRoute();
+      e.preventDefault();
+      return true;
+    }
+    e.preventDefault();
+    history.back();
+    return true;
   }
 
   // --- the scan ----------------------------------------------------------------
@@ -802,6 +924,10 @@
   // Space on one are handed to the same delegation, which already knows how to
   // read a control. Native controls keep their own behaviour.
   function onKeydown(e) {
+    // On a television the arrows are the only pointer there is, so they move
+    // the ring; Backspace is the remote's Back. Neither means anything at a
+    // desk, which is why both are ten-foot mode's alone.
+    if (tenFoot && !e.defaultPrevented && (onArrow(e) || onBackKey(e))) return;
     if (e.key !== 'Enter' && e.key !== ' ' && e.key !== 'Spacebar') return;
     const t = e.target;
     if (!t || !t.closest) return;
@@ -885,6 +1011,11 @@
     $('settings-close').onclick = () => { $('settings').hidden = true; };
     $('settings').onclick = e => { if (e.target.id === 'settings') $('settings').hidden = true; };
     $('settings-autoplay').onclick = () => { root.Player.setAutoplay(!root.Player.autoplay()); paintAutoplay(); };
+    $('settings-tenfoot').onclick = () => setTenFoot(!tenFoot);
+    // Remembered if it was ever chosen, guessed if it was not.
+    let remembered = null;
+    try { remembered = localStorage.tenFoot || null; } catch (e) { /* no storage */ }
+    setTenFoot(remembered ? remembered === 'on' : looksLikeTV());
 
     // The shell is cache-first (sw.js), so the first visit after a deploy runs
     // the OLD index.html while the new worker installs behind it. When a new
