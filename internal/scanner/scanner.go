@@ -304,7 +304,7 @@ func (s *Scanner) ReprobeKey(ctx context.Context, objectKey string) (*store.Item
 		return nil, err
 	}
 	item := s.probeOne(ctx, probeJob{
-		obj:      minio.ObjectInfo{Key: objectKey, ETag: stat.ETag, Size: stat.Size},
+		obj:      minio.ObjectInfo{Key: objectKey, ETag: stat.ETag, Size: stat.Size, LastModified: stat.LastModified},
 		sidecars: s.listSidecars(ctx, objectKey),
 	})
 	if err := s.Library.UpsertBatch([]store.Item{item}); err != nil {
@@ -352,6 +352,11 @@ func (s *Scanner) probeOne(ctx context.Context, job probeJob) store.Item {
 		ProbeVersion:    ProbeVersion,
 		IdentityVersion: IdentityVersion,
 		SidecarSig:      sidecarSignature(job.sidecars),
+		// When the file arrived. The listing pass already knows — every
+		// object carries its LastModified — so a first scan of an old
+		// library gets the real dates rather than "everything, today". The
+		// store stamps it on insert only.
+		AddedAt: obj.LastModified,
 	}
 	ident := Identify(obj.Key)
 	item.Identity = &ident

@@ -15,6 +15,14 @@
   "item_count": 2,
   "representative_item_id": 5,
   "profile": "chris",
+  "progress": {
+    "status": "unwatched",
+    "fraction": 0,
+    "next": {
+      "href": "/api/items/5",
+      "title": "Track 1 · Airbag"
+    }
+  },
   "places": [],
   "members": [
     {

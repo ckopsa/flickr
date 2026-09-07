@@ -32,7 +32,9 @@ a handful of architectural decisions (see design notes below):
    still that movie. The result is a library where every file hangs off a
    movie or a show, and only a movie or a show is ever a tile.
    TMDB enrichment (title, overview,
-   poster, genres) is a separate post-scan stage keyed off identity;
+   poster, backdrop, genres, and — from one detail call per title —
+   runtime, the US certification and the top-billed cast) is a separate
+   post-scan stage keyed off identity;
    episodes additionally get per-episode title/overview/still from one
    `/tv/{id}/season/{n}` call per show-season per run. Enrichment is
    invalidated automatically when an item's identity changes, is versioned
@@ -69,9 +71,13 @@ a handful of architectural decisions (see design notes below):
    item at a time under `data/trickplay/<id>/`, written atomically, yielding
    to live playback exactly like scans do; `TRICKPLAY=0` disables the stage.
    The web UI shows hover previews on the scrub bar when the sidecar exists.
-11. **Profiles and telemetry stay lightweight** — user profiles are names in
-   `state.db` (`/api/users`); clients pass the profile name as `client_id` to
-   the unchanged progress API. `POST /api/telemetry` appends any JSON object
+11. **Profiles and telemetry stay lightweight** — user profiles are a name,
+   an avatar and a `kid` flag in `state.db` (`/api/users`); clients pass the
+   profile name as `client_id` to the unchanged progress API. A kid profile
+   is not a second library: the library, search, continue and route documents
+   leave out every work whose `certification` is above PG / TV-PG (and every
+   work nobody has rated), and a play addressed straight at one is refused
+   with `not-for-this-profile`. `POST /api/telemetry` appends any JSON object
    to `data/telemetry.jsonl` for client-side error forensics.
 12. **Self-description feed** — the library can describe itself as WORKS
    rather than files: `internal/works` purely derives one work per movie and
@@ -300,7 +306,7 @@ probe found no count). Audio plays (design note 14) and text reads (15, 16).
 ```sh
 cp .env.example .env   # fill in MinIO credentials
 go run ./cmd/server
-# open http://localhost:8080, hit "Scan library"
+# open http://localhost:8080, then ⚙ settings → "Scan library"
 ```
 
 Requires `ffmpeg`/`ffprobe` on PATH. Media files are read straight from MinIO
@@ -352,15 +358,15 @@ rewrites them.
 | Document | Address | Carries | Actions | Refuses with |
 |---|---|---|---|---|
 | **root** | `GET /api/` | `profile` — who is asking, from the `client_id` query parameter or the cookie of that name — and the links `library`, `continue`, `artists`, `works`, `items`, `scan`, `system`, `profiles` | `scan`, `create_profile`, and `route`: the address that turns a hash into a document. It is named here because `/api/` is the only address a client knows by heart, so the resolver has to be reachable from it | — |
-| **library** | `GET /api/library` | `count`, `items` — one tile per thing in the order the grid draws them (see *Library layout*) — and `facets.genre` for the chip row; links `root`, `continue`, `artists`. A tile is a small envelope: `self` and `links.self` (the work or the artist document), `kind` (`work`/`artist`), `title`, `subtitle` ("1 season · 2 episodes · 1 extra", "Frank Herbert · 1965 · 2 parts", "3 albums"), `tech`, `medium`, `work_kind`, `year`, `genres`, `item_id` (the member a tap opens), `search` (what the search box matches) and `links.artwork`, the poster or the file's own cover, chosen here rather than in the browser | — | — |
-| **work** | `GET /api/works/{key}` | `work_kind` and everything `works.Build` derives, `members` in order as item envelopes, `places` — the passage grammar's tokens with the label a chip shows (`S03E22 0:00` · "S03E22 · Beach Games", `1:19:00` · "Let It Go", `ch. 7` · "The Cellar") — the asking `profile` and their `progress` (`status`, `fraction`, `text`, and `next`, where they would pick up); links `items`, `poster` or `cover` | `play` (the representative, or the first member this profile has not finished — the label says which) or `read` for a book, and `passage`, which mints a link from two of the `places` | `no-such-work` 404 |
-| **item** | `GET /api/items/{id}` | `medium`, `label`, `tech` (what the file IS), `overview` (the episode's own synopsis, or the work's), `year`, `extra: true` for bonus material, `identity`, `enrichment`, `media_info` (chapters, sections, page count, audio tracks), `subtitles` with their `.vtt` addresses, `probe_error`, and `resume` — where the asking profile left off, so nothing has to ask a progress route for it; links `work`, `prev`, `next` (the work's own order, bonus material aside), `poster`/`still`/`cover`/`trickplay`/`book` | `play` or `read`, `progress`, and on the item's own page `identity`, `reprobe`, `enrich` | `bad-item-id` 400, `no-such-item` 404 |
+| **library** | `GET /api/library` | `count`, `items` — one tile per thing in the order the grid draws them (see *Library layout*) — `facets.genre` for the chip row, and `recently_added` — the newest twelve works by their members' `added_at`, as the same tiles; links `root`, `continue`, `artists`. A tile is a small envelope: `self` and `links.self` (the work or the artist document), `kind` (`work`/`artist`), `title`, `subtitle` ("1 season · 2 episodes · 1 extra", "Frank Herbert · 1965 · 2 parts", "3 albums"), `tech`, `medium`, `work_kind`, `year`, `genres`, `item_id` (the member a tap opens), `search` (what the search box matches), `links.artwork` — the poster or the file's own cover, chosen here rather than in the browser — and `links.backdrop`, the wide picture, where the enrichment fetched one | — | — |
+| **work** | `GET /api/works/{key}` | `work_kind` and everything `works.Build` derives, `members` in order as item envelopes, `places` — the passage grammar's tokens with the label a chip shows (`S03E22 0:00` · "S03E22 · Beach Games", `1:19:00` · "Let It Go", `ch. 7` · "The Cellar") — the asking `profile` and their `progress` (`status`, `fraction`, `text`, and `next`, where they would pick up), and what TMDB knows about the title — `runtime_minutes`, `certification`, `cast` — said once here rather than repeated down `members`; links `items`, `poster` or `cover`, and `backdrop` | `play` (the representative, or the first member this profile has not finished — the label says which) or `read` for a book, and `passage`, which mints a link from two of the `places` | `no-such-work` 404 |
+| **item** | `GET /api/items/{id}` | `medium`, `label`, `tech` (what the file IS), `overview` (the episode's own synopsis, or the work's), `year`, `extra: true` for bonus material, `runtime_minutes`, `certification` and `cast` on the item's own page, `identity`, `enrichment`, `media_info` (chapters, sections, page count, audio tracks), `subtitles` with their `.vtt` addresses, `probe_error`, and `resume` — where the asking profile left off, so nothing has to ask a progress route for it; links `work`, `prev`, `next` (the work's own order, bonus material aside), `poster`/`backdrop`/`still`/`cover`/`trickplay`/`book` | `play` or `read`, `progress`, and on the item's own page `identity`, `reprobe`, `enrich` | `bad-item-id` 400, `no-such-item` 404 |
 | **session** (a play) | opened by `POST /api/items/{id}/play`, re-read at `GET /api/sessions/{id}` | one play — direct play included, which used to have no id: `method`, `url`, `content_type`, `seek_seconds` (where the bytes begin), `video_encoder`, `started_at`, the `decision` and its trace, the `passage` resolved with `ends_at` (the bound that applies to THIS item, and nothing at all for the earlier items of a run) and the `marks` being made; links `item`, `back`, `work`, `next`, `artwork` | `progress`, `keep_watching`, `stop`, `next`, `mark_in`, `mark_out`, `link` | `passage-on` 409, `no-such-session` 404, `no-next-member` 409, `unprobed-item` 409, `no-in-point` 409, `no-such-mark` 404, `playback-denied` 403 |
 | **session** (a reading) | opened by `POST /api/items/{id}/read`, re-read at the same `GET /api/sessions/{id}` | the same envelope in the units a book has: `method: "read"`, `format` (`epub`/`pdf`), `etag`, `sections` (the contents, `index` + `title`) or `page_count`, the profile's saved `locator` (or null), and the `passage` resolved — `from`/`to` as locators, the `from_section`/`to_section` or `from_page`/`to_page` they land on, and `ends_at`; links `book` (the bytes), `item`, `back`, `work` | `progress`, `keep_reading`, `stop` | `not-a-book` 415, `passage-on` 409, `no-such-session` 404 |
 | **artist** | `GET /api/artists/{name}` | one name's shelf: `name` as the shelf spells it (the match is case-insensitive), `album_count`, `track_count`, and `albums` in year order — the year-less last — as the same tiles the grid draws, with their covers; links `artwork`, `library` | — | `no-such-artist` 404 |
 | **continue** | `GET /api/continue?client_id=NAME` | the resume shelf: `count` and `items`, one per work, each an item envelope with the `work_title` over its own `label`, `position_seconds` (or a book's `fraction`), `percent` — the bar's width in one unit for every medium — and `links.artwork`: the episode's still, the film's poster, the record's or the book's cover, and the work's picture when this one file has none; links `root`, `library` | per entry: `resume`, labelled in the verb the medium uses ("▶ Resume", "Keep reading") | `no-profile` 400 |
 | **route** | `GET /api/-/route?hash=…` | what a hash means: `view` (`library`, `work`, `artist`, `item`), the `document` to render it from, the `passage` resolved — episode codes to item ids, text locators to a book's spine sections or a PDF's pages — and `autoplay`, true for a text passage as for a timed one. For `work` and `item` the document is the whole thing; for `library` and `artist` it is a stub naming the shelf (`links.library`, `links.artist`), one relation away. See *Deep links and passages* | — | `no-such-show`, `no-such-episode`, `no-such-artist`, `no-such-item` 404, `bad-hash` 400 |
-| **passage** | `GET /api/-/passage?item=&t=&end=[&until=]` or `GET /api/-/passage?work=&from=&to=` | a minted link: its absolute `href`, the `sentence` that says it (`S03E22 2:22 – 14:14 of Beach Games`), the `passage` itself, and `links.item` — the item it starts in | — | `bad-item-id`, `empty-passage`, `run-leaves-the-work`, `no-such-place` 400, `no-such-item`, `no-such-work` 404 |
+| **passage** | `GET /api/-/passage?item=&t=&end=[&until=]` or `GET /api/-/passage?work=&from=&to=` | a minted link: its absolute `href`, the `share_href` beside it (the same passage as a PATH, `/s/item/…`, which is the spelling that unfurls), the `sentence` that says it (`S03E22 2:22 – 14:14 of Beach Games`), the `passage` itself, and `links.item` — the item it starts in | — | `bad-item-id`, `empty-passage`, `run-leaves-the-work`, `no-such-place` 400, `no-such-item`, `no-such-work` 404 |
 
 Anything failing below a handler is `server-error` 500 in that same envelope,
 and a document that will not marshal is `document-broken` 500 rather than a
@@ -393,7 +399,7 @@ this list:
 | `reprobe` | `POST /api/items/{id}/reprobe` | re-probe one item (also re-discovering subtitle sidecars in its directory) |
 | `enrich` | `POST /api/items/{id}/enrich` | TMDB-enrich one item (503 without an API key, which is why it is usually an `unavailable`) |
 | `scan` | `POST /api/scan` | trigger the incremental scan; enrichment runs after |
-| `create_profile` | `POST /api/users` | idempotently create a profile name |
+| `create_profile` | `POST /api/users` | idempotently create a profile: a `name`, optionally an `avatar` and `kid` |
 | `passage` | `GET /api/-/passage?work=…` | mint a link from two of the work's `places` |
 | `route` | `GET /api/-/route?hash=…` | resolve a hash into a view and a document |
 
@@ -510,15 +516,16 @@ tools, for waymark, and for the by-hand call.
 | `GET /api/artists` | the album works shelved by artist, name-sorted, `[]` without music | the root's `artists` link; the artist DOCUMENT is `/api/artists/{name}` |
 | `POST /api/progress`, `GET /api/progress` | the position store: `position_seconds` for video and audio; for text also `locator` (an EPUB CFI), `fraction` (0..1) and `section`, and for a PDF `page`. GET returns the text fields only when the row holds a locator | the item document's `progress` action. It answers **409 `passage-on`** too, when that item has a live passage session for that profile |
 | `POST /api/items/{id}/decision` | dry run: the decision and its trace, no side effects (415 for text) | by hand, and by the capability presets in the UI |
-| `GET /api/items/{id}/poster`, `/still`, `/cover` | artwork: the cached TMDB poster or episode still; `/cover` is an audio file's attached picture or a book's OPF cover image, extracted once into `data/covers/` and falling back to the poster route (404 when there is none, and a PDF never names one) | `links.artwork`, `links.poster`, `links.still`, `links.cover` |
+| `GET /api/items/{id}/poster`, `/backdrop`, `/still`, `/cover` | artwork: the cached TMDB poster, the wide backdrop a screen leads with, or the episode still; `/cover` is an audio file's attached picture or a book's OPF cover image, extracted once into `data/covers/` and falling back to the poster route (404 when there is none, and a PDF never names one) | `links.artwork`, `links.poster`, `links.backdrop`, `links.still`, `links.cover` |
 | `GET /api/items/{id}/book` | a text item's bytes, `application/epub+zip` or `application/pdf`, Range honoured | the reading session's `links.book` |
 | `GET /api/items/{id}/subtitles/{ordinal}.vtt` | one subtitle track as WebVTT, embedded or external sidecar (415 for bitmap tracks) | the item document's `subtitles[].href` — a bitmap track carries none, so a screen that only offers what has an href is right by construction |
 | `GET /api/items/{id}/trickplay.json`, `GET /api/items/{id}/trickplay/{n}.jpg` | the scrub-preview sprite index and its sheets | `links.trickplay` |
 | `POST /api/items/{id}/trickplay` | force-generate sprites for one item, synchronously | by hand |
 | `POST /api/scan`, `GET /api/scan` | trigger and observe the incremental scan (enrichment runs after) | the root's `scan` action and `scan` link |
 | `GET /api/system` | the hardware-accel accept/reject trace, and the LAN-reachable `base_url` a cast device needs | the root's `system` link |
-| `GET /api/users`, `POST /api/users` | list and idempotently create profile names (a client passes the name as `client_id`) | the root's `profiles` link and `create_profile` action |
+| `GET /api/users`, `POST /api/users` | list and idempotently create profiles — `name` (which a client passes as `client_id`), `avatar` (chosen for it when none is given) and `kid` | the root's `profiles` link and `create_profile` action |
 | `POST /api/telemetry` | append any JSON object to `data/telemetry.jsonl`; always 200 | no document names it: the cast receiver posts to it by a literal of its own, since it runs on the TV and reads no root |
+| `GET /s/…` | the share page: the hash grammar said as a path (`/s/item/4?t=4740&end=5070`, `/s/show/The%20Office?ep=S03E22`), answered as a small HTML page with the Open Graph tags a chat window unfurls and a redirect to the hash form. See *Making a passage* | the `share_href` on a minted link — and whatever it was pasted into |
 | `GET /streams/…` | the HLS output of a transcode session; every fetch counts as liveness for the idle reaper | the session document's `url` |
 | `GET /` and the rest of `web/` | the app shell, served with `Cache-Control: no-cache` | the browser |
 
@@ -543,6 +550,7 @@ view has one, and every link minted so far keeps working.
 | `#/show/<title>` | a show's episode list (`<title>` is `encodeURIComponent`'d, matched case-insensitively against both the show's own title and the one its files spell) |
 | `#/artist/<name>` | an artist's shelf: albums with covers, in year order (`<name>` is `encodeURIComponent`'d, matched case-insensitively) |
 | `#/item/<id>` | one item's detail pane; for an audiobook part or a track, the record pane with the work's parts beside it |
+| `#/search/<q>` | what one substring finds across the whole library, in groups: titles, episodes, tracks, parts, books (`<q>` is `encodeURIComponent`'d, matched case-insensitively) |
 
 A **passage** is a start and an end within a work — a scene, or a run of
 episodes, or two chapters of a book — and other systems mint links to them,
@@ -714,8 +722,9 @@ The same link can be **composed rather than marked**, by
   rules hold whether a person marked the passage or picked it. This is the
   address the work document's `passage` action points at.
 
-Both answer the same document: the absolute `href`, the `sentence`, the
-`passage`, and `links.item` — the item the passage starts in. Both refuse in
+Both answer the same document: the absolute `href`, the `share_href` beside
+it, the `sentence`, the `passage`, and `links.item` — the item the passage
+starts in. Both refuse in
 the same envelope: a passage with nowhere to start is `empty-passage`, a
 token the work does not publish (a bare time on a show, which has more than
 one file; an episode it has not; anything that is no place at all) is
@@ -723,6 +732,20 @@ one file; an episode it has not; anything that is no place at all) is
 own work is `run-leaves-the-work` — each with a remedy pointing back at the
 work or the item the caller named, which is where the places it does offer
 are listed.
+
+**A passage link unfurls.** A hash never reaches a server, so
+`#/item/4?t=4740&end=5070` pasted into the family chat is a bare origin with
+nothing to preview. `share_href` is the same passage said as a PATH —
+`GET /s/item/4?t=4740&end=5070`, and `/s/show/<title>?ep=…` for the show
+form — which does reach us: a small HTML page whose Open Graph tags are the
+passage's own `sentence` (`og:title`), the work's overview
+(`og:description`) and its still or poster made absolute (`og:image`), and
+whose body is a `<meta http-equiv=refresh>` and a one-line script that hand
+the browser on to the hash form. Nothing is resolved twice: the path after
+`/s` IS the hash, so `GET /api/-/route`'s own resolver answers it and the
+sentence is the minted link's (`cmd/server/share.go`). A link to something
+the library no longer holds answers 404 with the refusal as its title, and
+still hands the browser on — the client shows the same sentence in words.
 
 `web/passage.js` is what is left of the grammar on the browser's side: the
 hash spellings (`splitHash`, `parsePassage`, `passageQuery`, `parseLocator`)
@@ -920,6 +943,16 @@ node --test web/*_test.mjs
   `internal/passage`'s Go table, so the two files read side by side.
 - `web/cast_test.mjs` covers the cast bridge's reading of the session
   document: the load spec, the end bound in each clock, the start time.
+
+**The page itself, in a browser.** `node scripts/browser-smoke.mjs` stands the
+fixture library up on a port (`cmd/server/smoke_test.go`, built with
+`-tags smoke`; the media it plays is a WebM Playwright records off a page and
+a WAV written by hand, the books an EPUB and a PDF made in memory) and walks
+every screen in a real Chromium — the gate, the home, the settings, a show, a
+film, a record playing on under the mini-player, both readers, search, a
+phone viewport and a kids profile — failing on any JavaScript error. It needs
+Playwright and its Chromium, which is why it is not in the gate; run it
+before a pull request that touches `web/`.
 
 CI runs both suites, parses every `web/*.js`, and on a pull request fails when
 a SHELL file changed without a `CACHE` bump in `web/sw.js`

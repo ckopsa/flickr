@@ -18,6 +18,7 @@ import (
 	"path"
 	"strconv"
 	"strings"
+	"time"
 
 	"flickr/internal/hyper"
 	"flickr/internal/model"
@@ -72,6 +73,9 @@ func (s *server) handleRootDoc(w http.ResponseWriter, r *http.Request) {
 	doc.
 		// The shelf every other document's remedy points back to.
 		Link("library", "/api/library", "Library").
+		// Everything the shelf holds, by one substring: the words ride as
+		// `?q=`, and the client reaches it by the hash its box spells.
+		Link("search", "/api/search", "Search").
 		Link("continue", cont, "Continue watching").
 		Link("artists", "/api/artists", "Artists").
 		Link("works", "/api/works", "Works").
@@ -90,9 +94,11 @@ func (s *server) handleRootDoc(w http.ResponseWriter, r *http.Request) {
 			Input: map[string]string{"hash": "string"},
 			Label: "Open an address",
 		}).
+		// A profile is a name, a face and an audience: the avatar is chosen
+		// for it when none is given, and `kid` is what filters the shelves.
 		Action("create_profile", hyper.Action{
 			Method: "POST", Href: "/api/users",
-			Input: map[string]string{"name": "string"},
+			Input: map[string]string{"name": "string", "avatar": "string?", "kid": "boolean?"},
 			Label: "Create a profile",
 		})
 	hyper.WriteDoc(w, http.StatusOK, doc)
@@ -186,7 +192,11 @@ func (s *server) itemEnvelope(it store.Item, wk *works.Work, full bool, position
 	doc := hyper.Doc(base, "item", itemTitle(it)).
 		Field("id", it.ID)
 	if full {
-		doc.Field("object_key", it.ObjectKey)
+		// The whole key, and the name at the end of it: no title is a file
+		// name any more, so the name a person searched their shelf for — or
+		// typed at an ffprobe — is said here, once, on the item's own page.
+		doc.Field("object_key", it.ObjectKey).
+			Field("file_name", path.Base(it.ObjectKey))
 	}
 	doc.Field("medium", medium).
 		Field("label", works.ItemLabel(it))
@@ -195,6 +205,26 @@ func (s *server) itemEnvelope(it store.Item, wk *works.Work, full bool, position
 	// heading, and it used to be read off identity.kind in the browser.
 	if identityKind(it) == "extra" {
 		doc.Field("extra", true)
+	}
+	if !full {
+		// The two things a LIST needs that the item's own page says another
+		// way. A show pane groups its rows by SEASON, so the numbers come out
+		// of identity as numbers (the full document carries the whole of
+		// identity, and nothing groups a single page); `watched` is
+		// works.Finished — the one 90% rule the resume shelf and the work's
+		// progress already keep — said plainly, because a finished item has
+		// no `resume` left to infer it from.
+		if it.Identity != nil {
+			if it.Identity.Season > 0 {
+				doc.Field("season", it.Identity.Season)
+			}
+			if it.Identity.Episode > 0 {
+				doc.Field("episode", it.Identity.Episode)
+			}
+		}
+		if p, ok := positions[it.ID]; ok && works.Finished(it, p) {
+			doc.Field("watched", true)
+		}
 	}
 	if it.MediaInfo != nil && it.MediaInfo.DurationSeconds > 0 {
 		doc.Field("duration_seconds", it.MediaInfo.DurationSeconds)
@@ -213,6 +243,18 @@ func (s *server) itemEnvelope(it store.Item, wk *works.Work, full bool, position
 		doc.Field("year", y)
 	}
 	if full {
+		// The three facts a page states beside a title. They belong to the
+		// title, not to the file, so they are the item's OWN document only:
+		// down a twenty-episode member list they would be twenty copies of
+		// the show's.
+		enrichmentFacts(doc, it.Enrichment)
+		// When this file arrived, so a page can say "added last Tuesday"
+		// without asking a scan log. It is the file's arrival, not the
+		// work's: the library document's `recently_added` is the work-level
+		// answer, derived from these.
+		if !it.AddedAt.IsZero() {
+			doc.Field("added_at", it.AddedAt.UTC().Format(time.RFC3339))
+		}
 		if it.Identity != nil {
 			doc.Field("identity", it.Identity)
 		}
@@ -373,15 +415,39 @@ func itemYear(it store.Item) int {
 	return 0
 }
 
+// enrichmentFacts writes what TMDB knows about the TITLE beside it: how
+// long it runs (a show's is its typical episode), the certification a kids
+// filter reads, and the few names a detail page bills. Each is left out
+// when the enrichment does not have it — a document says what it knows.
+func enrichmentFacts(doc *hyper.Envelope, e *model.Enrichment) {
+	if e == nil {
+		return
+	}
+	if e.RuntimeMinutes > 0 {
+		doc.Field("runtime_minutes", e.RuntimeMinutes)
+	}
+	if e.Certification != "" {
+		doc.Field("certification", e.Certification)
+	}
+	if len(e.Cast) > 0 {
+		doc.Field("cast", e.Cast)
+	}
+}
+
 // artworkLinks names every picture and every byte-stream this item has, by
-// relation: a TMDB poster and episode still when the enrichment fetched
-// them, the item's OWN cover for audio and text (extracted on first ask and
-// falling back to the poster route), the book itself for a reader, and the
-// scrub-preview index for a video long enough to have been given one.
+// relation: a TMDB poster, backdrop and episode still when the enrichment
+// fetched them, the item's OWN cover for audio and text (extracted on first
+// ask and falling back to the poster route), the book itself for a reader,
+// and the scrub-preview index for a video long enough to have been given one.
 func artworkLinks(doc *hyper.Envelope, it store.Item, medium string) {
 	base := itemHref(it.ID)
 	if it.Enrichment != nil && it.Enrichment.HasPoster {
 		doc.Link("poster", base+"/poster", "")
+	}
+	// The wide still, for the screens that lead with a picture rather than
+	// stand a tile in a grid.
+	if it.Enrichment != nil && it.Enrichment.HasBackdrop {
+		doc.Link("backdrop", base+"/backdrop", "")
 	}
 	if it.Enrichment != nil && it.Enrichment.HasStill {
 		doc.Link("still", base+"/still", "")
@@ -400,31 +466,11 @@ func artworkLinks(doc *hyper.Envelope, it store.Item, medium string) {
 }
 
 // itemTitle is what a screen calls this one file: the episode's own title
-// when TMDB knows it, a track's own name, the film's or the book's title,
-// and otherwise the file's basename. Never a made-up code — the code is
-// works.ItemLabel's job, and this document carries both.
-func itemTitle(it store.Item) string {
-	e, id := it.Enrichment, it.Identity
-	if e != nil && e.EpisodeTitle != "" {
-		return e.EpisodeTitle
-	}
-	if id != nil {
-		switch id.Kind {
-		case "track":
-			if id.TrackTitle != "" {
-				return id.TrackTitle
-			}
-		case "movie", "book":
-			if e != nil && e.Title != "" {
-				return e.Title
-			}
-			if id.Title != "" {
-				return id.Title
-			}
-		}
-	}
-	return path.Base(it.ObjectKey)
-}
+// when TMDB knows it, a track's own name, the film's or the book's title —
+// and never the file's name, which reaches the document as `file_name`
+// instead. The rule is works.ItemTitle's, beside the label rule it shares
+// its fallback with; this document carries both.
+func itemTitle(it store.Item) string { return works.ItemTitle(it) }
 
 // playInput is the sketch every play action publishes. `passage` is the
 // object play takes (t, end, until, from, to — passage.go): the server
@@ -666,14 +712,29 @@ func (s *server) workEnvelope(wk *works.Work, profile string, positions map[int6
 	// else works.Work publishes is embedded as it stands, so a field added
 	// there appears here without this handler being touched.
 	doc.Field("work_kind", wk.Kind).Embed(wk)
+	// The work's representative member is the one that carries the TITLE's
+	// enrichment — a show's is any episode's, and they all say the same
+	// thing — so the runtime, the certification and the cast are stated
+	// once here rather than repeated down `members`.
+	rep := memberByID(wk, wk.RepresentativeItemID)
+	if rep != nil {
+		enrichmentFacts(doc, rep.Enrichment)
+	}
 	if profile != "" {
 		doc.Field("profile", profile)
 	}
-	if pr, ok := works.WorkProgress(wk, positions); ok {
+	// The asking profile's standing, and where they would pick up. A profile
+	// who has never started the work stands at "unwatched" — the pane still
+	// leads with the first episode, so a show nobody has opened is put on the
+	// same way as one half-watched. Only a work with more than one member to
+	// walk names a next: a film or a book is where it is, and naming it as
+	// its own next member would say nothing.
+	if profile != "" {
+		pr, ok := works.WorkProgress(wk, positions)
+		if !ok {
+			pr = works.Progress{Status: "unwatched"}
+		}
 		p := progress{Status: pr.Status, Fraction: pr.Fraction, Text: pr.ProgressText}
-		// Where they would pick up. Only a work with more than one member to
-		// walk has one: a film or a book is where it is, and naming it as
-		// its own next member would say nothing.
 		if next := nextUnfinished(wk, positions); next != nil && walkedMembers(wk) > 1 {
 			p.Next = &hyper.Link{Href: itemHref(next.ID), Title: works.ItemLabel(*next)}
 		}
@@ -688,10 +749,12 @@ func (s *server) workEnvelope(wk *works.Work, profile string, positions map[int6
 	doc.Field("members", members)
 
 	doc.Link("items", workHref(wk.Key)+"/items", "")
-	rep := memberByID(wk, wk.RepresentativeItemID)
 	if rep != nil {
 		if rep.Enrichment != nil && rep.Enrichment.HasPoster {
 			doc.Link("poster", itemHref(rep.ID)+"/poster", "")
+		}
+		if rep.Enrichment != nil && rep.Enrichment.HasBackdrop {
+			doc.Link("backdrop", itemHref(rep.ID)+"/backdrop", "")
 		}
 		if wk.Medium != model.MediumVideo {
 			doc.Link("cover", itemHref(rep.ID)+"/cover", "")

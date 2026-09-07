@@ -77,7 +77,7 @@ test('the shell lists every file the page loads, and the cache is bumped with th
 
 test('the root names everything the client needs to reach', () => {
   const root = golden('root');
-  for (const rel of ['library', 'continue', 'artists', 'scan', 'system', 'profiles']) {
+  for (const rel of ['library', 'search', 'continue', 'artists', 'scan', 'system', 'profiles']) {
     assert.ok(root.links[rel] && root.links[rel].href, `the root has no ${rel} relation`);
   }
   // The route resolver is the one address the kernel would otherwise have had
@@ -97,6 +97,22 @@ test('a route answer says which view, and names the document to draw it from', (
   // The passage arrives resolved: the reader is handed a place, not a spelling.
   assert.equal(r.passage.from_section, 3);
   assert.equal(r.passage.to_section, 4);
+});
+
+// The search document is a place, not a form: every hit says where it goes
+// and what to draw, and none of them offers an action to take there.
+test('a search answers groups of hits, each drawable and addressable', () => {
+  const doc = golden('search');
+  assert.equal(doc.kind, 'search');
+  assert.ok(doc.groups.length, 'the fixture query matches something');
+  for (const g of doc.groups) {
+    assert.ok(g.key && g.title && g.items.length, `the ${g.key} group is not drawable`);
+    for (const en of g.items) {
+      assert.ok(en.title && en.item_id, `${en.self}: nothing to draw or open`);
+      assert.ok(en.links.artwork, `${en.title}: the picture is a link, not a guess`);
+      assert.equal(en.actions, undefined, `${en.title}: a result offers no action`);
+    }
+  }
 });
 
 test('an item document says where this profile left off, so nothing asks a progress route', () => {
@@ -138,7 +154,7 @@ test('every golden the client renders is the one the server writes', () => {
   // The Go side copies them and fails on drift (goldens_shared_test.go); this
   // is the other half of that sentence — the files are actually here.
   const names = fs.readdirSync(path.join(here, 'testdata', 'hyper'));
-  for (const n of ['root', 'library', 'artist', 'continue', 'item-film', 'work-show',
+  for (const n of ['root', 'library', 'search', 'artist', 'continue', 'item-film', 'work-show',
                    'work-album', 'work-audiobook', 'work-book',
                    'session-play', 'session-read', 'session-read-pdf', 'route-text-passage']) {
     assert.ok(names.includes(n + '.json'), `${n}.json is not shared with the client`);

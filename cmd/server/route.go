@@ -8,7 +8,7 @@ package main
 // the answer.
 //
 //	{ "self", "kind": "route",
-//	  "view": "library" | "work" | "artist" | "item",
+//	  "view": "library" | "work" | "artist" | "item" | "search",
 //	  "document": <the envelope to render>,
 //	  "passage": <resolved, or null>,
 //	  "autoplay": <does arriving start it> }
@@ -51,13 +51,14 @@ type resolvedPassage struct {
 }
 
 // routeTarget is what a hash names, before any document is built: the pure
-// resolver's whole answer. Exactly one of Work, Artist and Item is set,
-// unless Problem is — a refusal names nothing.
+// resolver's whole answer. Exactly one of Work, Artist, Item and Query is
+// set, unless Problem is — a refusal names nothing.
 type routeTarget struct {
-	View     string // "library" | "work" | "artist" | "item"
+	View     string // "library" | "work" | "artist" | "item" | "search"
 	Work     *works.Work
 	Artist   string
 	Item     *store.Item
+	Query    string
 	Passage  *resolvedPassage
 	Autoplay bool
 	Problem  *hyper.Problem
@@ -117,6 +118,16 @@ func resolveRoute(hash string, ws []works.Work) routeTarget {
 					&hyper.Link{Href: "/api/library", Title: "Library"}))
 		}
 		return routeTarget{View: "artist", Artist: artist}
+
+	case strings.HasPrefix(path, "#/search/"):
+		// A search is a place, not a gesture: the words are in the address,
+		// so a result page can be sent to somebody. A query nothing matches
+		// is not a refusal — it is an answer with empty hands.
+		q, err := url.PathUnescape(strings.TrimPrefix(path, "#/search/"))
+		if err != nil {
+			return badHash(hash, err)
+		}
+		return routeTarget{View: "search", Query: q}
 
 	case itemPathRe.MatchString(path):
 		id, _ := strconv.ParseInt(itemPathRe.FindStringSubmatch(path)[1], 10, 64)
@@ -274,7 +285,7 @@ func artistEnvelope(name string) *hyper.Envelope {
 // handleRouteDoc is GET /api/-/route?hash=<hash>.
 func (s *server) handleRouteDoc(w http.ResponseWriter, r *http.Request) {
 	hash := r.URL.Query().Get("hash")
-	ws, err := s.buildWorks()
+	ws, err := s.worksFor(r)
 	if err != nil {
 		hyper.WriteProblem(w, serverProblem(err))
 		return
@@ -298,6 +309,8 @@ func (s *server) handleRouteDoc(w http.ResponseWriter, r *http.Request) {
 		doc = artistEnvelope(target.Artist)
 	case "item":
 		doc = s.itemEnvelope(*target.Item, works.ByItem(ws)[target.Item.ID], true, positions)
+	case "search":
+		doc = searchEnvelope(target.Query, ws)
 	default:
 		doc = libraryEnvelope()
 	}

@@ -42,7 +42,7 @@
     {
       "self": "/api/items/1",
       "kind": "item",
-      "title": "01 - Part 1.m4b",
+      "title": "Part 1",
       "id": 1,
       "medium": "audio",
       "label": "Part 1",
@@ -105,7 +105,7 @@
     {
       "self": "/api/items/2",
       "kind": "item",
-      "title": "02 - Part 2.m4b",
+      "title": "Part 2",
       "id": 2,
       "medium": "audio",
       "label": "Part 2",

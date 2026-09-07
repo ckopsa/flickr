@@ -73,7 +73,15 @@ go vet ./...
 go build ./...
 go test -count=1 ./...
 node --test web/*_test.mjs   # the client's suites: no npm, no browser
+node scripts/browser-smoke.mjs   # the page in a real Chromium: needs Playwright
 ```
+
+The browser smoke is the one check that opens the page: it builds
+`cmd/server/smoke_test.go` (`-tags smoke`, skipped otherwise) to serve the
+fixture library on a port with generated media, an EPUB and a PDF, then
+walks the gate, home, settings, a show, a film, a record under the
+mini-player, both readers, search, a phone viewport and a kids profile,
+failing on any JavaScript error. Run it before a PR that touches `web/`.
 
 CI (`.github/workflows/tests.yml`) runs those four steps on every push
 to `master`, every pull request and on demand, then the client's own:

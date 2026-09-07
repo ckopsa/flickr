@@ -38,7 +38,10 @@ func (s *server) handleContinue(w http.ResponseWriter, r *http.Request) {
 				&hyper.Link{Href: "/api/", Title: "flickr"}))
 		return
 	}
-	ws, err := s.buildWorks()
+	// The shelf is built out of the works this profile may see, so a title a
+	// kid profile is not shown does not come back through the resume row it
+	// once left behind.
+	ws, err := s.worksFor(r)
 	if err != nil {
 		hyper.WriteProblem(w, serverProblem(err))
 		return

@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"flickr/internal/model"
 	"flickr/internal/store"
@@ -45,10 +46,19 @@ const (
 	idFlatland  = 12
 )
 
+// arrived is one fixture file's arrival date. Real arrival times come from
+// the bucket, which a test has none of, so the fixture spells them: they are
+// what the `recently_added` row is ordered by, and a golden cannot be
+// written against time.Now().
+func arrived(y int, m time.Month, d int) time.Time {
+	return time.Date(y, m, d, 12, 0, 0, 0, time.UTC)
+}
+
 func fixtureItems() []store.Item {
 	return []store.Item{
 		{
 			ObjectKey: "Audiobooks/Frank Herbert/Dune (1965)/01 - Part 1.m4b",
+			AddedAt:   arrived(2026, time.August, 1),
 			ETag:      "e1", Size: 411000000,
 			Identity: &model.Identity{Kind: "audiobook_part", Title: "Dune", Author: "Frank Herbert", Year: 1965, Part: 1},
 			MediaInfo: &model.MediaInfo{
@@ -63,6 +73,7 @@ func fixtureItems() []store.Item {
 		},
 		{
 			ObjectKey: "Audiobooks/Frank Herbert/Dune (1965)/02 - Part 2.m4b",
+			AddedAt:   arrived(2026, time.August, 2),
 			ETag:      "e2", Size: 390000000,
 			Identity: &model.Identity{Kind: "audiobook_part", Title: "Dune", Author: "Frank Herbert", Year: 1965, Part: 2},
 			MediaInfo: &model.MediaInfo{
@@ -72,6 +83,7 @@ func fixtureItems() []store.Item {
 		},
 		{
 			ObjectKey: "Books/Shirley Jackson/The Haunting of Hill House.epub",
+			AddedAt:   arrived(2026, time.July, 15),
 			ETag:      "e3", Size: 1200000,
 			Identity: &model.Identity{Kind: "book", Title: "The Haunting of Hill House", Author: "Shirley Jackson", Year: 1959},
 			MediaInfo: &model.MediaInfo{
@@ -86,6 +98,7 @@ func fixtureItems() []store.Item {
 		},
 		{
 			ObjectKey: "Movies/Frozen (2013)/Frozen.mkv",
+			AddedAt:   arrived(2026, time.September, 1),
 			ETag:      "e4", Size: 8400000000,
 			Identity: &model.Identity{Kind: "movie", Title: "Frozen", Year: 2013},
 			MediaInfo: &model.MediaInfo{
@@ -108,6 +121,7 @@ func fixtureItems() []store.Item {
 		},
 		{
 			ObjectKey: "Music/Radiohead/OK Computer (1997)/01 Airbag.flac",
+			AddedAt:   arrived(2026, time.June, 10),
 			ETag:      "e5", Size: 34000000,
 			Identity: &model.Identity{Kind: "track", Title: "OK Computer", Author: "Radiohead",
 				Year: 1997, Part: 1, TrackTitle: "Airbag"},
@@ -118,6 +132,7 @@ func fixtureItems() []store.Item {
 		},
 		{
 			ObjectKey: "Music/Radiohead/OK Computer (1997)/02 Paranoid Android.flac",
+			AddedAt:   arrived(2026, time.June, 10),
 			ETag:      "e6", Size: 46000000,
 			Identity: &model.Identity{Kind: "track", Title: "OK Computer", Author: "Radiohead",
 				Year: 1997, Part: 2, TrackTitle: "Paranoid Android"},
@@ -128,6 +143,7 @@ func fixtureItems() []store.Item {
 		},
 		{
 			ObjectKey: "Shows/The Office (2005)/Featurettes/Deleted Scenes.mkv",
+			AddedAt:   arrived(2026, time.August, 20),
 			ETag:      "e7", Size: 900000000,
 			Identity: &model.Identity{Kind: "extra", Title: "The Office", Season: 3, Episode: 22},
 			MediaInfo: &model.MediaInfo{
@@ -137,6 +153,7 @@ func fixtureItems() []store.Item {
 		},
 		{
 			ObjectKey: "Shows/The Office (2005)/Season 3/S03E22 - Beach Games.mkv",
+			AddedAt:   arrived(2026, time.August, 18),
 			ETag:      "e8", Size: 2400000000,
 			Identity: &model.Identity{Kind: "episode", Title: "The Office", Year: 2005, Season: 3, Episode: 22},
 			MediaInfo: &model.MediaInfo{
@@ -154,6 +171,7 @@ func fixtureItems() []store.Item {
 		},
 		{
 			ObjectKey: "Shows/The Office (2005)/Season 3/S03E23 - The Job.mkv",
+			AddedAt:   arrived(2026, time.August, 19),
 			ETag:      "e9", Size: 2760000000,
 			Identity: &model.Identity{Kind: "episode", Title: "The Office", Year: 2005, Season: 3, Episode: 23},
 			MediaInfo: &model.MediaInfo{
@@ -166,6 +184,7 @@ func fixtureItems() []store.Item {
 		// nobody dated (which sorts last, after every dated record).
 		{
 			ObjectKey: "Music/Radiohead/Pablo Honey (1993)/01 You.flac",
+			AddedAt:   arrived(2026, time.June, 5),
 			ETag:      "e10", Size: 29000000,
 			Identity: &model.Identity{Kind: "track", Title: "Pablo Honey", Author: "Radiohead",
 				Year: 1993, Part: 1, TrackTitle: "You"},
@@ -176,6 +195,7 @@ func fixtureItems() []store.Item {
 		},
 		{
 			ObjectKey: "Music/Radiohead/The Bends/01 Planet Telex.flac",
+			AddedAt:   arrived(2026, time.September, 3),
 			ETag:      "e11", Size: 32000000,
 			Identity: &model.Identity{Kind: "track", Title: "The Bends", Author: "Radiohead",
 				Part: 1, TrackTitle: "Planet Telex"},
@@ -188,6 +208,7 @@ func fixtureItems() []store.Item {
 		// counts in spine sections and has no contents list at all.
 		{
 			ObjectKey: "Books/Edwin A. Abbott/Flatland.pdf",
+			AddedAt:   arrived(2026, time.May, 1),
 			ETag:      "e12", Size: 3400000,
 			Identity: &model.Identity{Kind: "book", Title: "Flatland", Author: "Edwin A. Abbott", Year: 1884},
 			MediaInfo: &model.MediaInfo{
@@ -247,14 +268,22 @@ func fixtureServer(t *testing.T) (*server, http.Handler) {
 	}{
 		{idFrozen, model.Enrichment{Version: 3, TMDBID: 109445, Title: "Frozen", Year: 2013,
 			Overview: "Young princess Anna sets off to find her sister.", HasPoster: true,
-			Genres: []string{"Animation", "Family", "Adventure"}}, "movie"},
+			HasBackdrop: true, Genres: []string{"Animation", "Family", "Adventure"},
+			RuntimeMinutes: 102, Certification: "PG",
+			Cast: []string{"Kristen Bell", "Idina Menzel", "Jonathan Groff"}}, "movie"},
 		{idBeach, model.Enrichment{Version: 3, TMDBID: 2316, Title: "The Office", Year: 2005,
 			Overview: "A mockumentary on a group of office workers.", HasPoster: true,
-			Genres: []string{"Comedy"}, EpisodeTitle: "Beach Games",
+			HasBackdrop: true, Genres: []string{"Comedy"},
+			RuntimeMinutes: 22, Certification: "TV-14",
+			Cast:            []string{"Steve Carell", "Rainn Wilson", "John Krasinski"},
+			EpisodeTitle:    "Beach Games",
 			EpisodeOverview: "Michael takes the office to the beach.", HasStill: true}, "episode"},
 		{idTheJob, model.Enrichment{Version: 3, TMDBID: 2316, Title: "The Office", Year: 2005,
 			Overview: "A mockumentary on a group of office workers.", HasPoster: true,
-			Genres: []string{"Comedy"}, EpisodeTitle: "The Job",
+			HasBackdrop: true, Genres: []string{"Comedy"},
+			RuntimeMinutes: 22, Certification: "TV-14",
+			Cast:            []string{"Steve Carell", "Rainn Wilson", "John Krasinski"},
+			EpisodeTitle:    "The Job",
 			EpisodeOverview: "Jim and Karen head to New York.", HasStill: true}, "episode"},
 	} {
 		enr := e.enr
@@ -289,8 +318,9 @@ func fixtureServer(t *testing.T) (*server, http.Handler) {
 // ── the goldens ─────────────────────────────────────────────────────────
 
 // golden compares one document against testdata/hyper/<name>.json, or
-// rewrites it under -update. Documents are compared indented so a diff shows
-// the field that moved rather than the whole line.
+// rewrites it — and the client's copy of it, see shareGolden — under -update.
+// Documents are compared indented so a diff shows the field that moved rather
+// than the whole line.
 func golden(t *testing.T, name string, body []byte) {
 	t.Helper()
 	var pretty bytes.Buffer
@@ -306,6 +336,7 @@ func golden(t *testing.T, name string, body []byte) {
 		if err := os.WriteFile(path, pretty.Bytes(), 0o644); err != nil {
 			t.Fatal(err)
 		}
+		shareGolden(t, name, pretty.Bytes())
 		return
 	}
 	want, err := os.ReadFile(path)
@@ -334,6 +365,7 @@ func TestHyperGolden(t *testing.T) {
 		{"work-album", "/api/works/album%3Aradiohead-ok-computer-1997?client_id=chris"},
 		{"work-book", "/api/works/book%3Ashirley-jackson-the-haunting-of-hill-house-1959?client_id=chris"},
 		{"library", "/api/library?client_id=chris"},
+		{"search", "/api/search?q=the&client_id=chris"},
 		{"artist", "/api/artists/Radiohead?client_id=chris"},
 		{"continue", "/api/continue?client_id=chris"},
 	} {
@@ -689,5 +721,54 @@ func TestExistingRoutesUnchanged(t *testing.T) {
 	}
 	if len(members) != 3 || members[0].ID != idBeach {
 		t.Errorf("/api/works/tmdb%%3A2316/items = %d members, first id %d", len(members), members[0].ID)
+	}
+}
+
+// A show's members say where they sit and whether they have been seen: the
+// season and episode numbers a pane groups its rows by, and `watched` — the
+// same 90% rule works.Finished keeps everywhere else. A watched episode has
+// no `resume` left (resumeOf drops the credits), which is why the tick cannot
+// be read off one.
+func TestShowMembersCarrySeasonEpisodeAndWatched(t *testing.T) {
+	srv, h := fixtureServer(t)
+	if err := srv.state.SetPosition(idTheJob, "chris", 2755); err != nil { // the credits of 2760
+		t.Fatal(err)
+	}
+	var doc struct {
+		Members []struct {
+			ID      int64 `json:"id"`
+			Season  int   `json:"season"`
+			Episode int   `json:"episode"`
+			Watched bool  `json:"watched"`
+			Resume  *struct {
+				PositionSeconds float64 `json:"position_seconds"`
+			} `json:"resume"`
+		} `json:"members"`
+	}
+	if err := json.Unmarshal(get(t, h, "/api/works/tmdb%3A2316?client_id=chris").Body.Bytes(), &doc); err != nil {
+		t.Fatal(err)
+	}
+	type place struct {
+		season, episode int
+		watched, resume bool
+	}
+	got := map[int64]place{}
+	for _, m := range doc.Members {
+		got[m.ID] = place{m.Season, m.Episode, m.Watched, m.Resume != nil}
+	}
+	if g := got[idBeach]; g.season != 3 || g.episode != 22 || g.watched || !g.resume {
+		t.Errorf("S03E22, 745s in and unfinished: %+v", g)
+	}
+	if g := got[idTheJob]; g.season != 3 || g.episode != 23 || !g.watched || g.resume {
+		t.Errorf("S03E23 watched to the credits, with no place left to resume: %+v", g)
+	}
+	// The item's OWN document carries the whole identity instead, so it does
+	// not repeat the two numbers a list groups by.
+	var item map[string]any
+	if err := json.Unmarshal(get(t, h, "/api/items/9?client_id=chris").Body.Bytes(), &item); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := item["season"]; ok {
+		t.Error("an item's own document repeats season; its identity already says it")
 	}
 }

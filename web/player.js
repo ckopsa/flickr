@@ -4,7 +4,8 @@
 // the cast session, the clock, the scrub bar and its chapter ticks and
 // passage flags, the volume, the subtitle and audio-track selects, the
 // trickplay previews, the tap the browser wants when it refuses autoplay,
-// and the heartbeat that writes where the person is.
+// the keys that drive all of it, and the heartbeat that writes where the
+// person is.
 //
 // It owns no rules. Which item plays, what may be done to it, where the
 // bytes are, what to show while they play, where the passage ends, what the
@@ -42,6 +43,15 @@
   let trickplay = null, trickplayItemId = null;
   let upNextTimer = null, upNextTarget = null;
   let autoplayNext = localStorage.autoplayNext !== 'off';
+  let scrubbing = false;         // a finger (or a mouse) is dragging the bar
+  let tapTimer = null, lastTapAt = 0, rippleTimer = null;
+  let idleTimer = null;          // the countdown to a dark room
+  let clipOpen = false;          // the clip bar is up over the scrubber
+  let clipDrag = null;           // { kind, seconds } while a handle is held
+  let clipMinted = null;         // the last link the server minted for it
+  const DOUBLE_TAP_MS = 300;     // how long a single tap waits for its twin
+  const IDLE_MS = 3000;          // how long a still pointer waits before the chrome goes
+  const CLIP_SECONDS = 30;       // how long a clip is before anything is dragged
 
   // --- capability profiles -----------------------------------------------------
   // What the PLAYING device can take. The dropdown simulates other devices;
@@ -97,48 +107,153 @@
 
   // --- the persistent element --------------------------------------------------
 
+  // The keyboard, said in words. Every one of these does exactly what one of
+  // the buttons below does — the keys reach nothing the transport does not —
+  // and the '?' card is this list, drawn once.
+  const SHORTCUTS = [
+    ['Space / K', 'Play or pause'],
+    ['← / →', 'Back 10s / forward 10s'],
+    ['J / L', 'Back 30s / forward 30s'],
+    ['↑ / ↓', 'Volume'],
+    ['M', 'Mute'],
+    ['F', 'Fullscreen'],
+    ['C', 'Next subtitle track'],
+    ['N', 'Next episode'],
+    ['Esc', 'Leave fullscreen, or back out'],
+  ];
+
   function build() {
     element = document.createElement('div');
     element.id = 'device';
     element.innerHTML =
-      '<video id="video" controls></video>' +
+      // No `controls`: the native bar is a SECOND transport, and its
+      // fullscreen shows the bare picture — no chapter ticks, no passage
+      // flags, no trickplay. The row below is the only transport there is,
+      // and it goes fullscreen with the wrapper rather than being left
+      // behind. `playsinline` is what keeps a phone from overriding all of
+      // that with its own full-screen player the moment play starts.
+      '<video id="video" playsinline></video>' +
       // Autoplay the browser refuses for want of a gesture is not an error,
       // it is a question — answered by the one tap this button is.
       '<button id="tap-to-play" hidden>▶ Tap to play</button>' +
-      '<div id="cast-overlay">▶ Casting to <span id="cast-device"></span></div>' +
-      '<div id="scrub"><div class="rail"></div><div class="avail"></div><div class="fill"></div>' +
-        '<div id="thumb" hidden><div id="thumb-img"></div><div id="thumb-time"></div></div></div>' +
-      '<div id="timebar"><span id="t-now">0:00</span><span id="t-total">0:00</span></div>' +
-      '<div id="controls">' +
-        '<button id="btn-play" title="Play/Pause">⏵</button>' +
-        '<button id="btn-back" title="Back 10s">⏪</button>' +
-        '<button id="btn-fwd" title="Forward 30s">⏩</button>' +
-        '<span style="font-size:12px;color:#9a9daa">vol</span>' +
-        '<input type="range" id="vol" min="0" max="1" step="0.05" value="1">' +
-        '<select id="subs" title="Subtitles" style="display:none"></select>' +
-        '<select id="audio" title="Audio track" style="display:none"></select>' +
-        '<button id="btn-autoplay"></button>' +
-        '<google-cast-launcher id="cast-btn"></google-cast-launcher>' +
+      // What a double tap answers with, so the finger knows it landed.
+      '<div id="seek-ripple" hidden></div>' +
+      // While casting, the page is the REMOTE: no dimmed picture of what the
+      // television is showing, but the artwork, the names and the device,
+      // over the same transport below. What it says is the session
+      // document's, filled in by paintCastRemote; CSS shows it (body.casting
+      // in index.html) and hides the video.
+      '<div id="cast-remote">' +
+        '<img id="cast-art" alt="" hidden>' +
+        '<div id="cast-what">' +
+          '<div id="cast-title"></div>' +
+          '<div id="cast-work"></div>' +
+          '<div id="cast-to">▶ Casting to <span id="cast-device"></span></div>' +
+          '<button id="btn-cast-stop">Stop casting</button>' +
+        '</div>' +
+      '</div>' +
+      // What the keys do, listed where they are used, behind the '?' below.
+      '<div id="keys-help" hidden><dl>' +
+        SHORTCUTS.map(([k, what]) => '<dt>' + k + '</dt><dd>' + what + '</dd>').join('') +
+      '</dl></div>' +
+      '<div id="transport">' +
+        '<div id="scrub"><div class="rail"></div><div class="avail"></div><div class="fill"></div>' +
+          // A clip is made ON the bar it is cut out of: the amber region
+          // between the two marks, and a grip at each end to drag. The chips
+          // under the picture do the same thing with a keyboard.
+          '<div id="clip-range" hidden><div id="clip-region" hidden></div>' +
+            '<div class="clip-handle" id="clip-in" aria-label="Clip start" hidden></div>' +
+            '<div class="clip-handle" id="clip-out" aria-label="Clip end" hidden></div></div>' +
+          '<div id="thumb" hidden><div id="thumb-img"></div><div id="thumb-time"></div></div></div>' +
+        '<div id="timebar"><span id="t-now">0:00</span><span id="t-total">0:00</span></div>' +
+        // What the clip says, in the server's own words, and the one button
+        // that hands it on.
+        '<div id="clipbar" hidden><span id="clip-sentence"></span>' +
+          '<button id="btn-clip-share">Share</button>' +
+          '<button id="btn-clip-done">Done</button></div>' +
+        '<div id="controls">' +
+          '<button id="btn-play" title="Play/Pause">⏵</button>' +
+          '<button id="btn-back" title="Back 10s">⏪</button>' +
+          '<button id="btn-fwd" title="Forward 30s">⏩</button>' +
+          '<button id="btn-mute" title="Mute" aria-label="Mute">🔊</button>' +
+          '<input type="range" id="vol" min="0" max="1" step="0.05" value="1" aria-label="Volume">' +
+          '<select id="subs" title="Subtitles" style="display:none"></select>' +
+          '<select id="audio" title="Audio track" style="display:none"></select>' +
+          '<button id="btn-autoplay"></button>' +
+          '<button id="btn-clip" title="Mark a clip" aria-pressed="false" hidden>✂ Clip</button>' +
+          '<button id="btn-pip" title="Picture in picture" aria-label="Picture in picture" hidden>⧉</button>' +
+          '<button id="btn-keys" title="Keyboard shortcuts" aria-label="Keyboard shortcuts">?</button>' +
+          '<button id="btn-fs" title="Fullscreen" aria-label="Fullscreen">⛶</button>' +
+          '<google-cast-launcher id="cast-btn"></google-cast-launcher>' +
+        '</div>' +
       '</div>';
     video = element.querySelector('#video');
     scrub = element.querySelector('#scrub');
     bindDevice();
+    bindNowPlaying();
   }
 
   // attach moves the ONE device element into the chrome the kernel just
   // rendered. See the note at the top: this move keeps the buffer.
+  //
+  // The chrome comes in two shapes and this is the whole of the difference:
+  // the full player, and the mini bar an audio sitting collapses into when the
+  // page under it changes (kernel.js holds that rule). The bar's slot is
+  // inside a hidden box — a display:none media element goes on playing — so
+  // the sound carries across the swap the same way the buffer does. Everything
+  // painted below is skipped by its own guard when the bar drew no such thing.
   function attach(chrome) {
     const slot = chrome.querySelector('#device-slot');
     if (!slot) return;
     slot.replaceWith(element);
+    // The way back and what is playing ride INSIDE the device, as a title bar
+    // over the top of the picture: there they go fullscreen with it and fade
+    // with the transport. The chrome is re-rendered from the session document,
+    // so the bar this render drew replaces the one the last render did.
+    const title = chrome.querySelector('#player-title');
+    if (title) {
+      const old = element.querySelector('#player-title');
+      if (old) old.remove();
+      element.prepend(title);
+    }
+    // The immersive layout belongs to the PICTURE: a record has none to fill.
+    document.body.classList.toggle('theatre', !!item && item.medium !== 'audio');
     renderChapters();
     renderMarksOnScrub();
+    paintClip();
     if (session) paintTrace();
     $('t-total').textContent = fmtTime(duration());
     syncPlayButton();
+    syncMuteButton();
+    syncFullscreenButton();
     setAutoplay(autoplayNext);
     renderSubSelector();
     renderAudioSelector();
+    wake();
+    paintMini();
+  }
+
+  // The bar's own controls are the DEVICE's — play/pause and ±30s, not
+  // anything the document affords — so they are handled here. Stopping the
+  // click keeps the bar's tap, which navigates back to the item, from firing
+  // under the button that was pressed.
+  function onMiniClick(e) {
+    const b = e.target.closest && e.target.closest('button');
+    if (!b) return;
+    e.stopPropagation();
+    if (b.id === 'mini-play') togglePlay();
+    else if (b.id === 'mini-back') seekTo(position() - 30);
+    else if (b.id === 'mini-fwd') seekTo(position() + 30);
+    syncPlayButton();
+  }
+
+  // The bar's thin line: the place the scrubber shows, in the one measure a
+  // collapsed sitting has room for.
+  function paintMini() {
+    const fill = $('mini-fill');
+    if (!fill) return;
+    const dur = duration();
+    fill.style.width = dur > 0 ? Math.min(100, position() / dur * 100) + '%' : '0%';
   }
 
   // --- clocks ------------------------------------------------------------------
@@ -244,6 +359,20 @@
     if (tr) tr.innerHTML = t.trace;
   }
 
+  // The remote's face, and every word of it the SESSION DOCUMENT's: the
+  // artwork it carries, its own name for what plays and the work it belongs
+  // to. Painted on adopt, so a document swap redraws it.
+  function paintCastRemote() {
+    const art = $('cast-art');
+    if (!art) return;
+    const href = R.artworkOf(session);
+    art.hidden = !href;
+    if (href) art.src = href;
+    const links = (session && session.links) || {};
+    $('cast-title').textContent = (session && session.title) || '';
+    $('cast-work').textContent = (links.work && links.work.title) || '';
+  }
+
   function renderChapters() {
     const pane = $('chapters');
     if (!pane || !scrub) return;
@@ -263,14 +392,16 @@
 
   // Two bound marks on the scrubber: the start and, on the item the `end`
   // applies to, the end. A passage being MADE (the session's marks) takes the
-  // same flags, each shown only on the item it was set in.
+  // same flags, each shown only on the item it was set in — unless the clip
+  // bar is up, and then the handles are those two marks and the flags would
+  // sit under them saying the same thing twice.
   function renderMarksOnScrub() {
     if (!scrub) return;
     scrub.querySelectorAll('.bound').forEach(b => b.remove());
     const dur = duration();
     if (!(dur > 0)) return;
     const id = item && item.id;
-    const m = session && session.marks;
+    const m = clipOpen ? null : (session && session.marks);
     const b = (m && (m.in || m.out))
       ? { t: m.in && m.in.item_id === id ? m.in.seconds : null,
           end: m.out && m.out.item_id === id ? m.out.seconds : null }
@@ -303,6 +434,7 @@
       return;
     }
     hideUpNext();
+    closeClip(); // the marks belonged to the sitting that is ending
     item = itemDoc;
     document.body.classList.toggle('audio-mode', itemDoc.medium === 'audio');
     passage = o.passage || null;
@@ -380,6 +512,8 @@
   function adopt(s) {
     session = s;
     K.renderSession(s);
+    paintCastRemote();
+    updateNowPlaying();
   }
 
   // holdSession lets the reader's sitting share this one's exit: a book's
@@ -402,13 +536,17 @@
 
   async function close() {
     hideUpNext();
+    closeClip();
     setPassage(null);
     if (casting()) { castEndSuppressed = true; if (remoteController) remoteController.stop(); }
     else if (video) { video.pause(); video.removeAttribute('src'); video.load(); }
     await stopSession();
+    clearNowPlaying();
     item = null;
     method = null;
     document.body.classList.remove('audio-mode');
+    document.body.classList.remove('theatre');
+    wake(); // nothing plays: the room comes back up
     const chrome = $('player-chrome');
     if (chrome) chrome.hidden = true;
   }
@@ -439,9 +577,10 @@
       case 'keep_watching': case 'keep_reading':
         return keepWatching(req);
       default: {
-        // Anything else the document offers — fix the identity, probe again,
+        // Anything else the document offers that needs no body — probe again,
         // look it up on TMDB — is the same three lines, and the view is
-        // re-read afterwards because the answer changed what it says.
+        // re-read afterwards because the answer changed what it says. An
+        // action WITH a body is a form, and the kernel submits those.
         try { await K.api(req.href, { method: req.method }); }
         catch (e) { K.note(e.detail || String(e.message || e)); }
         K.forget();
@@ -526,6 +665,165 @@
         body: JSON.stringify(req.body || { seconds: position() }),
       }));
     } catch (e) { /* the session may already be over */ }
+    if (clipOpen) { paintClip(); await refreshClipSentence(); }
+  }
+  // One end of the passage, set at a place this side picked. Where it LANDS is
+  // the server's — the snap to a nearby chapter start, the swap when the two
+  // ends arrive the wrong way round — so the answer is adopted and the bar
+  // repainted from it rather than from the number that was sent.
+  async function postMark(kind, seconds) {
+    const act = R.actionOf(session, 'mark_' + kind);
+    if (!act) return;
+    await mark({ href: act.href, method: act.method || 'POST', body: { seconds } });
+  }
+
+  // --- the clip bar ------------------------------------------------------------
+  //
+  // Marking a clip is a gesture on the scrub bar: two handles at the ends of
+  // an amber region, dragged to where the passage should start and stop. The
+  // marks themselves are the SESSION's — every address here comes off its
+  // mark_in / mark_out / link actions — and the sentence under the bar is the
+  // server's own words for what has been marked.
+
+  function clipAvailable() { return !!R.actionOf(session, 'mark_in'); }
+
+  // Where the two handles sit: the session's marks, each only on the item it
+  // was set in, with the one under the finger following it instead.
+  function clipBounds() {
+    const m = (session && session.marks) || {};
+    const id = item && item.id;
+    const at = mk => (mk && mk.item_id === id && typeof mk.seconds === 'number' ? mk.seconds : null);
+    const b = { in: at(m.in), out: at(m.out) };
+    if (clipDrag) b[clipDrag.kind] = clipDrag.seconds;
+    return b;
+  }
+
+  function paintClip() {
+    const range = element && element.querySelector('#clip-range');
+    if (!range) return;
+    range.hidden = !clipOpen;
+    if ($('clipbar')) $('clipbar').hidden = !clipOpen;
+    syncClipButton();
+    if (!clipOpen) return;
+    const dur = duration();
+    const pct = t => Math.min(100, Math.max(0, dur > 0 ? t / dur * 100 : 0));
+    const b = clipBounds();
+    for (const kind of ['in', 'out']) {
+      const h = $('clip-' + kind);
+      if (!h) continue;
+      h.hidden = b[kind] == null;
+      if (b[kind] == null) continue;
+      h.style.left = pct(b[kind]) + '%';
+      h.title = (kind === 'in' ? 'Clip starts at ' : 'Clip ends at ') + fmtTime(b[kind]);
+    }
+    const region = $('clip-region');
+    if (!region) return;
+    const spans = b.in != null && b.out != null && b.out > b.in;
+    region.hidden = !spans;
+    if (spans) {
+      region.style.left = pct(b.in) + '%';
+      region.style.width = Math.max(0, pct(b.out) - pct(b.in)) + '%';
+    }
+  }
+
+  function syncClipButton() {
+    const btn = $('btn-clip');
+    if (!btn) return;
+    btn.hidden = !clipAvailable();
+    btn.setAttribute('aria-pressed', clipOpen ? 'true' : 'false');
+    btn.classList.toggle('on', clipOpen);
+  }
+
+  // Opening the bar with nothing marked yet marks a clip to drag from: here,
+  // and half a minute on. Both go through the server like any other mark.
+  async function openClip() {
+    if (!clipAvailable()) return;
+    clipOpen = true;
+    renderMarksOnScrub(); // the handles take the flags' place
+    paintClip();
+    // Anything already marked — in this item or, in a run, another one — is a
+    // clip being made, and the bar joins it rather than starting over.
+    const m = (session && session.marks) || {};
+    if (!m.in && !m.out) {
+      const dur = duration();
+      const start = position();
+      await postMark('in', start);
+      await postMark('out', dur > 0 ? Math.min(dur, start + CLIP_SECONDS) : start + CLIP_SECONDS);
+      return; // mark() painted and fetched the sentence on the way out
+    }
+    await refreshClipSentence();
+  }
+  function closeClip() {
+    clipOpen = false;
+    clipDrag = null;
+    clipMinted = null;
+    hideThumb();
+    paintClip();
+    renderMarksOnScrub();
+  }
+  function toggleClip() { clipOpen ? closeClip() : openClip(); }
+
+  // The sentence the server says the clip in, and the link it comes with —
+  // fetched from the session's `link` action, which is the same one the chip
+  // under the picture presses. Until there is an in point the action is not
+  // there, and the document's reason is shown in its place.
+  async function refreshClipSentence() {
+    const el = $('clip-sentence');
+    if (!el) return;
+    clipMinted = null;
+    const act = R.actionOf(session, 'link');
+    if (!act) {
+      el.textContent = R.unavailableReason(session, 'link') || '';
+      syncClipShare();
+      return;
+    }
+    try { clipMinted = await K.api(act.href, { method: act.method || 'GET' }); }
+    catch (e) { clipMinted = null; }
+    el.textContent = (clipMinted && clipMinted.sentence) || '';
+    syncClipShare();
+  }
+  function syncClipShare() {
+    const b = $('btn-clip-share');
+    if (b) b.disabled = !clipMinted;
+  }
+  // The share sheet is the kernel's: the same handing-on a copied link gets,
+  // and the same document — the minted passage, share_href and all.
+  function shareClip() {
+    if (clipMinted) K.share(clipMinted);
+  }
+
+  // A handle under a pointer. The drag is the handle's own, captured, so the
+  // bar underneath neither seeks nor scrubs while it moves; the mark is not
+  // posted until the finger comes off, because it is the server that decides
+  // where it lands.
+  function bindClipHandles() {
+    for (const kind of ['in', 'out']) {
+      const h = element.querySelector('#clip-' + kind);
+      if (!h) continue;
+      h.addEventListener('pointerdown', e => {
+        clipDrag = { kind, seconds: scrubSeconds(e.clientX) };
+        try { h.setPointerCapture(e.pointerId); } catch (err) { /* no capture, no matter */ }
+        e.preventDefault();
+        e.stopPropagation();
+        paintClip();
+        showThumb(e.clientX);
+      });
+      h.addEventListener('pointermove', e => {
+        if (!clipDrag || clipDrag.kind !== kind) return;
+        clipDrag.seconds = scrubSeconds(e.clientX);
+        paintClip();
+        showThumb(e.clientX);
+      });
+      h.addEventListener('pointerup', e => {
+        if (!clipDrag || clipDrag.kind !== kind) return;
+        const at = clipDrag.seconds;
+        clipDrag = null;
+        hideThumb();
+        e.stopPropagation();
+        postMark(kind, at);
+      });
+      h.addEventListener('pointercancel', () => { clipDrag = null; hideThumb(); paintClip(); });
+    }
   }
 
   // --- the run: up next and the advance ----------------------------------------
@@ -570,8 +868,19 @@
     // A different file: the subtitle, burn and audio selections were this
     // one's ordinals and mean nothing there.
     selectedSubOrdinal = burnSubOrdinal = selectedAudioOrdinal = null;
+    // A COLLAPSED sitting goes nowhere: the person is browsing something else,
+    // and a record reaching its next track is no reason to drag the page along
+    // with the run. The next member starts in place and the bar renames itself.
+    if (K.collapsed() && id === nextId()) { playNext(); return; }
     K.setPendingPlay({ id, mode });
     K.replaceHash(K.itemHash(id, root.passageForNext(passage)));
+  }
+  // The next member, started without a route: its document is one relation off
+  // the session (`next`), which is the same address the hash would have gone to.
+  async function playNext() {
+    let doc = null;
+    try { doc = await K.doc(nextHref()); } catch (e) { /* the run ends here */ }
+    if (doc) await play(doc, { seek: 0 });
   }
 
   // --- natural ends and the heartbeat ------------------------------------------
@@ -634,9 +943,171 @@
   }
 
   function syncPlayButton() {
-    const b = $('btn-play');
-    if (b) b.textContent = isPlaying() ? '⏸' : '⏵';
+    const glyph = isPlaying() ? '⏸' : '⏵';
+    for (const id of ['btn-play', 'mini-play']) {
+      const b = $(id);
+      if (b) b.textContent = glyph;
+    }
   }
+
+  // The one play/pause there is: the button, the picture and the keyboard all
+  // come here, and casting is the same choice made on the other device.
+  function togglePlay() {
+    if (casting()) { if (remoteController) remoteController.playOrPause(); return; }
+    if (!video) return;
+    video.paused ? video.play().catch(() => {}) : video.pause();
+  }
+
+  // Mute sits beside the volume and follows it: the cast device's when one is
+  // connected, the media element's otherwise.
+  function isMuted() {
+    return casting() ? !!(remotePlayer && remotePlayer.isMuted) : !!(video && video.muted);
+  }
+  function toggleMute() {
+    if (casting()) { if (remoteController) remoteController.muteOrUnmute(); }
+    else if (video) video.muted = !video.muted;
+    syncMuteButton();
+  }
+  function syncMuteButton() {
+    const b = $('btn-mute');
+    if (!b) return;
+    const off = isMuted();
+    b.textContent = off ? '🔇' : '🔊';
+    b.title = off ? 'Unmute' : 'Mute';
+    b.setAttribute('aria-label', b.title);
+  }
+
+  // Fullscreen is the DEVICE WRAPPER's, never the <video>'s. Taking the
+  // wrapper full keeps the scrub bar on screen — its chapter ticks, its
+  // passage flags, its trickplay previews — which the native fullscreen
+  // threw away. An iPhone allows no element but the video to go full, and
+  // lends its own player instead; that is the fallback, not the default.
+  function toggleFullscreen() {
+    if (document.fullscreenElement) { document.exitFullscreen(); return; }
+    if (element && element.requestFullscreen) element.requestFullscreen().catch(() => {});
+    else if (video && video.webkitEnterFullscreen) video.webkitEnterFullscreen();
+  }
+  function syncFullscreenButton() {
+    const b = $('btn-fs');
+    if (!b) return;
+    b.title = document.fullscreenElement === element ? 'Leave fullscreen' : 'Fullscreen';
+    b.setAttribute('aria-label', b.title);
+  }
+
+  // --- the keyboard ------------------------------------------------------------
+  //
+  // The keys are a transport, not a second set of rules: each one calls the
+  // function its button calls. A key typed into a field is the field's — that
+  // is the whole of the guard — and Space on a focused button is that button's,
+  // which already answers it.
+  function typingIn(t) {
+    return !!(t && (t.isContentEditable || /^(INPUT|SELECT|TEXTAREA)$/.test(t.tagName)));
+  }
+  function onKey(e) {
+    if (!item || e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey) return;
+    const t = e.target;
+    if (typingIn(t)) return;
+    const space = e.key === ' ' || e.key === 'Spacebar';
+    if (space && t && t.closest && t.closest('button')) return;
+    const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+    if (space || k === 'k') togglePlay();
+    else if (k === 'ArrowLeft') { seekTo(position() - 10); seekRipple('left', '−10s'); }
+    else if (k === 'ArrowRight') { seekTo(position() + 10); seekRipple('right', '+10s'); }
+    else if (k === 'j') { seekTo(position() - 30); seekRipple('left', '−30s'); }
+    else if (k === 'l') { seekTo(position() + 30); seekRipple('right', '+30s'); }
+    else if (k === 'ArrowUp') nudgeVolume(0.1);
+    else if (k === 'ArrowDown') nudgeVolume(-0.1);
+    else if (k === 'm') toggleMute();
+    else if (k === 'f') toggleFullscreen();
+    else if (k === 'c') cycleSubs();
+    else if (k === 'n') advance();
+    else if (k === '?') toggleKeys();
+    else if (k === 'Escape') escapeOut();
+    else return;
+    e.preventDefault(); // Space would scroll the page, the arrows too
+    wake();
+  }
+
+  // Escape is the way out, in the order the room offers one: the help card,
+  // then fullscreen, then the sitting itself — which is what Back does.
+  function escapeOut() {
+    if ($('keys-help') && !$('keys-help').hidden) { showKeys(false); return; }
+    if (document.fullscreenElement) { document.exitFullscreen(); return; }
+    K.closeStage();
+    K.applyRoute();
+  }
+
+  // The volume the keys set is the one the slider sets, on whichever device is
+  // playing; the slider follows so the two never disagree.
+  function nudgeVolume(delta) {
+    const now = casting() ? (remotePlayer.volumeLevel || 0) : (video ? video.volume : 0);
+    const v = Math.max(0, Math.min(1, now + delta));
+    if (casting()) { remotePlayer.volumeLevel = v; if (remoteController) remoteController.setVolumeLevel(); }
+    else if (video) video.volume = v;
+    if ($('vol')) $('vol').value = String(v);
+  }
+
+  // 'c' walks the subtitle select the way clicking through it would: Off, then
+  // each track the ITEM document published, then round again.
+  function cycleSubs() {
+    const sel = $('subs');
+    if (!sel || sel.style.display === 'none' || !sel.options.length) return;
+    sel.selectedIndex = (sel.selectedIndex + 1) % sel.options.length;
+    onSubChange(sel.value);
+  }
+
+  function showKeys(on) {
+    const el = $('keys-help');
+    if (el) el.hidden = !on;
+  }
+  function toggleKeys() { showKeys(!!($('keys-help') && $('keys-help').hidden)); }
+
+  // --- the room darkens ---------------------------------------------------------
+  //
+  // While the picture runs and nothing moves, the title bar, the transport and
+  // the cursor fade out; any movement, tap or key brings them back. Paused,
+  // they stay: a stopped picture with no controls is a dead page.
+  function wake() {
+    if (!element) return;
+    element.classList.remove('idle');
+    clearTimeout(idleTimer);
+    idleTimer = null;
+    if (!isPlaying()) return;
+    idleTimer = setTimeout(() => { if (isPlaying()) element.classList.add('idle'); }, IDLE_MS);
+  }
+
+  // What a double tap answers with, so the finger knows it landed: the amount
+  // seeked, on the side it was tapped, gone again in half a second. Hiding it
+  // first restarts the fade when a second tap comes straight after.
+  function seekRipple(side, label) {
+    const el = $('seek-ripple');
+    if (!el) return;
+    el.hidden = true;
+    el.className = side;
+    void el.offsetWidth;
+    el.textContent = label;
+    el.hidden = false;
+    clearTimeout(rippleTimer);
+    rippleTimer = setTimeout(() => { el.hidden = true; }, 500);
+  }
+
+  // --- the scrub bar under a pointer -------------------------------------------
+
+  function scrubSeconds(clientX) {
+    const rect = scrub.getBoundingClientRect();
+    return Math.min(1, Math.max(0, (clientX - rect.left) / (rect.width || 1))) * duration();
+  }
+  // While a drag is on, the fill and the readout follow the finger and the
+  // tick leaves them alone; the seek itself waits for the release, because a
+  // seek past what has been transcoded restarts the stream.
+  function paintScrubAt(t) {
+    const dur = duration();
+    if (!(dur > 0)) return;
+    const fill = scrub.querySelector('.fill');
+    if (fill) fill.style.width = Math.min(100, t / dur * 100) + '%';
+    if ($('t-now')) $('t-now').textContent = fmtTime(t);
+  }
+  function hideThumb() { if ($('thumb')) $('thumb').hidden = true; }
 
   // Autoplay-next toggle: global, persisted, default ON.
   function setAutoplay(on) {
@@ -670,8 +1141,8 @@
   function bindDevice() {
     video.addEventListener('ended', onPlaybackEnded);
     video.addEventListener('timeupdate', checkPassageEnd);
-    // Pressing play (ours or the <video> controls') while paused at the end
-    // bound is the same choice as "Keep watching".
+    // Pressing play — the button, the picture, a key — while paused at the
+    // end bound is the same choice as "Keep watching".
     video.addEventListener('play', () => {
       if ($('tap-to-play')) $('tap-to-play').hidden = true;
       if (!passageEndFired || passageNaturalEnd) return;
@@ -684,15 +1155,50 @@
     element.addEventListener('click', e => {
       const t = e.target;
       if (t.id === 'tap-to-play') { t.hidden = true; video.play().catch(() => {}); return; }
-      if (t.id === 'btn-play') {
-        if (casting()) remoteController.playOrPause();
-        else video.paused ? video.play().catch(() => {}) : video.pause();
-        return;
-      }
+      if (t.id === 'btn-play') { togglePlay(); return; }
       if (t.id === 'btn-back') { seekTo(position() - 10); return; }
       if (t.id === 'btn-fwd') { seekTo(position() + 30); return; }
+      if (t.id === 'btn-mute') { toggleMute(); return; }
+      if (t.id === 'btn-fs') { toggleFullscreen(); return; }
+      if (t.id === 'btn-keys') { toggleKeys(); return; }
       if (t.id === 'btn-autoplay') { setAutoplay(!autoplayNext); return; }
+      if (t.id === 'btn-clip') { toggleClip(); return; }
+      if (t.id === 'btn-clip-share') { shareClip(); return; }
+      if (t.id === 'btn-clip-done') { closeClip(); return; }
+      if (t.id === 'btn-cast-stop') { stopCasting(); return; }
     });
+    bindClipHandles();
+
+    // The chrome comes back for any sign of life over the picture, and the
+    // keys are the device's wherever the focus is (the guard is in onKey).
+    element.addEventListener('pointermove', wake);
+    element.addEventListener('pointerdown', wake);
+    document.addEventListener('keydown', onKey);
+    video.addEventListener('play', wake);
+    video.addEventListener('pause', wake);
+
+    // The picture is a control too, now that no native bar is drawn over it.
+    // A mouse has nothing to disambiguate, so its click acts at once; a
+    // finger's single tap waits out the double-tap window, and a double tap
+    // on the left or right third seeks instead of pausing.
+    video.addEventListener('pointerup', e => {
+      if (e.pointerType !== 'touch') { togglePlay(); return; }
+      const now = Date.now();
+      if (tapTimer && now - lastTapAt < DOUBLE_TAP_MS) {
+        clearTimeout(tapTimer);
+        tapTimer = null;
+        const rect = video.getBoundingClientRect();
+        const x = (e.clientX - rect.left) / (rect.width || 1);
+        if (x < 1 / 3) { seekTo(position() - 10); seekRipple('left', '−10s'); }
+        else if (x > 2 / 3) { seekTo(position() + 30); seekRipple('right', '+30s'); }
+        else togglePlay();
+        return;
+      }
+      lastTapAt = now;
+      tapTimer = setTimeout(() => { tapTimer = null; togglePlay(); }, DOUBLE_TAP_MS);
+    });
+    video.addEventListener('volumechange', syncMuteButton);
+    document.addEventListener('fullscreenchange', syncFullscreenButton);
 
     element.addEventListener('input', e => {
       if (e.target.id !== 'vol') return;
@@ -706,12 +1212,28 @@
       if (e.target.id === 'audio') return onAudioChange(e.target.value);
     });
 
-    scrub.addEventListener('click', e => {
-      const rect = scrub.getBoundingClientRect();
-      seekTo((e.clientX - rect.left) / rect.width * duration());
+    // Pointers, not clicks: the same three listeners serve a mouse and a
+    // finger, so the bar can be dragged on a phone. A hover still previews;
+    // a finger has no hover, so its preview comes with the drag.
+    scrub.addEventListener('pointerdown', e => {
+      scrubbing = true;
+      try { scrub.setPointerCapture(e.pointerId); } catch (err) { /* no capture, no matter */ }
+      paintScrubAt(scrubSeconds(e.clientX));
+      showThumb(e.clientX);
+      e.preventDefault();
     });
-    scrub.addEventListener('mousemove', onScrubHover);
-    scrub.addEventListener('mouseleave', () => { if ($('thumb')) $('thumb').hidden = true; });
+    scrub.addEventListener('pointermove', e => {
+      if (scrubbing) { paintScrubAt(scrubSeconds(e.clientX)); showThumb(e.clientX); return; }
+      if (e.pointerType !== 'touch') showThumb(e.clientX);
+    });
+    scrub.addEventListener('pointerup', e => {
+      if (!scrubbing) return;
+      scrubbing = false;
+      seekTo(scrubSeconds(e.clientX));
+      if (e.pointerType === 'touch') hideThumb();
+    });
+    scrub.addEventListener('pointercancel', () => { scrubbing = false; hideThumb(); });
+    scrub.addEventListener('pointerleave', () => { if (!scrubbing) hideThumb(); });
 
     setInterval(tick, 250);
     setInterval(() => { if (item && isPlaying()) saveProgress(position()); }, 5000);
@@ -746,13 +1268,13 @@
     restartFromCurrent();
   }
 
-  function onScrubHover(e) {
+  function showThumb(clientX) {
     const dur = duration();
     if (!trickplay || !item || item.id !== trickplayItemId || dur <= 0) return;
     const sheets = trickplay.sheet_hrefs || [];
     if (!sheets.length) return;
     const rect = scrub.getBoundingClientRect();
-    const frac = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
+    const frac = Math.min(1, Math.max(0, (clientX - rect.left) / (rect.width || 1)));
     const t = frac * dur;
     const per = trickplay.cols * trickplay.rows;
     const frame = Math.min(Math.floor(t / trickplay.interval_seconds), sheets.length * per - 1);
@@ -766,7 +1288,7 @@
     img.style.backgroundPosition = `-${col * tw}px -${row * th}px`;
     $('thumb-time').textContent = fmtTime(t);
     const el = $('thumb');
-    el.style.left = Math.min(Math.max(e.clientX - rect.left, tw / 2), Math.max(rect.width - tw / 2, tw / 2)) + 'px';
+    el.style.left = Math.min(Math.max(clientX - rect.left, tw / 2), Math.max(rect.width - tw / 2, tw / 2)) + 'px';
     el.hidden = false;
   }
 
@@ -778,11 +1300,18 @@
     const dur = duration();
     if (dur > 0) {
       const fill = scrub.querySelector('.fill'), avail = scrub.querySelector('.avail');
-      if (fill) fill.style.width = Math.min(100, position() / dur * 100) + '%';
       if (avail) avail.style.width = Math.min(100, availableEnd() / dur * 100) + '%';
-      if ($('t-now')) $('t-now').textContent = passage ? passageReadout(position()) : fmtTime(position());
+      if (!scrubbing) {
+        if (fill) fill.style.width = Math.min(100, position() / dur * 100) + '%';
+        if ($('t-now')) $('t-now').textContent = passage ? passageReadout(position()) : fmtTime(position());
+      }
     }
     syncPlayButton();
+    updatePositionState();
+    // A stop the media element never announced — a cast device's pause, a
+    // stream that ran out — lights the room back up all the same.
+    if (element.classList.contains('idle') && !isPlaying()) wake();
+    paintMini();
     checkPassageEnd();
     if (passageEndFired && !passageNaturalEnd && isPlaying()) {
       const endAt = passageEndNow();
@@ -797,6 +1326,137 @@
       onPlaybackEnded();
     }
     if (endFired && isPlaying() && dur > 0 && position() < dur - 10) endFired = false;
+  }
+
+  // --- the lock screen and the small window ------------------------------------
+  //
+  // A lock screen, a headphone button, a car stereo and a hardware key all
+  // speak one API, and none of them can see the transport above. What they
+  // are told is read off the SAME documents the transport draws from — the
+  // session's title, its work, its artwork link, the item's author — so the
+  // phone says what the page says, and nothing here composes an address or a
+  // rule of its own. Every call is guarded: a browser without the API is a
+  // browser with no lock-screen controls, which is where it started.
+
+  function mediaSession() {
+    return (root.navigator && root.navigator.mediaSession) || null;
+  }
+  function linkTitle(doc, rel) {
+    const l = doc && doc.links && doc.links[rel];
+    return (l && l.title) || '';
+  }
+  // What is playing, in the three lines an OS shows it in. The author is the
+  // audiobook's author and the record's artist; a film or an episode has
+  // none, and then the work's own title is the name under the title.
+  function nowPlaying() {
+    const work = linkTitle(session, 'work') || linkTitle(item, 'work');
+    const author = (item && item.identity && item.identity.author) || '';
+    const art = R.linkHref(session, 'artwork');
+    return {
+      title: (session && session.title) || (item && item.title) || '',
+      artist: author || work,
+      album: work,
+      // The same absolute the cast device is given: a lock screen fetches the
+      // picture itself, and a relative href is not enough for one.
+      artwork: art ? [{ src: root.castAbsolute(baseUrl, art) }] : [],
+    };
+  }
+  function updateNowPlaying() {
+    const ms = mediaSession();
+    if (!ms) return;
+    if (root.MediaMetadata) {
+      try { ms.metadata = new root.MediaMetadata(nowPlaying()); } catch (e) { /* no metadata, then */ }
+    }
+    ms.playbackState = isPlaying() ? 'playing' : 'paused';
+    syncPipButton();
+  }
+  function clearNowPlaying() {
+    const ms = mediaSession();
+    if (!ms) return;
+    ms.metadata = null;
+    ms.playbackState = 'none';
+    if (document.pictureInPictureElement) document.exitPictureInPicture().catch(() => {});
+  }
+  // Where the person is, in the ITEM's clock — the one the transport shows —
+  // so the scrubber on a lock screen agrees with the one on the page. A
+  // position past the duration is refused by the API rather than clamped,
+  // which is why it is clamped here.
+  function updatePositionState() {
+    const ms = mediaSession();
+    if (!ms || !ms.setPositionState) return;
+    const dur = duration();
+    if (!(dur > 0)) return;
+    try {
+      ms.setPositionState({
+        duration: dur,
+        position: Math.min(Math.max(position(), 0), dur),
+        playbackRate: (video && video.playbackRate) || 1,
+      });
+    } catch (e) { /* a clock the browser would not take */ }
+    ms.playbackState = isPlaying() ? 'playing' : 'paused';
+  }
+  // The neighbour a track button asks for: the work's order, off the item
+  // document's own relations, taken the way the transport's prev/next take
+  // it. The session's `next` is the fallback, because a run's next member is
+  // the session's and not the item's.
+  function goToNeighbour(rel) {
+    const href = R.linkHref(item, rel);
+    if (href) { goTo(Number(R.idIn(href)), 'nav'); return; }
+    if (rel === 'next' && nextId() != null) advance();
+  }
+  function bindMediaSession() {
+    const ms = mediaSession();
+    if (!ms || !ms.setActionHandler) return;
+    const handlers = {
+      play: () => { if (!isPlaying()) togglePlay(); },
+      pause: () => { if (isPlaying()) togglePlay(); },
+      seekbackward: d => seekTo(position() - ((d && d.seekOffset) || 10)),
+      seekforward: d => seekTo(position() + ((d && d.seekOffset) || 30)),
+      seekto: d => { if (d && typeof d.seekTime === 'number') seekTo(d.seekTime); },
+      previoustrack: () => goToNeighbour('prev'),
+      nexttrack: () => goToNeighbour('next'),
+    };
+    for (const name of Object.keys(handlers)) {
+      // A browser that does not know an action THROWS on its name rather
+      // than ignoring it, so each one is set on its own.
+      try { ms.setActionHandler(name, handlers[name]); } catch (e) { /* not this browser's */ }
+    }
+  }
+
+  // Picture-in-picture is the browser's own small window, and only the video
+  // element may go into it. The button appears when the browser has the
+  // feature; audio mode and casting hide it in CSS, having no picture here to
+  // put in a window.
+  function pipAvailable() {
+    return !!(document.pictureInPictureEnabled && video && !video.disablePictureInPicture);
+  }
+  function syncPipButton() {
+    const b = $('btn-pip');
+    if (!b) return;
+    b.hidden = !pipAvailable();
+    const on = document.pictureInPictureElement === video;
+    b.title = on ? 'Leave picture in picture' : 'Picture in picture';
+    b.setAttribute('aria-label', b.title);
+  }
+  function togglePip() {
+    if (!pipAvailable()) return;
+    if (document.pictureInPictureElement) { document.exitPictureInPicture().catch(() => {}); return; }
+    video.requestPictureInPicture().catch(() => {});
+  }
+
+  // The listeners this pair needs, bound beside the device's own rather than
+  // inside them: the OS's handlers never change, and the button answers a
+  // click of its own.
+  function bindNowPlaying() {
+    bindMediaSession();
+    element.addEventListener('click', e => {
+      if (e.target.id === 'btn-pip') togglePip();
+    });
+    video.addEventListener('enterpictureinpicture', syncPipButton);
+    video.addEventListener('leavepictureinpicture', syncPipButton);
+    video.addEventListener('play', updateNowPlaying);
+    video.addEventListener('pause', updateNowPlaying);
+    syncPipButton();
   }
 
   // --- casting -----------------------------------------------------------------
@@ -839,6 +1499,7 @@
       const s = root.cast.framework.CastContext.getInstance().getCurrentSession();
       const dev = s && s.getCastDevice();
       if ($('cast-device')) $('cast-device').textContent = (dev && dev.friendlyName) || 'Chromecast';
+      paintCastRemote();
       video.pause();
     }
     if (item) {
@@ -846,6 +1507,13 @@
       const act = R.actionOf(item, 'play');
       if (act) startPlayback(act, pos > 5 ? pos : 0);
     }
+  }
+
+  // Stop casting hands the sitting back to this page: ending the session
+  // fires IS_CONNECTED_CHANGED, and the handler above restarts the play here.
+  function stopCasting() {
+    const f = root.cast && root.cast.framework;
+    if (f) f.CastContext.getInstance().endCurrentSession(true);
   }
 
   // The receiver is handed the SESSION DOCUMENT, not a pile of fields this
@@ -900,14 +1568,24 @@
     K = kernel;
     profiles.browser = detectBrowserCaps();
     if (!element) build();
+    // The bar is re-rendered from the session document, so the listener goes
+    // on the container that outlives every render of it.
+    const bar = $('mini-player');
+    if (bar) bar.addEventListener('click', onMiniClick);
     root.__onGCastApiAvailable = ok => { if (ok) initCast(); };
   }
 
   root.Player = {
     init, attach, invoke, play, playFrom, close, holdSession,
     goTo, advance, cancelUpNext: hideUpNext,
+    // The setting is the device's; the settings panel hosts a second switch
+    // for it, so it is read and set through here rather than duplicated.
+    setAutoplay, autoplay: () => autoplayNext,
     setBaseUrl: u => { baseUrl = u; },
     playingItem: () => (item ? item.id : null),
+    // What the device is playing, for the one rule that turns on it: audio
+    // plays on when the page changes, video stops (kernel.js, playsOn).
+    medium: () => (item && item.medium) || null,
     passage: () => passage,
     session: () => session,
     get element() { return element; },

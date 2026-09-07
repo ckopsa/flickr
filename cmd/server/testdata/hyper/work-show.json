@@ -14,6 +14,13 @@
   "extra_count": 1,
   "item_count": 3,
   "representative_item_id": 8,
+  "runtime_minutes": 22,
+  "certification": "TV-14",
+  "cast": [
+    "Steve Carell",
+    "Rainn Wilson",
+    "John Krasinski"
+  ],
   "profile": "chris",
   "progress": {
     "status": "active",
@@ -42,6 +49,8 @@
       "id": 8,
       "medium": "video",
       "label": "S03E22 · Beach Games",
+      "season": 3,
+      "episode": 22,
       "duration_seconds": 2640,
       "tech": "1280x720 h264/aac · 2.40 GB · 2 ch",
       "overview": "Michael takes the office to the beach.",
@@ -59,6 +68,9 @@
         "position_seconds": 745
       },
       "links": {
+        "backdrop": {
+          "href": "/api/items/8/backdrop"
+        },
         "poster": {
           "href": "/api/items/8/poster"
         },
@@ -107,10 +119,15 @@
       "id": 9,
       "medium": "video",
       "label": "S03E23 · The Job",
+      "season": 3,
+      "episode": 23,
       "duration_seconds": 2760,
       "tech": "1280x720 h264/aac · 2.76 GB",
       "overview": "Jim and Karen head to New York.",
       "links": {
+        "backdrop": {
+          "href": "/api/items/9/backdrop"
+        },
         "poster": {
           "href": "/api/items/9/poster"
         },
@@ -155,11 +172,13 @@
     {
       "self": "/api/items/7",
       "kind": "item",
-      "title": "Deleted Scenes.mkv",
+      "title": "Deleted Scenes",
       "id": 7,
       "medium": "video",
-      "label": "Deleted Scenes.mkv",
+      "label": "Deleted Scenes",
       "extra": true,
+      "season": 3,
+      "episode": 22,
       "duration_seconds": 900,
       "tech": "1280x720 h264/aac · 900 MB",
       "links": {
@@ -200,6 +219,9 @@
     }
   ],
   "links": {
+    "backdrop": {
+      "href": "/api/items/8/backdrop"
+    },
     "items": {
       "href": "/api/works/tmdb%3A2316/items"
     },

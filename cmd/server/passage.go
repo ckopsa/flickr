@@ -263,6 +263,16 @@ func mintedLink(base string, itemID int64, p *sessionPassage) string {
 	return strings.TrimSuffix(base, "/") + "/" + passageHash(itemID, p)
 }
 
+// shareLink is the same passage as a PATH — /s/item/<id>?t=&end= — which is
+// the one spelling of it that reaches the server, so it is the one that
+// unfurls (share.go). It rides BESIDE href rather than instead of it: what
+// is pasted into a chat wants a preview, and what is written down wants the
+// address the grammar has always used.
+func shareLink(base string, itemID int64, p *sessionPassage) string {
+	return strings.TrimSuffix(base, "/") + "/s/item/" +
+		strconv.FormatInt(itemID, 10) + passageQuery(p)
+}
+
 // absoluteBase is the origin to mint links on: the one the CALLER used, so
 // a person copying a link from the page gets the address they are already
 // on. ADVERTISE_URL stands in when there is no Host header to read (a
@@ -670,13 +680,15 @@ func parseClock(s string) (float64, bool) {
 	return total, true
 }
 
-// passageDoc is one minted passage as a document: the link, the sentence,
-// and the item it starts in. GET /api/-/passage and a session's `link`
+// passageDoc is one minted passage as a document: the link, the same link in
+// the spelling that unfurls (`share_href`), the sentence, and the item it
+// starts in. GET /api/-/passage and a session's `link`
 // action both answer it, so a copy button renders the same way whether the
 // passage was marked while watching or composed from two places.
 func passageDoc(self, base string, in store.Item, out *store.Item, wk *works.Work, p *sessionPassage) *hyper.Envelope {
 	return hyper.Doc(self, "passage", "").
 		Field("href", mintedLink(base, in.ID, p)).
+		Field("share_href", shareLink(base, in.ID, p)).
 		Field("sentence", passageSentence(in, out, wk, p)).
 		Field("passage", p).
 		Link("item", itemHref(in.ID), itemTitle(in))

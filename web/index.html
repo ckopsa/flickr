@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>flickr — media PoC</title>
+<title>flickr</title>
 <meta name="theme-color" content="#14151a">
 <link rel="manifest" href="/manifest.json">
 <link rel="icon" href="/icon-192.png" type="image/png">
@@ -12,13 +12,20 @@
 <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.13/dist/hls.min.js"></script>
 <script src="https://www.gstatic.com/cv/js/sender/v1/cast_sender.js?loadCastFramework=1"></script>
 <style>
-  :root { color-scheme: dark; }
+  /* the colour tokens. --warn is amber: it belongs to passages (the bound
+     flags, the mark chips, the end-of-passage panel) and to a refusal.
+     Progress and status text is --muted or --accent, never a warning. */
+  :root { color-scheme: dark;
+    --fg: #e8e8ea; --muted: #9a9daa; --accent: #8db4f0; --warn: #f0b45c; --ok: #6ee7a0; }
   * { box-sizing: border-box; }
   [hidden] { display: none !important; }
-  body { margin: 0; font-family: system-ui, sans-serif; background: #14151a; color: #e8e8ea; }
+  body { margin: 0; font-family: system-ui, sans-serif; background: #14151a; color: var(--fg); }
   header { padding: 12px 20px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; border-bottom: 1px solid #2a2c33; }
   header h1 { font-size: 16px; margin: 0 auto 0 0; font-weight: 600; }
-  button, select, input[type=text] { background: #23252d; color: inherit; border: 1px solid #3a3d47; border-radius: 6px; padding: 6px 12px; font-size: 13px; }
+  /* the search box lives in the header now, and is only up on the library */
+  #search { width: 260px; max-width: 40vw; }
+  #gear { font-size: 15px; line-height: 1; padding: 6px 10px; }
+  button, select, input[type=text], input[type=number] { background: #23252d; color: inherit; border: 1px solid #3a3d47; border-radius: 6px; padding: 6px 12px; font-size: 13px; }
   button, select { cursor: pointer; }
   button:hover { background: #2c2f38; }
   main { padding: 0; }
@@ -29,29 +36,79 @@
   #gate-box { background: #1b1d24; border: 1px solid #2a2c33; border-radius: 12px; padding: 28px 32px; max-width: 420px; width: 92%; text-align: center; }
   #gate-box h2 { margin: 0 0 18px; font-size: 18px; font-weight: 600; }
   #gate-profiles { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; margin-bottom: 18px; }
-  #gate-profiles button { font-size: 15px; padding: 10px 18px; border-radius: 8px; }
+  #gate-profiles button { font-size: 15px; padding: 10px 18px; border-radius: 8px; display: flex; flex-direction: column; align-items: center; gap: 4px; min-width: 84px; }
+  /* the face: a profile is picked out by it before its name is read */
+  .gate-face { font-size: 30px; line-height: 1.1; }
+  .gate-kid { font-size: 10px; letter-spacing: .06em; text-transform: uppercase; color: var(--accent); }
   #gate-new { display: flex; gap: 8px; justify-content: center; }
   #gate-new input { flex: 1; }
-  #gate-note { font-size: 11px; color: #9a9daa; margin-top: 12px; }
-  #profile-chip { background: #1e2c42; color: #8db4f0; border-color: #2a3d5c; border-radius: 12px; }
+  #gate-kid { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); margin-top: 10px; cursor: pointer; }
+  #gate-kid input { accent-color: var(--accent); }
+  #gate-note { font-size: 11px; color: var(--muted); margin-top: 12px; }
+  #profile-chip { background: #1e2c42; color: var(--accent); border-color: #2a3d5c; border-radius: 12px; }
 
-  /* library grid */
-  #lib-bar { display: flex; gap: 10px; align-items: center; padding: 16px 20px 0; }
-  #search { width: 260px; max-width: 60vw; }
-  #lib-count { font-size: 12px; color: #9a9daa; }
-  #grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 16px; padding: 16px 20px 30px; }
+  /* the settings panel, behind the gear: the same box as the profile gate.
+     Everything in it is an engineering control, which is why it is not on
+     every screen any more. */
+  #settings { position: fixed; inset: 0; background: rgba(10,11,14,0.92); z-index: 100; display: flex; align-items: center; justify-content: center; }
+  #settings-box { background: #1b1d24; border: 1px solid #2a2c33; border-radius: 12px; padding: 24px 28px; max-width: 460px; width: 92%; }
+  #settings-box h2 { margin: 0 0 18px; font-size: 18px; font-weight: 600; }
+  .set-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 14px; }
+  .set-row > label { font-size: 12px; color: var(--muted); }
+  .set-row.end { justify-content: flex-end; margin-bottom: 0; }
+  #scan-status { font-size: 12px; color: var(--muted); }
+  #hw { font-size: 11px; padding: 2px 8px; border-radius: 10px; background: #1e2c42; color: var(--accent); cursor: help; }
+
+  /* the hero: what the home leads with. The picture is wide, and the page's
+     own colour is poured back over it from the bottom and the left, so the
+     title and the one action sit on flat ground rather than on a photograph.
+     Every picture on this page loads lazily onto the same placeholder grey. */
+  #hero { position: relative; display: flex; align-items: flex-end; min-height: 240px;
+    margin-top: 14px; border-radius: 12px; overflow: hidden; background: #1e2026; cursor: pointer; }
+  .hero-art { position: absolute; inset: 0; }
+  .hero-art img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  #hero::after { content: ''; position: absolute; inset: 0;
+    background: linear-gradient(to top, #14151a, rgba(20,21,26,0.55) 62%, rgba(20,21,26,0.15)),
+                linear-gradient(to right, rgba(20,21,26,0.85), rgba(20,21,26,0) 62%); }
+  .hero-body { position: relative; z-index: 1; padding: 20px; max-width: 620px; }
+  .hero-title { font-size: 26px; margin: 0 0 6px; }
+  .hero-line { font-size: 13px; color: #c5c8d4; line-height: 1.45; margin: 0 0 12px;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .hero-act { display: inline-block; font-size: 15px; padding: 9px 26px; border-radius: 6px;
+    background: #2a4a8a; border: 1px solid #3a5da8; color: var(--fg); }
+  #hero:hover .hero-act { background: #33579e; }
+
+  /* the library's bands: #grid is the stack of sections now, and the grid of
+     tiles is inside each one. "Recently added" is a row you scroll rather
+     than a block that pushes the bands off the screen. */
+  #grid { padding: 4px 20px 30px; }
+  .band { margin-top: 18px; }
+  .band > h3 { font-size: 13px; color: var(--muted); margin: 0 0 10px; font-weight: 600; }
+  .band-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 16px; }
+  .band-row { display: flex; gap: 16px; overflow-x: auto; scrollbar-width: thin; padding-bottom: 6px; }
+  .band-row > .card { flex: 0 0 130px; }
   .card { cursor: pointer; }
   .card:hover .poster-wrap { outline: 2px solid #5b8def; }
   .poster-wrap { aspect-ratio: 2/3; width: 100%; border-radius: 8px; background: #1e2026; overflow: hidden; position: relative; }
   .poster-wrap img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  /* a frame with no picture in it yet shimmers rather than sitting empty: the
+     kernel's one delegated load listener adds .loaded when the picture lands,
+     and the picture fades up into the frame it was already holding */
+  .poster-wrap:not(.text-tile):not(.loaded), #detail-poster:not(.loaded) {
+    background-image: linear-gradient(100deg, #1e2026 35%, #2b2e38 50%, #1e2026 65%);
+    background-size: 300% 100%; animation: shimmer 1.4s ease-in-out infinite; }
+  /* the tile's picture fades up out of its own frame; the detail poster IS
+     the frame, so it wears the shimmer itself and the picture lands on it */
+  .poster-wrap img { opacity: 0; transition: opacity 220ms ease; }
+  .poster-wrap.loaded img { opacity: 1; }
+  @keyframes shimmer { from { background-position: 150% 0; } to { background-position: -150% 0; } }
   .poster-wrap.text-tile { display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 8px; padding: 12px; text-align: center; background: linear-gradient(160deg, #232633, #191b22); }
   .text-tile .tile-title { font-size: 14px; font-weight: 600; color: #c5c8d4; word-break: break-word; }
-  .text-tile .tile-sub { font-size: 11px; color: #9a9daa; }
+  .text-tile .tile-sub { font-size: 11px; color: var(--muted); }
   .card .c-title { font-size: 13px; margin-top: 8px; font-weight: 600; line-height: 1.3; }
-  .card .c-sub { font-size: 11px; color: #9a9daa; margin-top: 2px; }
-  .card .c-tech { font-size: 10px; color: #6f7280; margin-top: 2px; font-family: ui-monospace, monospace; }
-  #empty { padding: 40px; color: #9a9daa; font-size: 14px; }
-  #view-loading { padding: 40px; color: #9a9daa; font-size: 14px; }
+  .card .c-sub { font-size: 11px; color: var(--muted); margin-top: 2px; }
+  #empty { padding: 40px; color: var(--muted); font-size: 14px; }
+  #view-loading { padding: 40px; color: var(--muted); font-size: 14px; }
 
   /* genre chip row */
   #genre-row { display: flex; gap: 8px; padding: 12px 20px 0; overflow-x: auto; scrollbar-width: thin; }
@@ -60,7 +117,7 @@
 
   /* continue-watching row */
   #cw { padding: 14px 20px 0; }
-  #cw h3 { font-size: 13px; color: #9a9daa; margin: 0 0 8px; font-weight: 600; }
+  #cw h3 { font-size: 13px; color: var(--muted); margin: 0 0 8px; font-weight: 600; }
   #cw-row { display: flex; gap: 12px; overflow-x: auto; scrollbar-width: thin; padding-bottom: 6px; }
   .cw-card { flex: 0 0 130px; cursor: pointer; }
   .cw-card:hover .poster-wrap { outline: 2px solid #5b8def; }
@@ -68,35 +125,89 @@
   .cw-card .cw-bar { height: 3px; background: #2a2c33; border-radius: 2px; margin-top: 4px; overflow: hidden; }
   .cw-card .cw-bar > div { height: 100%; background: #5b8def; }
   .cw-card .c-title { font-size: 12px; margin-top: 5px; font-weight: 600; line-height: 1.3; }
-  .cw-card .c-sub { font-size: 11px; color: #9a9daa; margin-top: 2px; }
-  .cw-card .cw-act { font-size: 11px; color: #8db4f0; margin-top: 3px; }
+  .cw-card .c-sub { font-size: 11px; color: var(--muted); margin-top: 2px; }
+  .cw-card .cw-act { font-size: 11px; color: var(--accent); margin-top: 3px; }
 
   /* enriched episode rows */
   .item.enriched { display: flex; gap: 12px; align-items: flex-start; }
   .item.enriched img.still { width: 128px; aspect-ratio: 16/9; object-fit: cover; border-radius: 4px; background: #1e2026; flex: 0 0 auto; }
-  .item.enriched .overview { font-size: 12px; color: #9a9daa; margin-top: 3px; line-height: 1.4;
+  .item.enriched .overview { font-size: 12px; color: var(--muted); margin-top: 3px; line-height: 1.4;
     display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 
   /* show (episode list) view */
   #show-title { margin: 14px 20px 6px; font-size: 18px; }
-  #show-note, #lib-note { margin: 0 20px 8px; font-size: 13px; color: #f0b45c; }
+  /* the results page: the same headed rows the library draws */
+  #search-title { margin: 14px 0 6px; font-size: 18px; }
+  #show-progress, #lib-note { margin: 0 20px 8px; font-size: 13px; }
+  /* where you are in the show is a fact about it, said under the title in
+     the same grey as every other one; only the route's refusal is a warning */
+  #show-progress { color: var(--muted); }
+  #lib-note { color: var(--warn); }
+
+  /* the episode to put on now, at the head of the pane */
+  #next-up { display: flex; gap: 14px; align-items: center; margin: 10px 20px 0;
+    padding: 12px; border: 1px solid #2a2c33; border-radius: 10px; background: #1b1d24; }
+  #next-up .nu-art { flex: 0 0 auto; cursor: pointer; }
+  #next-up .nu-art img { width: 160px; aspect-ratio: 16/9; object-fit: cover;
+    border-radius: 6px; background: #1e2026; display: block; }
+  #next-up .nu-body { min-width: 0; }
+  #next-up .nu-lead { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+  #next-up .nu-title { font-size: 15px; font-weight: 600; margin: 3px 0; }
+  #next-up .nu-overview { font-size: 12px; color: var(--muted); line-height: 1.4; margin-bottom: 8px;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  #next-up .nu-act .act { margin-right: 0; }
+
   #episode-list, #extras-list { margin: 8px 20px 30px; border: 1px solid #2a2c33; border-radius: 8px; overflow: hidden; }
-  #extras-head { margin: 18px 20px 0; font-size: 13px; color: #9a9daa; text-transform: uppercase; letter-spacing: .06em; }
+  #extras-head { margin: 18px 20px 0; font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+  /* one season, one disclosure. With more than one they share a `name`, and
+     the browser's exclusive accordion turns the headings into tabs. */
+  .season > summary { padding: 10px 16px; cursor: pointer; font-size: 13px; font-weight: 600;
+    background: #1b1d24; border-bottom: 1px solid #1e2026; list-style: none; }
+  .season > summary::-webkit-details-marker { display: none; }
+  .season > summary::before { content: '▸'; color: var(--muted); margin-right: 8px; }
+  .season[open] > summary::before { content: '▾'; }
+  .season > summary:hover { background: #1e222c; }
+  .season .season-count { float: right; color: var(--muted); font-weight: 400; }
+  .season:last-child .season-items .item:last-child { border-bottom: 0; }
   .item { padding: 10px 16px; border-bottom: 1px solid #1e2026; cursor: pointer; }
   .item:last-child { border-bottom: 0; }
   .item:hover { background: #1e222c; }
+  .item.current { background: #1a1f2b; }
   .item .title { font-size: 14px; }
-  .item .meta { font-size: 11px; color: #9a9daa; margin-top: 2px; }
+  .item.watched .title { color: var(--muted); }
+  /* seen: the tick is the ok green, and it is the row's only colour */
+  .item .tick { color: var(--ok); }
+  .item .meta { font-size: 11px; color: var(--muted); margin-top: 2px; }
+  /* where the row was left, in the same unit the resume shelf's bar uses */
+  .item .row-bar { height: 3px; max-width: 220px; background: #2a2c33; border-radius: 2px;
+    margin-top: 5px; overflow: hidden; }
+  .item .row-bar > div { height: 100%; background: #5b8def; }
 
   /* detail + player */
   #view, #stage { padding: 0 20px 30px; }
-  #detail-info { display: flex; gap: 22px; margin-top: 16px; flex-wrap: wrap; }
-  #detail-poster { width: 180px; aspect-ratio: 2/3; border-radius: 8px; object-fit: cover; background: #1e2026; }
-  #detail-body { flex: 1; min-width: 260px; }
+  #detail-info { display: flex; gap: 22px; margin-top: 16px; flex-wrap: wrap;
+    position: relative; overflow: hidden; border-radius: 12px; padding: 18px; }
+  /* the title's own picture behind its head, faded into the page the same way
+     the hero's is — dimmer, because there is text over all of it here */
+  #detail-backdrop { position: absolute; inset: 0; background: #1e2026; }
+  #detail-backdrop img { width: 100%; height: 100%; object-fit: cover; display: block; opacity: .5; }
+  #detail-backdrop::after { content: ''; position: absolute; inset: 0;
+    background: linear-gradient(to top, #14151a, rgba(20,21,26,0.62) 70%, rgba(20,21,26,0.3)),
+                linear-gradient(to right, rgba(20,21,26,0.82), rgba(20,21,26,0.1) 72%); }
+  #detail-poster { width: 180px; aspect-ratio: 2/3; border-radius: 8px; object-fit: cover; background: #1e2026;
+    position: relative; z-index: 1; }
+  #detail-body { flex: 1; min-width: 260px; position: relative; z-index: 1; }
   #detail-body h2 { margin: 0 0 4px; font-size: 22px; }
-  #detail-year { color: #9a9daa; font-weight: 400; }
+  #detail-year { color: var(--muted); font-weight: 400; }
+  /* what the title is: the certification, how long it runs, the genres */
+  #detail-meta { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 8px; font-size: 12px; }
+  #detail-meta .cert { border: 1px solid #5a5e6b; border-radius: 4px; padding: 1px 6px;
+    color: #c5c8d4; font-weight: 600; letter-spacing: .04em; }
+  #detail-meta .runtime { color: var(--muted); font-variant-numeric: tabular-nums; }
+  #detail-meta .chip { background: #23252d; border: 1px solid #3a3d47; border-radius: 12px;
+    padding: 2px 10px; color: #c5c8d4; }
   #detail-overview { font-size: 14px; color: #c5c8d4; line-height: 1.5; max-width: 700px; margin: 10px 0; }
-  #detail-tech { font-size: 12px; color: #9a9daa; font-family: ui-monospace, monospace; margin: 8px 0 14px; }
+  #detail-cast { font-size: 12px; color: var(--muted); max-width: 700px; margin: 0 0 12px; }
   #detail-play { font-size: 15px; padding: 9px 26px; background: #2a4a8a; border-color: #3a5da8; }
   #detail-play:hover { background: #33579e; }
   #detail-chapters { margin-top: 16px; display: flex; flex-wrap: wrap; gap: 6px; }
@@ -106,11 +217,30 @@
     border-radius: 6px; padding: 6px 12px; font-size: 13px; text-decoration: none; }
   #detail-epnav a:hover { background: #2c2f38; }
   #detail-extras { margin-top: 14px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-  #detail-extras .label { font-size: 11px; color: #9a9daa; text-transform: uppercase; letter-spacing: .06em; }
+  #detail-extras .label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
   #detail-extras a { background: #23252d; color: #c5c8d4; border: 1px solid #3a3d47;
     border-radius: 6px; padding: 6px 12px; font-size: 13px; text-decoration: none; }
   #detail-extras a:hover { background: #2c2f38; }
-  #now-playing { font-size: 15px; font-weight: 600; margin: 14px 0 10px; }
+  /* the item page's Details disclosure: what the FILE is, folded away */
+  #detail-details { margin: 26px 0 0; border-top: 1px solid #2a2c33; padding-top: 12px; max-width: 700px; }
+  #detail-details summary { font-size: 11px; color: var(--muted); cursor: pointer; text-transform: uppercase; letter-spacing: .06em; }
+  #detail-details dl { display: grid; grid-template-columns: max-content 1fr; gap: 4px 16px; margin: 12px 0 0; font-size: 12px; }
+  #detail-details dt { color: #6f7280; }
+  #detail-details dd { margin: 0; color: #c5c8d4; font-family: ui-monospace, monospace; word-break: break-word; }
+  /* the curatorial controls, inside the same fold: what is done to the RECORD */
+  #detail-admin { margin-top: 16px; border-top: 1px solid #2a2c33; padding-top: 12px; }
+  #detail-admin .unavailable { margin: 6px 0; }
+  #identity-form { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: flex-end; margin-bottom: 12px; }
+  #identity-form label { display: flex; flex-direction: column; gap: 3px; }
+  #identity-form label span { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+  #identity-form input { width: 130px; }
+  #identity-form input[type=number] { width: 78px; }
+  /* the way back and what is playing: one bar, which theatre mode lifts over
+     the picture (player.js moves it inside #device) */
+  #player-title { display: flex; gap: 12px; align-items: center; margin: 14px 0 10px; }
+  #player-title .back { margin: 0; }
+  #now-playing { font-size: 15px; font-weight: 600; margin: 0; min-width: 0;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
   #player-chrome { margin-top: 6px; }
   /* reader pane (reader.js): a paper page in the dark UI, TOC alongside */
@@ -118,7 +248,7 @@
   .rd-bar, .rd-nav { display: flex; gap: 10px; align-items: center; }
   .rd-bar { margin: 0 0 8px; }
   .rd-title { font-size: 15px; font-weight: 600; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .rd-readout { font-size: 12px; color: #9a9daa; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .rd-readout { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
   .rd-body { position: relative; flex: 1; min-height: 0; display: flex; }
   .rd-view { flex: 1; min-width: 0; background: #f4f1ea; border-radius: 8px; overflow: hidden; }
   .rd-fail { padding: 24px; color: #7a1f1f; font-size: 14px; }
@@ -126,14 +256,14 @@
   .rd-toc button { text-align: left; font-size: 13px; padding: 6px 10px; border: 0; background: transparent; border-radius: 6px; }
   .rd-toc button:hover { background: #2c2f38; }
   .rd-toc button.current { background: #2a4a8a; color: #dbe6fa; }
-  .rd-toc-empty { font-size: 12px; color: #9a9daa; padding: 8px; }
+  .rd-toc-empty { font-size: 12px; color: var(--muted); padding: 8px; }
   .rd-nav { margin-top: 8px; justify-content: space-between; }
   .rd-nav button:disabled { opacity: .45; cursor: default; }
-  .rd-msg { font-size: 13px; color: #f0b45c; flex: 1; text-align: center; }
-  .rd-end { position: fixed; right: 24px; bottom: 24px; z-index: 60; background: #1b1d24; border: 1px solid #f0b45c;
+  .rd-msg { font-size: 13px; color: var(--muted); flex: 1; text-align: center; }
+  .rd-end { position: fixed; right: 24px; bottom: 24px; z-index: 60; background: #1b1d24; border: 1px solid var(--warn);
     border-radius: 10px; padding: 14px 18px; max-width: 340px; box-shadow: 0 8px 30px rgba(0,0,0,0.6); }
   .rd-end-title { font-size: 14px; font-weight: 600; }
-  .rd-end-sub { font-size: 12px; color: #9a9daa; margin-top: 4px; }
+  .rd-end-sub { font-size: 12px; color: var(--muted); margin-top: 4px; }
   /* the PDF pane (pdfreader.js): one page on a canvas, fit to the width, scrolled when taller */
   .rd-pdf { overflow: auto; background: #3a3b40; padding: 6px; }
   .rd-canvas { display: block; margin: 0 auto; background: #fff; box-shadow: 0 2px 12px rgba(0,0,0,0.5); }
@@ -146,15 +276,33 @@
      under the dark chrome — a scan inverted would be a negative */
   .rd-dark.rd-printed .rd-canvas { background: #fff; filter: none; }
   .rd-theme, .rd-pictures { font-size: 16px; line-height: 1; }
-  .rd-page { font-size: 13px; color: #9a9daa; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .rd-page { font-size: 13px; color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
   .rd-page-in { width: 64px; font-size: 13px; padding: 4px 6px; border-radius: 6px; border: 1px solid #2a2c33; background: #14151a; color: inherit; }
   .rd-end button { margin-top: 10px; margin-right: 8px; }
   .rd-keep { background: #2a4a8a; border-color: #3a5da8; }
   .rd-keep:hover { background: #33579e; }
-  video { width: 100%; max-height: 58vh; background: #000; border-radius: 8px; }
-  body.casting video { opacity: 0.25; }
-  #cast-overlay { display: none; font-size: 14px; color: #8db4f0; margin: 6px 0; }
-  body.casting #cast-overlay { display: block; }
+  /* the picture is a control: a click pauses it, a double tap seeks (player.js) */
+  video { width: 100%; max-height: 58vh; background: #000; border-radius: 8px; cursor: pointer; }
+  /* casting: the page IS the remote (#cast-remote, player.js). A dimmed
+     picture of what the television is showing is neither watchable nor a
+     control, so the video goes and the artwork stands in its place; the
+     transport below already drives the receiver, so it only grows a thumb. */
+  body.casting video, body.casting #tap-to-play, body.casting #seek-ripple { display: none; }
+  #cast-remote { display: none; }
+  body.casting #cast-remote { display: flex; gap: 20px; align-items: center; flex-wrap: wrap;
+    padding: 20px; border: 1px solid #3a3d47; border-radius: 8px; background: #1b1d24; }
+  #cast-art { width: 240px; max-width: 45vw; border-radius: 6px; background: #000; }
+  #cast-what { flex: 1; min-width: 220px; display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
+  #cast-title { font-size: 22px; font-weight: 600; line-height: 1.2; }
+  #cast-work { font-size: 14px; color: var(--muted); }
+  #cast-to { font-size: 14px; color: var(--accent); }
+  #btn-cast-stop { margin-top: 8px; }
+  body.casting #controls button { min-width: 56px; font-size: 20px; padding: 10px 16px; }
+  body.casting #controls input[type=range] { width: 160px; }
+  /* nothing to take fullscreen when the picture is on the other device */
+  body.casting #btn-fs { display: none; }
+  /* the picture is on the television: there is nothing here to put in a small window */
+  body.casting #btn-pip { display: none !important; }
   #scrub { position: relative; height: 22px; margin: 10px 0 2px; cursor: pointer; }
   #scrub .rail { position: absolute; left: 0; right: 0; top: 8px; height: 6px; background: #2a2c33; border-radius: 3px; }
   #scrub .avail { position: absolute; left: 0; top: 8px; height: 6px; background: #3d4250; border-radius: 3px; width: 0; }
@@ -162,79 +310,153 @@
   #scrub .tick { position: absolute; top: 6px; width: 2px; height: 10px; background: #8a92a8; border-radius: 1px; }
   /* passage bounds: amber flags pointing into the passage — taller and
      coloured so they cannot be mistaken for chapter ticks */
-  #scrub .bound { position: absolute; top: 2px; width: 3px; height: 18px; background: #f0b45c; border-radius: 2px; transform: translateX(-50%); z-index: 2; }
-  #scrub .bound::after { content: ''; position: absolute; top: 0; width: 6px; height: 5px; background: #f0b45c; }
+  #scrub .bound { position: absolute; top: 2px; width: 3px; height: 18px; background: var(--warn); border-radius: 2px; transform: translateX(-50%); z-index: 2; }
+  #scrub .bound::after { content: ''; position: absolute; top: 0; width: 6px; height: 5px; background: var(--warn); }
   #scrub .bound.start::after { left: 3px; border-radius: 0 3px 3px 0; }
   #scrub .bound.end::after { right: 3px; border-radius: 3px 0 0 3px; }
   #thumb { position: absolute; bottom: 26px; transform: translateX(-50%); z-index: 5; pointer-events: none; text-align: center; }
   #thumb-img { background-color: #000; background-repeat: no-repeat; border: 1px solid #3a3d47; border-radius: 4px; box-shadow: 0 4px 14px rgba(0,0,0,0.5); }
   #thumb-time { display: inline-block; margin-top: 3px; font-size: 11px; padding: 1px 7px; border-radius: 8px; background: rgba(20,21,26,0.9); color: #c5c8d4; font-variant-numeric: tabular-nums; }
-  #timebar { display: flex; justify-content: space-between; font-size: 12px; color: #9a9daa; font-variant-numeric: tabular-nums; }
+  #timebar { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
   #controls { display: flex; gap: 8px; align-items: center; margin-top: 8px; flex-wrap: wrap; }
   #controls button { min-width: 42px; }
   #controls input[type=range] { width: 110px; accent-color: #5b8def; }
+  /* the double tap's answer: the amount seeked, on the side it was tapped */
+  #seek-ripple { position: absolute; top: 50%; z-index: 50; pointer-events: none;
+    padding: 10px 18px; border-radius: 999px; background: rgba(20,21,26,0.78);
+    font-size: 15px; font-variant-numeric: tabular-nums;
+    animation: seek-ripple .5s ease-out forwards; }
+  #seek-ripple.left { left: 8%; }
+  #seek-ripple.right { right: 8%; }
+  @keyframes seek-ripple {
+    from { opacity: 0; transform: translateY(-50%) scale(.85); }
+    30% { opacity: 1; transform: translateY(-50%) scale(1); }
+    to { opacity: 0; transform: translateY(-50%) scale(1); }
+  }
   /* making a passage: the in/out chips turn amber like the .bound flags once
      set and grow a small × that clears the mark */
   #controls .markchip { display: inline-flex; }
   #controls .markchip button { font-variant-numeric: tabular-nums; }
-  #controls .markchip .mark-clear { min-width: 0; padding: 6px 8px; border-left: 0; border-radius: 0 6px 6px 0; color: #9a9daa; }
+  #controls .markchip .mark-clear { min-width: 0; padding: 6px 8px; border-left: 0; border-radius: 0 6px 6px 0; color: var(--muted); }
   #controls .markchip .mark-clear:hover { color: #f08080; }
-  #controls .markchip.set button { border-color: #a37a30; color: #f0b45c; }
+  #controls .markchip.set button { border-color: #a37a30; color: var(--warn); }
   #controls .markchip.set button:first-child { border-radius: 6px 0 0 6px; background: #2e2616; }
   #controls .markchip.set button:first-child:hover { background: #3a3019; }
+  /* the clip, marked ON the bar: an amber region between two grips, dragged
+     to where the passage starts and stops (player.js). The chips under the
+     picture do the same with a keyboard, and the sentence is the server's. */
+  #clip-range { position: absolute; left: 0; right: 0; top: 0; bottom: 0; z-index: 3; pointer-events: none; }
+  #clip-region { position: absolute; top: 8px; height: 6px; border-radius: 3px; background: var(--warn); opacity: .45; }
+  .clip-handle { position: absolute; top: -1px; width: 16px; height: 24px; margin-left: -8px;
+    border-radius: 4px; background: var(--warn); box-shadow: 0 1px 4px rgba(0,0,0,0.6);
+    pointer-events: auto; cursor: ew-resize; touch-action: none; }
+  .clip-handle::after { content: ''; position: absolute; left: 7px; top: 6px; width: 2px; height: 12px;
+    background: rgba(20,21,26,0.75); }
+  /* a finger has no pixel to spare: the grips grow where one is doing the dragging */
+  @media (pointer: coarse) { .clip-handle { width: 24px; margin-left: -12px; } .clip-handle::after { left: 11px; } }
+  #clipbar { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; margin-top: 8px; font-size: 13px; }
+  #clip-sentence { flex: 1; min-width: 200px; color: var(--warn); }
+  #btn-clip.on, #btn-clip-share { border-color: #a37a30; color: var(--warn); background: #2e2616; }
+  #btn-clip.on:hover, #btn-clip-share:hover { background: #3a3019; }
+  #btn-clip-share[disabled] { opacity: .5; cursor: default; }
   /* the minted link, as text too (a phone with no clipboard API long-presses it) */
-  #passage-link { margin-top: 8px; font-size: 12px; color: #9a9daa; display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: baseline; }
-  #passage-link .copied { color: #6ee7a0; }
+  #passage-link { margin-top: 8px; font-size: 12px; color: var(--muted); display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: baseline; }
+  #passage-link .copied { color: var(--ok); }
   #passage-link code { user-select: all; -webkit-user-select: all; word-break: break-all; color: #c5c8d4;
     background: #1b1d24; border: 1px solid #3a3d47; border-radius: 6px; padding: 4px 8px; font-size: 12px; }
-  google-cast-launcher { width: 28px; height: 28px; cursor: pointer; --connected-color: #5b8def; --disconnected-color: #9a9daa; }
+  google-cast-launcher { width: 28px; height: 28px; cursor: pointer; --connected-color: #5b8def; --disconnected-color: var(--muted); }
   #chapters { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
   #chapters button { font-size: 12px; padding: 4px 10px; }
-  #status { font-size: 13px; color: #9a9daa; margin: 10px 0; }
+  #status { font-size: 13px; color: var(--muted); margin: 10px 0; }
   /* up-next auto-advance overlay */
   #upnext { position: fixed; right: 24px; bottom: 24px; z-index: 60; background: #1b1d24; border: 1px solid #3a3d47;
     border-radius: 10px; padding: 14px 18px; max-width: 340px; cursor: pointer; box-shadow: 0 8px 30px rgba(0,0,0,0.6); }
   #upnext:hover { border-color: #5b8def; }
   #upnext-title { font-size: 14px; font-weight: 600; }
-  #upnext-count { font-size: 12px; color: #9a9daa; margin-top: 4px; font-variant-numeric: tabular-nums; }
+  #upnext-count { font-size: 12px; color: var(--muted); margin-top: 4px; font-variant-numeric: tabular-nums; }
   #upnext-cancel { margin-top: 10px; }
   #upnext-play { margin-top: 10px; margin-right: 8px; background: #2a4a8a; border-color: #3a5da8; }
   #upnext-play:hover { background: #33579e; }
   /* end-of-passage panel: paused at the bound, two ways out */
   #device { position: relative; }
+  /* Fullscreen belongs to the DEVICE wrapper, not to the media element: the
+     wrapper goes full, so the scrub bar goes with it and keeps its ticks, its
+     passage flags and its trickplay previews — all of which the native
+     fullscreen left behind. The transport then overlays the picture, on a
+     gradient dark enough to read it against. */
+  #device:fullscreen { background: #000; }
+  #device:fullscreen video { width: 100%; height: 100%; max-height: none; border-radius: 0; object-fit: contain; }
+  #device:fullscreen #transport { position: absolute; left: 0; right: 0; bottom: 0; z-index: 58;
+    padding: 4px 24px 16px; background: linear-gradient(rgba(0,0,0,0), rgba(0,0,0,0.82) 55%); }
+  /* --- theatre mode ---------------------------------------------------------
+
+     A picture playing gets the page out of its way (player.js puts .theatre on
+     the body while one is up, and never for a record): the stage drops its
+     measure so the video takes the full width and up to 80vh, the title bar
+     rides over the top of the picture and the transport over the bottom, and
+     everything below the picture keeps the page's own margins.
+
+     Then the room darkens. Three seconds of a still pointer while it plays and
+     both bars fade out, the cursor with them; any movement, tap or key brings
+     them back, and a pause always does (player.js, wake). */
+  body.theatre #stage { padding-inline: 0; background: #0a0b0e; }
+  body.theatre #player-chrome > *:not(#device) { padding-inline: max(20px, calc((100% - 1400px) / 2)); }
+  body.theatre video { max-height: 80vh; border-radius: 0; }
+  body.theatre #player-title { position: absolute; left: 0; right: 0; top: 0; z-index: 58;
+    margin: 0; padding: 10px 24px 28px; background: linear-gradient(rgba(0,0,0,0.78), rgba(0,0,0,0)); }
+  /* the transport goes over the picture where there is room for it; a phone
+     has none, and keeps it under the picture as before */
+  @media (min-width: 641px) {
+    body.theatre #transport { position: absolute; left: 0; right: 0; bottom: 0; z-index: 58;
+      padding: 4px 24px 16px; background: linear-gradient(rgba(0,0,0,0), rgba(0,0,0,0.82) 55%); }
+  }
+  #player-title, #transport, #keys-help { transition: opacity .3s ease; }
+  #device.idle #player-title, #device.idle #transport, #device.idle #keys-help {
+    opacity: 0; pointer-events: none; }
+  #device.idle, #device.idle video { cursor: none; }
+  /* the '?' card: the keys, listed over the picture they drive */
+  #keys-help { position: absolute; right: 16px; bottom: 84px; z-index: 59; max-width: min(320px, 80vw);
+    background: rgba(20,21,26,0.94); border: 1px solid #3a3d47; border-radius: 10px;
+    padding: 12px 16px; box-shadow: 0 8px 30px rgba(0,0,0,0.6); }
+  #keys-help dl { display: grid; grid-template-columns: max-content 1fr; gap: 4px 14px; margin: 0; font-size: 12px; }
+  #keys-help dt { color: var(--muted); font-family: ui-monospace, monospace; white-space: nowrap; }
+  #keys-help dd { margin: 0; color: #c5c8d4; }
   #tap-to-play { position: absolute; left: 50%; top: 32%; transform: translate(-50%, -50%); z-index: 55;
     font-size: 20px; padding: 14px 26px; border-radius: 999px; background: #2a4a8a; border: 1px solid #3a5da8; color: #fff; cursor: pointer; }
   #tap-to-play:hover { background: #33579e; }
-  #passage-end { position: fixed; right: 24px; bottom: 24px; z-index: 60; background: #1b1d24; border: 1px solid #f0b45c;
+  #passage-end { position: fixed; right: 24px; bottom: 24px; z-index: 60; background: #1b1d24; border: 1px solid var(--warn);
     border-radius: 10px; padding: 14px 18px; max-width: 340px; box-shadow: 0 8px 30px rgba(0,0,0,0.6); }
   #passage-end-title { font-size: 14px; font-weight: 600; }
-  #passage-end-sub { font-size: 12px; color: #9a9daa; margin-top: 4px; font-variant-numeric: tabular-nums; }
+  #passage-end-sub { font-size: 12px; color: var(--muted); margin-top: 4px; font-variant-numeric: tabular-nums; }
   #passage-keep { margin-top: 10px; margin-right: 8px; background: #2a4a8a; border-color: #3a5da8; }
   #passage-keep:hover { background: #33579e; }
   #passage-back { margin-top: 10px; }
   .badge { display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 10px; margin-right: 6px; }
-  .badge.direct { background: #14432a; color: #6ee7a0; }
-  .badge.transcode { background: #4a3413; color: #f0b45c; }
+  .badge.direct { background: #14432a; color: var(--ok); }
+  .badge.transcode { background: #4a3413; color: var(--warn); }
   .badge.deny { background: #4a1a1a; color: #f08080; }
   #trace { margin-top: 14px; font-size: 13px; }
-  #trace h3 { font-size: 13px; color: #9a9daa; margin: 14px 0 6px; }
+  /* the steps hide behind a disclosure: the badge line is the answer, this is
+     only for whoever asks why */
+  #trace summary { font-size: 13px; color: var(--muted); margin: 14px 0 6px; cursor: pointer; width: fit-content; }
+  #trace summary:hover { color: #c5c8d4; }
+  #trace details[open] summary { margin-bottom: 8px; }
   .step { display: flex; gap: 8px; padding: 3px 0; font-family: ui-monospace, monospace; font-size: 12px; }
   .step .mark { width: 16px; }
-  .step.pass .mark { color: #6ee7a0; }
+  .step.pass .mark { color: var(--ok); }
   .step.fail .mark { color: #f08080; }
   .step .check { width: 130px; color: #c5c8d4; }
-  .step .detail { color: #9a9daa; }
+  .step .detail { color: var(--muted); }
 
   /* one #view holds whichever document is on screen; #stage holds the two
      devices (the player's chrome around the persistent media element, and the
      reader's container), and the two are never both up */
   #view > .back, #stage > .back { margin-left: 0; }
-  #lib-bar, #genre-row, #cw, #grid, #show-title, #show-note, #episode-list,
+  #genre-row, #cw, #grid, #show-title, #show-progress, #next-up, #episode-list,
   #extras-head, #extras-list, #artist-head, #artist-albums { margin-left: 0; margin-right: 0; }
   #grid { padding-left: 0; padding-right: 0; }
   #artist-head { margin-left: 0; }
   #artist-albums { padding-left: 0; padding-right: 0; }
-  #lib-bar { padding-left: 0; }
   #genre-row { padding-left: 0; }
   #cw { padding-left: 0; }
   #show-title { margin-left: 0; }
@@ -246,15 +468,15 @@
   .act.primary { font-size: 15px; padding: 9px 26px; background: #2a4a8a; border-color: #3a5da8; }
   .act.primary:hover { background: #33579e; }
   #work-actions { margin: 10px 0 4px; }
-  .unavailable { font-size: 12px; color: #9a9daa; margin: 10px 0; }
+  .unavailable { font-size: 12px; color: var(--muted); margin: 10px 0; }
   /* the document's own controls, under the device's transport row */
   #doc-controls { display: flex; gap: 8px; align-items: center; margin-top: 8px; flex-wrap: wrap; }
   #doc-controls button { min-width: 42px; }
   #doc-controls .markchip { display: inline-flex; }
   #doc-controls .markchip button { font-variant-numeric: tabular-nums; margin-right: 0; }
-  #doc-controls .markchip .mark-clear { min-width: 0; padding: 6px 8px; border-left: 0; border-radius: 0 6px 6px 0; color: #9a9daa; }
+  #doc-controls .markchip .mark-clear { min-width: 0; padding: 6px 8px; border-left: 0; border-radius: 0 6px 6px 0; color: var(--muted); }
   #doc-controls .markchip .mark-clear:hover { color: #f08080; }
-  #doc-controls .markchip.set button { border-color: #a37a30; color: #f0b45c; }
+  #doc-controls .markchip.set button { border-color: #a37a30; color: var(--warn); }
   #doc-controls .markchip.set button:first-child { border-radius: 6px 0 0 6px; background: #2e2616; }
   #doc-controls .markchip.set button:first-child:hover { background: #3a3019; }
 
@@ -262,31 +484,231 @@
   #passage-picker { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 10px; }
   #passage-picker select { max-width: 40vw; }
 
+  /* the mini player: the bar an audio sitting collapses into. It sits over
+     whatever document is on screen, says what is playing, and takes a tap
+     back to the item's own page, where the full chrome is drawn again. */
+  #mini-player { position: fixed; left: 0; right: 0; bottom: 0; z-index: 80;
+    background: #1b1d24; border-top: 1px solid #2a2c33; box-shadow: 0 -6px 30px rgba(0,0,0,0.5); }
+  #mini-bar { position: relative; display: flex; align-items: center; gap: 12px;
+    padding: 8px max(16px, calc((100% - 1400px) / 2)); cursor: pointer; }
+  #mini-art { width: 44px; height: 44px; flex: 0 0 auto; border-radius: 6px;
+    object-fit: cover; background: #14151a; }
+  #mini-what { flex: 1 1 auto; min-width: 0; }
+  #mini-title, #mini-work { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #mini-title { font-size: 13px; }
+  #mini-work { font-size: 12px; color: var(--muted); }
+  #mini-controls { display: flex; gap: 6px; flex: 0 0 auto; }
+  #mini-controls button { min-width: 40px; }
+  #mini-progress { position: absolute; left: 0; right: 0; bottom: 0; height: 2px; background: #2a2c33; }
+  #mini-fill { width: 0; height: 100%; background: var(--accent); }
+  /* the bar is over the page, so the page ends above it */
+  body:has(#mini-player:not([hidden])) main { padding-bottom: 76px; }
+
   /* what a refusal reads as: the server's sentence, and its remedy */
   #toast { position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%); z-index: 90;
-    background: #2e2616; color: #f0b45c; border: 1px solid #a37a30; border-radius: 8px;
+    background: #2e2616; color: var(--warn); border: 1px solid #a37a30; border-radius: 8px;
     padding: 10px 16px; font-size: 13px; max-width: min(680px, 92vw); box-shadow: 0 8px 30px rgba(0,0,0,0.6); }
+
+  /* --- the page on a wide screen, on a phone, and under a thumb -------------
+
+     Three rules in the order a window meets them. The measure first: past
+     1400px the header's rule still spans the glass but its content stops
+     widening. Then the phone, where the two-column shapes (poster beside
+     text, contents beside page) have no room to be two columns. Then the
+     pointer, which is not a question of width at all: a finger needs 44px
+     whatever the screen. */
+
+  /* very wide: content keeps its measure, borders still reach the edge */
+  header, #view, #stage { padding-inline: max(20px, calc((100% - 1400px) / 2)); }
+
+  @media (max-width: 640px) {
+    header, #view, #stage { padding-inline: 12px; }
+    header { padding-block: 8px; gap: 8px; }
+    header h1 { font-size: 14px; }
+    #search { width: 100%; max-width: none; }
+    .band-grid { grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 12px; }
+    .band-row { gap: 12px; }
+    .band-row > .card { flex: 0 0 110px; }
+    .card .c-title { font-size: 12px; }
+    .cw-card { flex: 0 0 110px; }
+    .item.enriched img.still { width: 96px; }
+    /* the still is a picture, not a column: the card stacks */
+    #next-up { flex-direction: column; align-items: stretch; gap: 10px; }
+    #next-up .nu-art img { width: 100%; }
+    /* the hero is shorter and its words are smaller, but it is still a picture */
+    #hero { min-height: 170px; }
+    .hero-body { padding: 14px; }
+    .hero-title { font-size: 20px; }
+    /* the poster is a picture, not a column: it stacks and centres */
+    #detail-info { flex-direction: column; gap: 14px; }
+    #detail-poster { width: 40vw; max-width: 220px; align-self: center; }
+    #detail-body { min-width: 0; }
+    #detail-body h2 { font-size: 19px; }
+    /* the transport wraps onto as many rows as it needs, with room to hit */
+    #controls, #doc-controls { gap: 10px; }
+    #controls button, #doc-controls button { min-width: 48px; padding: 8px 14px; font-size: 14px; }
+    #controls input[type=range] { width: 100%; }
+    #passage-picker select { max-width: 100%; }
+    /* the contents list has no room beside the page, so it slides over it —
+       .rd-body is the positioned parent and reader.js already toggles hidden */
+    #reader-pane { height: calc(100vh - 120px); min-height: 0; }
+    .rd-bar { flex-wrap: wrap; }
+    .rd-toc { position: absolute; inset: 0 auto 0 0; z-index: 40; width: min(80vw, 300px);
+      max-width: none; margin-right: 0; background: #1b1d24; box-shadow: 0 10px 40px rgba(0,0,0,0.7); }
+    /* the corner panels have no corner to sit in */
+    #upnext, #passage-end, .rd-end { left: 12px; right: 12px; max-width: none; }
+  }
+
+  @media (pointer: coarse) {
+    button, select, input { min-height: 44px; }
+    .item { min-height: 44px; padding-top: 13px; padding-bottom: 13px; }
+    .season > summary { min-height: 44px; padding-top: 13px; padding-bottom: 13px; }
+    google-cast-launcher { width: 44px; height: 44px; }
+  }
+
+  /* --- ten foot: the same page, read from a sofa ----------------------------
+
+     Not a breakpoint. A television is a WIDE screen at a distance, driven by
+     four arrows, and every one of those is the opposite of what a wide desktop
+     window wants — so it is a mode kernel.js puts on <body> (from the gear, or
+     guessed from a TV user agent), not a media query. Three things change: the
+     type is set for a room, the posters come six to a row rather than as many
+     as fit, and the focus ring LIFTS the card, because a 2px outline is
+     invisible across a lounge. Everything else is the page as it was. */
+  body[data-ten-foot] { font-size: 17px; }
+  body[data-ten-foot] header, body[data-ten-foot] #view, body[data-ten-foot] #stage {
+    padding-inline: max(48px, calc((100% - 1720px) / 2)); }
+  body[data-ten-foot] header { padding-block: 18px; gap: 16px; }
+  body[data-ten-foot] header h1 { font-size: 24px; }
+  body[data-ten-foot] button, body[data-ten-foot] select,
+  body[data-ten-foot] input[type=text], body[data-ten-foot] input[type=number] {
+    font-size: 17px; padding: 10px 18px; }
+  body[data-ten-foot] #search { width: 340px; }
+  /* six to a row, and the rows scroll as rows of six */
+  body[data-ten-foot] .band { margin-top: 30px; }
+  body[data-ten-foot] .band > h3, body[data-ten-foot] #cw h3 { font-size: 19px; margin-bottom: 14px; }
+  body[data-ten-foot] .band-grid { grid-template-columns: repeat(6, 1fr); gap: 26px; }
+  body[data-ten-foot] .band-row, body[data-ten-foot] #cw-row { gap: 26px; }
+  body[data-ten-foot] .band-row > .card, body[data-ten-foot] .cw-card {
+    flex: 0 0 calc((100% - 5 * 26px) / 6); }
+  body[data-ten-foot] .card .c-title, body[data-ten-foot] .cw-card .c-title { font-size: 16px; }
+  body[data-ten-foot] .card .c-sub, body[data-ten-foot] .cw-card .c-sub,
+  body[data-ten-foot] .cw-card .cw-act { font-size: 14px; }
+  body[data-ten-foot] .hero-title { font-size: 40px; }
+  body[data-ten-foot] .hero-line { font-size: 18px; }
+  body[data-ten-foot] .hero-act, body[data-ten-foot] #detail-play,
+  body[data-ten-foot] .act.primary { font-size: 20px; padding: 14px 38px; }
+  body[data-ten-foot] #hero { min-height: 380px; }
+  body[data-ten-foot] #detail-body h2 { font-size: 34px; }
+  body[data-ten-foot] #detail-poster { width: 260px; }
+  body[data-ten-foot] #detail-overview, body[data-ten-foot] #detail-cast { font-size: 18px; max-width: 900px; }
+  body[data-ten-foot] .item { padding: 15px 20px; }
+  body[data-ten-foot] .item .title { font-size: 18px; }
+  body[data-ten-foot] .item .meta, body[data-ten-foot] #show-progress { font-size: 15px; }
+  body[data-ten-foot] .season > summary { font-size: 17px; padding: 15px 20px; }
+  /* the lift needs room to grow into, and a scrolling row would clip it */
+  body[data-ten-foot] .band-grid, body[data-ten-foot] .band-row, body[data-ten-foot] #cw-row {
+    padding-block: 14px; }
+  body[data-ten-foot] .card, body[data-ten-foot] .cw-card, body[data-ten-foot] #hero {
+    transition: transform 140ms ease; }
+  body[data-ten-foot] .card:focus, body[data-ten-foot] .cw-card:focus,
+  body[data-ten-foot] #hero:focus {
+    outline: none; position: relative; z-index: 2; transform: scale(1.08); }
+  /* an episode row is already the width of the page: it lights up, it does
+     not grow */
+  body[data-ten-foot] .item:focus { background: #1e222c; }
+  body[data-ten-foot] .card:focus .poster-wrap, body[data-ten-foot] .cw-card:focus .poster-wrap {
+    outline: 4px solid var(--accent); outline-offset: 4px; }
+  body[data-ten-foot] #hero:focus, body[data-ten-foot] .item:focus {
+    outline: 4px solid var(--accent); outline-offset: 2px; }
+  /* everything that is not a card keeps the ring, drawn thick enough to see */
+  body[data-ten-foot] button:focus, body[data-ten-foot] select:focus,
+  body[data-ten-foot] input:focus, body[data-ten-foot] a:focus,
+  body[data-ten-foot] summary:focus {
+    outline: 4px solid var(--accent); outline-offset: 3px; }
+
+  /* where the keyboard is: one ring, the accent, on everything that acts.
+     [tabindex] catches whatever else is made focusable later. */
+  button:focus-visible, select:focus-visible, input:focus-visible, a:focus-visible,
+  .card:focus-visible, .cw-card:focus-visible, .item:focus-visible, summary:focus-visible,
+  google-cast-launcher:focus-visible, [tabindex]:focus-visible {
+    outline: 2px solid #5b8def; outline-offset: 2px;
+  }
+
+  /* --- motion ---------------------------------------------------------------
+
+     A route change cross-fades rather than cuts (kernel.js wraps the swap in
+     document.startViewTransition where the browser has one), and the poster
+     that was tapped morphs into the poster on the page it opened, because
+     both wear the same view-transition-name for the length of the swap.
+     Short: this is punctuation, not a performance. */
+  ::view-transition-old(root), ::view-transition-new(root) { animation-duration: 160ms; }
+  ::view-transition-group(*) { animation-duration: 260ms; animation-timing-function: ease; }
+
+  /* asked for less motion: no shimmer, no fade, no transition. The kernel
+     skips startViewTransition outright; this is the rest of the same answer. */
+  @media (prefers-reduced-motion: reduce) {
+    .poster-wrap, #detail-poster { animation: none; }
+    .poster-wrap img { transition: none; }
+    /* the ten-foot ring is still a lift — it just arrives rather than grows */
+    body[data-ten-foot] .card, body[data-ten-foot] .cw-card, body[data-ten-foot] #hero {
+      transition: none; }
+    ::view-transition-group(*), ::view-transition-old(*), ::view-transition-new(*) {
+      animation: none !important; }
+  }
 </style>
 </head>
 <body>
+<!-- the header is the name, the search box and who is watching. Typing
+     filters the library's tiles as it goes; once the typing settles the whole
+     shelf is searched, which is a route of its own (#/search/<q>). The kernel
+     hides the box wherever neither would do anything. -->
 <header>
-  <h1>flickr <span style="color:#9a9daa;font-weight:400">— media server PoC</span></h1>
+  <h1>flickr</h1>
+  <input type="text" id="search" placeholder="Search the library…" hidden>
   <button id="profile-chip" title="Switch profile">…</button>
-  <label style="font-size:12px;color:#9a9daa">Play as:</label>
-  <select id="profile">
-    <option value="browser">This browser (detected)</option>
-    <option value="chromecast1">Chromecast v1 (h264/1080p only)</option>
-    <option value="chromecastUltra">Chromecast Ultra (4K, hevc/vp9, HDR)</option>
-    <option value="tv4k">4K HDR TV (hevc, hdr10)</option>
-    <option value="cellular">Phone on cellular (3 Mbps cap)</option>
-  </select>
-  <button id="scan">Scan library</button>
-  <span id="scan-status" style="font-size:12px;color:#9a9daa"></span>
-  <span id="hw" title="" style="font-size:11px;padding:2px 8px;border-radius:10px;background:#1e2c42;color:#8db4f0;cursor:help"></span>
+  <button id="gear" title="Settings" aria-label="Settings">⚙</button>
 </header>
 
-<!-- profile gate: who is watching. The names are GET (root.links.profiles)
-     and a new one is root.actions.create_profile; kernel.js fills the box. -->
+<!-- settings: the capability preset, the scan, what the encoder chose and the
+     autoplay-next toggle. Engineering controls, one gear away rather than on
+     every screen. #profile is still the id player.js reads caps() from. -->
+<div id="settings" hidden>
+  <div id="settings-box">
+    <h2>Settings</h2>
+    <div class="set-row">
+      <label for="profile">Play as</label>
+      <select id="profile">
+        <option value="browser">This browser (detected)</option>
+        <option value="chromecast1">Chromecast v1 (h264/1080p only)</option>
+        <option value="chromecastUltra">Chromecast Ultra (4K, hevc/vp9, HDR)</option>
+        <option value="tv4k">4K HDR TV (hevc, hdr10)</option>
+        <option value="cellular">Phone on cellular (3 Mbps cap)</option>
+      </select>
+    </div>
+    <div class="set-row">
+      <button id="settings-autoplay"></button>
+    </div>
+    <div class="set-row">
+      <button id="settings-tenfoot"></button>
+    </div>
+    <div class="set-row">
+      <button id="scan">Scan library</button>
+      <span id="scan-status"></span>
+    </div>
+    <div class="set-row">
+      <span id="hw" title=""></span>
+    </div>
+    <div class="set-row end">
+      <button id="settings-close">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- profile gate: who is watching, each with the face the server gave them.
+     The rows are GET (root.links.profiles) and a new one is
+     root.actions.create_profile; kernel.js fills the box. A kids profile is
+     shown only what its certification allows, which the server decides. -->
 <div id="gate" hidden>
   <div id="gate-box">
     <h2>Who's watching?</h2>
@@ -295,6 +717,7 @@
       <input type="text" id="gate-name" placeholder="New profile name" maxlength="40">
       <button id="gate-create">Create</button>
     </div>
+    <label id="gate-kid"><input type="checkbox" id="gate-kid-check"> Kids profile</label>
     <div id="gate-note"></div>
   </div>
 </div>
@@ -313,12 +736,21 @@
   </div>
 </main>
 
+<!-- the mini player: an audio sitting somebody walked away from. kernel.js
+     draws it from the same session document (Render.miniPlayer) and player.js
+     moves the ONE device element into the hidden slot inside it, so the sound
+     — and the buffer — survive leaving the page. -->
+<div id="mini-player" hidden></div>
+
 <!-- a refusal, said out loud -->
 <div id="toast" hidden></div>
 
 <!-- the passage grammar and the clock predicates: pure functions, shared with
      web/passage_test.mjs -->
 <script src="passage.js"></script>
+<!-- the D-pad's arithmetic: which card an arrow points at, over bounding
+     rects alone, so web/focus_test.mjs can drive it with no DOM at all -->
+<script src="focus.js"></script>
 <!-- the cast bridge: the session document read into a load, shared with the
      custom receiver (web/receiver.html) and tested by web/cast_test.mjs -->
 <script src="cast.js"></script>

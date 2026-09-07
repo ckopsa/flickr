@@ -153,6 +153,7 @@ func main() {
 		srv.enricher = &tmdb.Enricher{
 			Client: tmdb.NewHTTPClient(key), Library: library,
 			PostersDir: "data/posters", StillsDir: "data/stills",
+			BackdropsDir: "data/backdrops",
 		}
 	} else {
 		log.Printf("TMDB enrichment disabled (TMDB_API_KEY not set)")
@@ -257,6 +258,7 @@ func (s *server) routes() *http.ServeMux {
 	mux.HandleFunc("GET /api/items/{id}", s.handleItemDoc)
 	mux.HandleFunc("GET /api/works/{key}", s.handleWorkDoc)
 	mux.HandleFunc("GET /api/library", s.handleLibrary)
+	mux.HandleFunc("GET /api/search", s.handleSearch)
 	mux.HandleFunc("GET /api/artists/{name}", s.handleArtistDoc)
 	mux.HandleFunc("GET /api/-/route", s.handleRouteDoc)
 	mux.HandleFunc("GET /api/items", s.handleListItems)
@@ -275,6 +277,7 @@ func (s *server) routes() *http.ServeMux {
 	mux.HandleFunc("GET /api/items/{id}/poster", s.handlePoster)
 	mux.HandleFunc("GET /api/items/{id}/cover", s.handleCover)
 	mux.HandleFunc("GET /api/items/{id}/still", s.handleStill)
+	mux.HandleFunc("GET /api/items/{id}/backdrop", s.handleBackdrop)
 	mux.HandleFunc("GET /api/items/{id}/book", s.handleBook)
 	mux.HandleFunc("GET /api/items/{id}/trickplay.json", s.handleTrickplayIndex)
 	mux.HandleFunc("GET /api/items/{id}/trickplay/{file}", s.handleTrickplaySheet)
@@ -301,6 +304,10 @@ func (s *server) routes() *http.ServeMux {
 	mux.HandleFunc("GET /api/users", s.handleListUsers)
 	mux.HandleFunc("POST /api/users", s.handleCreateUser)
 	mux.HandleFunc("POST /api/telemetry", s.handleTelemetry)
+	// The share page (share.go): the hash grammar said as a path, so a
+	// passage link pasted into a chat has something to unfurl. A subtree,
+	// because "#" + whatever follows /s is the hash it stands for.
+	mux.HandleFunc("GET /s/", s.handleShare)
 	// Log stream fetches: which client asked for which segment with what
 	// Range — a poor man's receiver-side network tab.
 	streamFiles := http.StripPrefix("/streams/", http.FileServer(http.Dir("data/streams")))
@@ -1200,6 +1207,13 @@ func (s *server) handleStill(w http.ResponseWriter, r *http.Request) {
 	s.serveItemImage(w, r, "data/stills", "no still")
 }
 
+// handleBackdrop serves the cached TMDB backdrop — the wide still a home
+// screen leads with, where the poster is the tile. Same discipline as the
+// poster: written by the enrichment stage, 404 when there is none.
+func (s *server) handleBackdrop(w http.ResponseWriter, r *http.Request) {
+	s.serveItemImage(w, r, "data/backdrops", "no backdrop")
+}
+
 func (s *server) serveItemImage(w http.ResponseWriter, r *http.Request, dir, missing string) {
 	id := r.PathValue("id")
 	if _, err := strconv.ParseInt(id, 10, 64); err != nil {
@@ -1244,36 +1258,50 @@ func (s *server) handleEnrich(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) handleListUsers(w http.ResponseWriter, r *http.Request) {
-	names, err := s.state.ListUsers()
+	users, err := s.state.ListUsers()
 	if err != nil {
 		httpErr(w, 500, err)
 		return
 	}
-	out := []map[string]string{} // contract: empty array, never null
-	for _, n := range names {
-		out = append(out, map[string]string{"name": n})
+	if users == nil {
+		users = []store.User{} // contract: empty array, never null
 	}
-	writeJSON(w, out)
+	writeJSON(w, users)
 }
 
 func (s *server) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		Name string `json:"name"`
+		Name   string `json:"name"`
+		Avatar string `json:"avatar"`
+		Kid    bool   `json:"kid"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 		httpErr(w, 400, err)
 		return
 	}
-	in.Name = strings.TrimSpace(in.Name)
-	if in.Name == "" {
+	u := store.User{
+		Name:   strings.TrimSpace(in.Name),
+		Avatar: strings.TrimSpace(in.Avatar),
+		Kid:    in.Kid,
+	}
+	if u.Name == "" {
 		httpErr(w, 400, fmt.Errorf("name required"))
 		return
 	}
-	if err := s.state.CreateUser(in.Name); err != nil {
+	// Every profile has a face, whether or not the gate offered to pick one.
+	if u.Avatar == "" {
+		u.Avatar = defaultAvatar(u.Name)
+	}
+	if err := s.state.CreateUser(u); err != nil {
 		httpErr(w, 500, err)
 		return
 	}
-	writeJSON(w, map[string]string{"name": in.Name})
+	// The create is idempotent, so the answer is the STORED row: a profile
+	// created twice keeps the face and the audience it already had.
+	if stored, err := s.state.User(u.Name); err == nil && stored != nil {
+		u = *stored
+	}
+	writeJSON(w, u)
 }
 
 // handleTelemetry appends any JSON object to data/telemetry.jsonl. Always

@@ -3,8 +3,9 @@ package main
 // The library and the artist shelf as documents — docs/hypermedia.md, step 3
 // of its order of work.
 //
-// The grid's ORDER lives here now, in one Go function (libraryOrder): shows,
-// films, artist shelves, audio works, books. It used to live in the browser,
+// The grid's ORDER lives here now, in one Go function (libraryOrder): tv,
+// movies, music, audiobooks, books — the bands a home screen draws as headed
+// rows, named once in libraryBands. It used to live in the browser,
 // which regrouped /api/items into shows, albums and artists on every render
 // — a second copy of works.Build and works.Artists, in another language,
 // drifting. The browser now draws what this document lists, in the order it
@@ -23,6 +24,7 @@ import (
 	"path"
 	"sort"
 	"strings"
+	"time"
 
 	"flickr/internal/hyper"
 	"flickr/internal/model"
@@ -41,25 +43,46 @@ const maxGenreFacets = 12
 // ── the order ───────────────────────────────────────────────────────────
 
 // shelf is one tile's subject: a work, or an artist whose shelf of albums
-// stands in for them. Exactly one of the two is set.
+// stands in for them. Exactly one of the two is set. Band is the row it
+// belongs to — the key of one of libraryBands.
 type shelf struct {
 	Work   *works.Work
 	Artist *works.Artist
+	Band   string
+}
+
+// band is one row of the library: the key its tiles carry and the heading a
+// screen draws over them.
+type band struct {
+	Key   string `json:"key"`
+	Title string `json:"title"`
+}
+
+// libraryBands is the rows the library has and the order they are read in,
+// top to bottom. The home screen used to draw one wall of tiles; it draws
+// these rows now, and this is the only place their order is decided.
+var libraryBands = []band{
+	{Key: "tv", Title: "TV"},
+	{Key: "movies", Title: "Movies"},
+	{Key: "music", Title: "Music"},
+	{Key: "audiobooks", Title: "Audiobooks"},
+	{Key: "books", Title: "Books"},
 }
 
 // libraryOrder is THE order of the library grid, and the only place it is
 // decided:
 //
-//	shows, films, artist shelves, audio works, books
+//	tv, movies, music, audiobooks, books
 //
 // Within each band the order is the one it arrives in — works.Build sorts by
-// title, works.Artists by name — so the bands are the only new rule.
+// title, works.Artists by name, and an artist's shelf leads the music ahead
+// of the records nobody filed — so the bands are the only new rule.
 //
 // An album filed under an artist is NOT a tile of its own: its artist's
 // shelf stands for it, which is what the browser did by hand. An album
-// nobody filed under an artist keeps its tile, among the audio works. A file
-// work — anything the path could not place — lands in the band its medium
-// belongs to, so no file is ever invisible.
+// nobody filed under an artist keeps its tile, among the music. A file work
+// — anything the path could not place — lands in the band its medium belongs
+// to, so no file is ever invisible.
 func libraryOrder(ws []works.Work, as []works.Artist) []shelf {
 	shelved := map[string]bool{} // album keys that sit on an artist's shelf
 	for i := range as {
@@ -67,7 +90,10 @@ func libraryOrder(ws []works.Work, as []works.Artist) []shelf {
 			shelved[al.Key] = true
 		}
 	}
-	var shows, films, audio, books []shelf
+	var shows, films, music, audiobooks, books []shelf
+	for i := range as {
+		music = append(music, shelf{Artist: &as[i], Band: "music"})
+	}
 	for i := range ws {
 		w := &ws[i]
 		if shelved[w.Key] {
@@ -75,27 +101,42 @@ func libraryOrder(ws []works.Work, as []works.Artist) []shelf {
 		}
 		switch {
 		case w.Kind == "show":
-			shows = append(shows, shelf{Work: w})
+			shows = append(shows, shelf{Work: w, Band: "tv"})
 		case w.Kind == "book":
-			books = append(books, shelf{Work: w})
-		case w.Kind == "audiobook" || w.Kind == "album":
-			audio = append(audio, shelf{Work: w})
-		case w.Medium == model.MediumAudio:
-			audio = append(audio, shelf{Work: w})
+			books = append(books, shelf{Work: w, Band: "books"})
+		case w.Kind == "audiobook":
+			audiobooks = append(audiobooks, shelf{Work: w, Band: "audiobooks"})
+		case w.Kind == "album", w.Medium == model.MediumAudio:
+			music = append(music, shelf{Work: w, Band: "music"})
 		case w.Medium == model.MediumText:
-			books = append(books, shelf{Work: w})
+			books = append(books, shelf{Work: w, Band: "books"})
 		default: // a film, and any other video
-			films = append(films, shelf{Work: w})
+			films = append(films, shelf{Work: w, Band: "movies"})
 		}
 	}
-	out := make([]shelf, 0, len(shows)+len(films)+len(as)+len(audio)+len(books))
+	out := make([]shelf, 0, len(shows)+len(films)+len(music)+len(audiobooks)+len(books))
 	out = append(out, shows...)
 	out = append(out, films...)
-	for i := range as {
-		out = append(out, shelf{Artist: &as[i]})
-	}
-	out = append(out, audio...)
+	out = append(out, music...)
+	out = append(out, audiobooks...)
 	return append(out, books...)
+}
+
+// bandsOf is the rows this library actually has, in libraryBands' order. A
+// band nothing landed in is left out, so a screen never draws a heading over
+// nothing.
+func bandsOf(order []shelf) []band {
+	has := map[string]bool{}
+	for _, sh := range order {
+		has[sh.Band] = true
+	}
+	out := make([]band, 0, len(libraryBands))
+	for _, b := range libraryBands {
+		if has[b.Key] {
+			out = append(out, b)
+		}
+	}
+	return out
 }
 
 // ── the tiles ───────────────────────────────────────────────────────────
@@ -137,6 +178,29 @@ func tileFor(w *works.Work, subtitle string) *hyper.Envelope {
 	t.Field("search", searchText(w.Title, w.Author, path.Base(w.Items[0].ObjectKey)))
 	t.Link("self", workHref(w.Key), w.Title)
 	t.Link("artwork", artworkHref(w.RepresentativeItemID, w.Medium), "")
+	// The wide picture, where there is one: a row that leads with a hero
+	// rather than a grid of tiles has it on the tile it already draws.
+	if rep := memberByID(w, w.RepresentativeItemID); rep != nil &&
+		rep.Enrichment != nil && rep.Enrichment.HasBackdrop {
+		t.Link("backdrop", itemHref(rep.ID)+"/backdrop", "")
+	}
+	return t
+}
+
+// tileOf is one shelf as a tile, whichever of the two subjects it has, with
+// the band it belongs to on it: a row draws the tiles that name it, and the
+// "recently added" row carries the band along, so a tile out of its row
+// still knows where it came from.
+func tileOf(sh shelf) *hyper.Envelope {
+	var t *hyper.Envelope
+	if sh.Artist != nil {
+		t = artistTile(sh.Artist)
+	} else {
+		t = workTile(sh.Work)
+	}
+	if sh.Band != "" {
+		t.Field("band", sh.Band)
+	}
 	return t
 }
 
@@ -351,6 +415,66 @@ func plural(n int, noun string) string {
 	return fmt.Sprintf("%d %ss", n, noun)
 }
 
+// ── recently added ──────────────────────────────────────────────────────
+
+// recentlyAddedTiles is how many tiles the "Recently added" row holds.
+const recentlyAddedTiles = 12
+
+// shelfAddedAt is when the newest file behind a tile arrived: a show is as
+// new as its newest episode, and an artist's shelf is as new as their newest
+// record — a new album puts the artist back at the front, which is what a
+// person means by "that's new".
+func shelfAddedAt(sh shelf, byKey map[string]*works.Work) time.Time {
+	var newest time.Time
+	add := func(w *works.Work) {
+		if w == nil {
+			return
+		}
+		for _, it := range w.Items {
+			if it.AddedAt.After(newest) {
+				newest = it.AddedAt
+			}
+		}
+	}
+	add(sh.Work)
+	if sh.Artist != nil {
+		for _, al := range sh.Artist.Albums {
+			add(byKey[al.Key])
+		}
+	}
+	return newest
+}
+
+// recentlyAdded is the grid's own shelves re-ordered by arrival — newest
+// first, at most n — and it is a SELECTION of the same tiles, not a second
+// kind of thing: what is new is a question about the library's order, and
+// the library document is where the order is decided.
+//
+// A shelf whose files predate the arrival column carries no time at all and
+// is left out: a "recently added" row is worth having short, and not worth
+// having wrong. Ties keep the grid's order, so the row is deterministic.
+func recentlyAdded(order []shelf, byKey map[string]*works.Work, n int) []shelf {
+	type dated struct {
+		sh shelf
+		at time.Time
+	}
+	var known []dated
+	for _, sh := range order {
+		if at := shelfAddedAt(sh, byKey); !at.IsZero() {
+			known = append(known, dated{sh, at})
+		}
+	}
+	sort.SliceStable(known, func(i, j int) bool { return known[i].at.After(known[j].at) })
+	if len(known) > n {
+		known = known[:n]
+	}
+	out := make([]shelf, 0, len(known))
+	for _, d := range known {
+		out = append(out, d.sh)
+	}
+	return out
+}
+
 // ── the facets ──────────────────────────────────────────────────────────
 
 // facet is one value a filter offers and how many tiles carry it. It is a
@@ -395,15 +519,16 @@ func genreFacet(order []shelf) []facet {
 
 // ── the documents ───────────────────────────────────────────────────────
 
-// handleLibrary is GET /api/library — every tile the grid draws, in the
-// order it draws them, with the facets its chips offer.
+// handleLibrary is GET /api/library — every tile the home screen draws, in
+// the order it draws them, the rows it draws them under (`bands`, each tile
+// naming its own), and the facets its chips offer.
 //
 // The profile is carried where the grid honours one, which today is nowhere:
 // the same shelf is shown to everybody, and where a person stands in a work
 // is the work document's answer. The document names who asked all the same,
 // so the resume link below it can.
 func (s *server) handleLibrary(w http.ResponseWriter, r *http.Request) {
-	ws, err := s.buildWorks()
+	ws, err := s.worksFor(r)
 	if err != nil {
 		hyper.WriteProblem(w, serverProblem(err))
 		return
@@ -411,11 +536,12 @@ func (s *server) handleLibrary(w http.ResponseWriter, r *http.Request) {
 	order := libraryOrder(ws, works.Artists(ws))
 	tiles := make([]*hyper.Envelope, 0, len(order))
 	for _, sh := range order {
-		if sh.Artist != nil {
-			tiles = append(tiles, artistTile(sh.Artist))
-			continue
-		}
-		tiles = append(tiles, workTile(sh.Work))
+		tiles = append(tiles, tileOf(sh))
+	}
+	byKey := works.ByKey(ws)
+	recent := make([]*hyper.Envelope, 0, recentlyAddedTiles)
+	for _, sh := range recentlyAdded(order, byKey, recentlyAddedTiles) {
+		recent = append(recent, tileOf(sh))
 	}
 
 	profile := profileOf(r)
@@ -428,7 +554,9 @@ func (s *server) handleLibrary(w http.ResponseWriter, r *http.Request) {
 		cont += "?client_id=" + url.QueryEscape(profile)
 	}
 	doc.Field("count", len(tiles)).
+		Field("bands", bandsOf(order)).
 		Field("items", tiles).
+		Field("recently_added", recent).
 		Field("facets", map[string][]facet{"genre": genreFacet(order)}).
 		Link("root", "/api/", "flickr").
 		Link("continue", cont, "Continue watching").
