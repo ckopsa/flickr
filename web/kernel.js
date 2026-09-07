@@ -410,18 +410,14 @@
   }
 
   // The item's trickplay index, which is what puts a frame beside each chapter
-  // on its page. It is a sidecar rather than a document — it has no `self`, so
-  // the cache above has no key for it — and this keeps the last one instead,
-  // one fetch per item. A file with no sheets answers that it has none, which
-  // is an answer: the chapters are the list of names they always were.
-  let trickplayDoc = null, trickplayFor = null;
+  // on its page. It is a sidecar rather than a document — no `self`, so the
+  // cache above has no key for it — and sheetIndex below is the one that
+  // holds it, by address, shared with the tiles' hover previews. A file with
+  // no sheets answers that it has none, which is an answer: the chapters are
+  // the list of names they always were.
   async function trickplayOf(itemDoc) {
     const href = R.linkHref(itemDoc, 'trickplay');
-    if (!href) return null;
-    if (trickplayFor === itemDoc.id) return trickplayDoc;
-    try { trickplayDoc = await api(href); } catch (e) { trickplayDoc = null; }
-    trickplayFor = itemDoc.id;
-    return trickplayDoc;
+    return href ? await sheetIndex(href) : null;
   }
 
   // What a member needs said about it: the work it belongs to, and the sheets
