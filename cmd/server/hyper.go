@@ -132,6 +132,12 @@ func (s *server) handleItemDoc(w http.ResponseWriter, r *http.Request) {
 				&hyper.Link{Href: "/api/library", Title: "Library"}))
 		return
 	}
+	// The shelves leave a title a kid profile may not see out; the item's own
+	// document, typed into the address bar, says the same thing in words.
+	if problem := s.refuseItem(profileOf(r), *item); problem != nil {
+		hyper.WriteProblem(w, *problem)
+		return
+	}
 	ws, err := s.buildWorks()
 	if err != nil {
 		hyper.WriteProblem(w, serverProblem(err))
@@ -693,6 +699,11 @@ func (s *server) handleWorkDoc(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	profile := profileOf(r)
+	// A title the grid left out is not opened by typing its key either.
+	if problem := s.refuseWork(profile, wk); problem != nil {
+		hyper.WriteProblem(w, *problem)
+		return
+	}
 	positions, err := s.positionsFor(profile)
 	if err != nil {
 		hyper.WriteProblem(w, serverProblem(err))

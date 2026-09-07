@@ -34,9 +34,11 @@ const searchMax = 20
 
 // searchBands is the groups a search answers and the order they are read
 // in, top to bottom — works first, because a title is what most searches
-// are for, then the members a title would never have found.
+// are for, then the artists whose shelf is a title of a kind, then the
+// members a title would never have found.
 var searchBands = []band{
 	{Key: "works", Title: "Titles"},
+	{Key: "artists", Title: "Artists"},
 	{Key: "episodes", Title: "Episodes"},
 	{Key: "tracks", Title: "Tracks"},
 	{Key: "parts", Title: "Parts"},
@@ -63,7 +65,9 @@ func searchHref(q string) string { return "/api/search?q=" + url.QueryEscape(q) 
 // its synopsis) and a member on what is said about the FILE (its own title,
 // the label its work gives it, its synopsis, its author), so "beach" finds
 // the episode and "karma" the track without either flooding the other's
-// row. Case is folded once, here.
+// row. An ARTIST is matched on their NAME alone — their records answer for
+// themselves a row above — and is answered as the very tile the library
+// draws, so a hit opens the shelf. Case is folded once, here.
 func searchLibrary(q string, ws []works.Work) []searchGroup {
 	q = strings.ToLower(strings.TrimSpace(q))
 	hits := map[string][]*hyper.Envelope{}
@@ -75,6 +79,12 @@ func searchLibrary(q string, ws []works.Work) []searchGroup {
 		}
 	}
 	if q != "" {
+		as := works.Artists(ws)
+		for i := range as {
+			if matchesQuery(q, as[i].Name) {
+				add("artists", artistTile(&as[i]))
+			}
+		}
 		for i := range ws {
 			wk := &ws[i]
 			// A book IS its file, so it is answered once, among the books;

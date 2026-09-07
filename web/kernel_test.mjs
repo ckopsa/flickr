@@ -108,7 +108,10 @@ test('a search answers groups of hits, each drawable and addressable', () => {
   for (const g of doc.groups) {
     assert.ok(g.key && g.title && g.items.length, `the ${g.key} group is not drawable`);
     for (const en of g.items) {
-      assert.ok(en.title && en.item_id, `${en.self}: nothing to draw or open`);
+      // An artist's shelf is opened by the name on it; every other hit
+      // carries the member a tap opens at.
+      assert.ok(en.title && (en.item_id || g.key === 'artists'),
+        `${en.self}: nothing to draw or open`);
       assert.ok(en.links.artwork, `${en.title}: the picture is a link, not a guess`);
       assert.equal(en.actions, undefined, `${en.title}: a result offers no action`);
     }

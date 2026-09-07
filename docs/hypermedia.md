@@ -75,7 +75,7 @@ writing bare maps.
 | item | `GET /api/items/{id}` | `media_info`, chapters, subtitles, artwork links, `links.work`/`prev`/`next` | `play`, `read`, `progress`, `identity`, `reprobe`, `enrich` |
 | session | `GET /api/sessions/{id}` | `url`, `method`, the decision trace, `passage` (`t`, `end`, `until`, resolved item ids), `ends_at` | `progress` (refused while a passage is on), `keep_watching`, `stop`, `next` (the up-next document), `mark_in`, `mark_out`, `link` |
 | artist | `GET /api/artists/{name}` | albums in year order, cover | — |
-| search | `GET /api/search?q=…` | `groups` (works, episodes, tracks, parts, books), each a headed list of hits — a work's own tile, or a member with its label, its work and its artwork | — |
+| search | `GET /api/search?q=…` | `groups` (works, artists, episodes, tracks, parts, books), each a headed list of hits — a work's own tile, an artist's shelf tile, or a member with its label, its work and its artwork | — |
 | continue | `GET /api/continue` | entries as item envelopes with the resume position and the work link | per entry: `resume` |
 | route | `GET /api/-/route?hash=…` | `view` (`library` \| `work` \| `artist` \| `item` \| `search`), the `document` to render, `passage` (resolved, or null), `autoplay` | — |
 | passage | `GET /api/-/passage?…` | a minted link and its sentence (`S03E22 2:22 – 14:14 of Beach Games`) | — |

@@ -1,15 +1,110 @@
 {
-  "self": "/api/search?q=the",
+  "self": "/api/search?q=he",
   "kind": "search",
   "title": "Search",
-  "query": "the",
-  "count": 5,
+  "query": "he",
+  "count": 16,
   "groups": [
     {
       "key": "works",
       "title": "Titles",
-      "count": 2,
+      "count": 6,
       "items": [
+        {
+          "self": "/api/works/audiobook%3Afrank-herbert-dune-1965",
+          "kind": "work",
+          "title": "Dune",
+          "work_kind": "audiobook",
+          "medium": "audio",
+          "author": "Frank Herbert",
+          "year": 1965,
+          "subtitle": "Frank Herbert · 1965 · 2 parts",
+          "tech": "audiobook · aac · 22:20:00",
+          "item_id": 1,
+          "search": "dune frank herbert 01 - part 1.m4b",
+          "links": {
+            "artwork": {
+              "href": "/api/items/1/cover"
+            },
+            "self": {
+              "href": "/api/works/audiobook%3Afrank-herbert-dune-1965",
+              "title": "Dune"
+            }
+          }
+        },
+        {
+          "self": "/api/works/tmdb%3A109445",
+          "kind": "work",
+          "title": "Frozen",
+          "work_kind": "movie",
+          "medium": "video",
+          "year": 2013,
+          "subtitle": "2013",
+          "tech": "1920x816 h264/ac3 · 8.40 GB · 3 ch",
+          "genres": [
+            "Animation",
+            "Family",
+            "Adventure"
+          ],
+          "item_id": 4,
+          "search": "frozen frozen.mkv",
+          "links": {
+            "artwork": {
+              "href": "/api/items/4/poster"
+            },
+            "backdrop": {
+              "href": "/api/items/4/backdrop"
+            },
+            "self": {
+              "href": "/api/works/tmdb%3A109445",
+              "title": "Frozen"
+            }
+          }
+        },
+        {
+          "self": "/api/works/album%3Aradiohead-ok-computer-1997",
+          "kind": "work",
+          "title": "OK Computer",
+          "work_kind": "album",
+          "medium": "audio",
+          "author": "Radiohead",
+          "year": 1997,
+          "subtitle": "Radiohead · 1997 · 2 tracks",
+          "tech": "album · flac · 11:07",
+          "item_id": 5,
+          "search": "ok computer radiohead 01 airbag.flac",
+          "links": {
+            "artwork": {
+              "href": "/api/items/5/cover"
+            },
+            "self": {
+              "href": "/api/works/album%3Aradiohead-ok-computer-1997",
+              "title": "OK Computer"
+            }
+          }
+        },
+        {
+          "self": "/api/works/album%3Aradiohead-pablo-honey-1993",
+          "kind": "work",
+          "title": "Pablo Honey",
+          "work_kind": "album",
+          "medium": "audio",
+          "author": "Radiohead",
+          "year": 1993,
+          "subtitle": "Radiohead · 1993",
+          "tech": "album · flac · 3:28",
+          "item_id": 10,
+          "search": "pablo honey radiohead 01 you.flac",
+          "links": {
+            "artwork": {
+              "href": "/api/items/10/cover"
+            },
+            "self": {
+              "href": "/api/works/album%3Aradiohead-pablo-honey-1993",
+              "title": "Pablo Honey"
+            }
+          }
+        },
         {
           "self": "/api/works/album%3Aradiohead-the-bends",
           "kind": "work",
@@ -61,6 +156,32 @@
       ]
     },
     {
+      "key": "artists",
+      "title": "Artists",
+      "count": 1,
+      "items": [
+        {
+          "self": "/api/artists/Radiohead",
+          "kind": "artist",
+          "title": "Radiohead",
+          "medium": "audio",
+          "album_count": 3,
+          "subtitle": "3 albums",
+          "tech": "artist · 1993–1997",
+          "search": "radiohead pablo honey ok computer the bends",
+          "links": {
+            "artwork": {
+              "href": "/api/items/10/cover"
+            },
+            "self": {
+              "href": "/api/artists/Radiohead",
+              "title": "Radiohead"
+            }
+          }
+        }
+      ]
+    },
+    {
       "key": "episodes",
       "title": "Episodes",
       "count": 2,
@@ -106,6 +227,152 @@
             "work": {
               "href": "/api/works/tmdb%3A2316",
               "title": "The Office"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "key": "tracks",
+      "title": "Tracks",
+      "count": 4,
+      "items": [
+        {
+          "self": "/api/items/5",
+          "kind": "item",
+          "title": "Airbag",
+          "item_id": 5,
+          "label": "Track 1 · Airbag",
+          "work_key": "album:radiohead-ok-computer-1997",
+          "subtitle": "OK Computer",
+          "links": {
+            "artwork": {
+              "href": "/api/items/5/cover"
+            },
+            "self": {
+              "href": "/api/items/5",
+              "title": "Airbag"
+            },
+            "work": {
+              "href": "/api/works/album%3Aradiohead-ok-computer-1997",
+              "title": "OK Computer"
+            }
+          }
+        },
+        {
+          "self": "/api/items/6",
+          "kind": "item",
+          "title": "Paranoid Android",
+          "item_id": 6,
+          "label": "Track 2 · Paranoid Android",
+          "work_key": "album:radiohead-ok-computer-1997",
+          "subtitle": "OK Computer",
+          "links": {
+            "artwork": {
+              "href": "/api/items/6/cover"
+            },
+            "self": {
+              "href": "/api/items/6",
+              "title": "Paranoid Android"
+            },
+            "work": {
+              "href": "/api/works/album%3Aradiohead-ok-computer-1997",
+              "title": "OK Computer"
+            }
+          }
+        },
+        {
+          "self": "/api/items/10",
+          "kind": "item",
+          "title": "You",
+          "item_id": 10,
+          "label": "Track 1 · You",
+          "work_key": "album:radiohead-pablo-honey-1993",
+          "subtitle": "Pablo Honey",
+          "links": {
+            "artwork": {
+              "href": "/api/items/10/cover"
+            },
+            "self": {
+              "href": "/api/items/10",
+              "title": "You"
+            },
+            "work": {
+              "href": "/api/works/album%3Aradiohead-pablo-honey-1993",
+              "title": "Pablo Honey"
+            }
+          }
+        },
+        {
+          "self": "/api/items/11",
+          "kind": "item",
+          "title": "Planet Telex",
+          "item_id": 11,
+          "label": "Track 1 · Planet Telex",
+          "work_key": "album:radiohead-the-bends",
+          "subtitle": "The Bends",
+          "links": {
+            "artwork": {
+              "href": "/api/items/11/cover"
+            },
+            "self": {
+              "href": "/api/items/11",
+              "title": "Planet Telex"
+            },
+            "work": {
+              "href": "/api/works/album%3Aradiohead-the-bends",
+              "title": "The Bends"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "key": "parts",
+      "title": "Parts",
+      "count": 2,
+      "items": [
+        {
+          "self": "/api/items/1",
+          "kind": "item",
+          "title": "Part 1",
+          "item_id": 1,
+          "label": "Part 1",
+          "work_key": "audiobook:frank-herbert-dune-1965",
+          "subtitle": "Dune",
+          "links": {
+            "artwork": {
+              "href": "/api/items/1/cover"
+            },
+            "self": {
+              "href": "/api/items/1",
+              "title": "Part 1"
+            },
+            "work": {
+              "href": "/api/works/audiobook%3Afrank-herbert-dune-1965",
+              "title": "Dune"
+            }
+          }
+        },
+        {
+          "self": "/api/items/2",
+          "kind": "item",
+          "title": "Part 2",
+          "item_id": 2,
+          "label": "Part 2",
+          "work_key": "audiobook:frank-herbert-dune-1965",
+          "subtitle": "Dune",
+          "links": {
+            "artwork": {
+              "href": "/api/items/2/cover"
+            },
+            "self": {
+              "href": "/api/items/2",
+              "title": "Part 2"
+            },
+            "work": {
+              "href": "/api/works/audiobook%3Afrank-herbert-dune-1965",
+              "title": "Dune"
             }
           }
         }

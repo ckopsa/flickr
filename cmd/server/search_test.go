@@ -113,10 +113,23 @@ func TestSearchLibrary(t *testing.T) {
 			want: []string{"books/Flatland"},
 		},
 		{
+			name: "an artist by name: the shelf, and everything on it",
+			q:    "radiohead",
+			want: []string{"works/OK Computer", "works/Pablo Honey", "works/The Bends",
+				"artists/Radiohead",
+				"tracks/Airbag", "tracks/Paranoid Android", "tracks/You", "tracks/Planet Telex"},
+		},
+		{
 			name: "a substring, not a word",
 			q:    "adio",
 			want: []string{"works/OK Computer", "works/Pablo Honey", "works/The Bends",
+				"artists/Radiohead",
 				"tracks/Airbag", "tracks/Paranoid Android", "tracks/You", "tracks/Planet Telex"},
+		},
+		{
+			name: "an album's title is not its artist's name",
+			q:    "pablo honey",
+			want: []string{"works/Pablo Honey"},
 		},
 		{name: "nothing matches", q: "ninjago"},
 		{name: "an empty query finds nothing at all", q: ""},
@@ -146,7 +159,7 @@ func TestSearchGroupOrder(t *testing.T) {
 			t.Errorf("group %q: count = %d, %d items", g.Key, g.Count, len(g.Items))
 		}
 	}
-	if want := "works, episodes, tracks, parts, books"; strings.Join(keys, ", ") != want {
+	if want := "works, artists, episodes, tracks, parts, books"; strings.Join(keys, ", ") != want {
 		t.Errorf("groups = [%s], want [%s]", strings.Join(keys, ", "), want)
 	}
 	if got := searchLibrary("ninjago", ws); len(got) != 0 {
@@ -158,7 +171,9 @@ func TestSearchGroupOrder(t *testing.T) {
 // spelled from are on it: nothing composes an address to open one.
 func TestSearchDocument(t *testing.T) {
 	_, h := fixtureServer(t)
-	w := get(t, h, "/api/search?q=the&client_id=chris")
+	// "he" is "the" plus the artist: one query that lands something in every
+	// row the search has, which is what the golden is written from too.
+	w := get(t, h, "/api/search?q=he&client_id=chris")
 	if w.Code != http.StatusOK {
 		t.Fatalf("GET /api/search = %d: %s", w.Code, w.Body)
 	}
@@ -166,7 +181,7 @@ func TestSearchDocument(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &doc); err != nil {
 		t.Fatal(err)
 	}
-	if doc.Kind != "search" || doc.Query != "the" || doc.Self != "/api/search?q=the" {
+	if doc.Kind != "search" || doc.Query != "he" || doc.Self != "/api/search?q=he" {
 		t.Errorf("the document = %+v", doc)
 	}
 	n := 0
@@ -176,8 +191,13 @@ func TestSearchDocument(t *testing.T) {
 			if en.Links["self"].Href != en.Self {
 				t.Errorf("%q: links.self = %q, self = %q", en.Title, en.Links["self"].Href, en.Self)
 			}
-			if en.Title == "" || en.ItemID == 0 || en.Links["artwork"].Href == "" {
+			if en.Title == "" || en.Links["artwork"].Href == "" {
 				t.Errorf("%q is not drawable: %+v", g.Key, en)
+			}
+			// An artist's shelf is opened by the name; everything else
+			// carries the member a tap opens at.
+			if g.Key != "artists" && en.ItemID == 0 {
+				t.Errorf("%q: no item to open: %+v", g.Key, en)
 			}
 		}
 	}
@@ -192,7 +212,7 @@ func TestSearchDocument(t *testing.T) {
 		}
 	}
 	for title, want := range map[string]string{
-		"The Office": "works", "The Bends": "works",
+		"The Office": "works", "The Bends": "works", "Radiohead": "artists",
 		"The Job": "episodes", "The Haunting of Hill House": "books",
 	} {
 		if got := byTitle[title]; got != want {
@@ -200,14 +220,19 @@ func TestSearchDocument(t *testing.T) {
 		}
 	}
 
-	// A show is opened by its title and a member by its id: the two hashes
-	// the client spells, each from a field the document carries.
+	// A show is opened by its title, an artist by their name and a member by
+	// its id: the three hashes the client spells, each from a field the
+	// document carries.
 	for _, g := range doc.Groups {
 		for _, en := range g.Items {
 			switch g.Key {
 			case "works":
 				if en.Kind != "work" || en.WorkKind == "" {
 					t.Errorf("%q: a work result says which kind it is: %+v", en.Title, en)
+				}
+			case "artists":
+				if en.Kind != "artist" || en.Self != artistHref(en.Title) {
+					t.Errorf("%q: an artist result is their shelf: %+v", en.Title, en)
 				}
 			default:
 				if en.Kind != "item" || en.WorkKey == "" || en.Label == "" {

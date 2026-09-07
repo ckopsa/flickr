@@ -293,8 +293,9 @@ test('the results are the groups the search answered, in its order', () => {
   assert.ok(html.includes('data-nav="#/"'));
 });
 
-// A hit opens the thing it names: a show by its title, a member by its id —
-// both spelled by the same function a library tile is.
+// A hit opens the thing it names: a show by its title, an artist by their
+// name, a member by its id — all three spelled by the same function a library
+// tile is, because an artist hit IS the tile the library draws.
 test('a result opens the route its kind spells', () => {
   const doc = golden('search');
   const byTitle = {};
@@ -302,6 +303,11 @@ test('a result opens the route its kind spells', () => {
   assert.equal(byTitle['The Office'], '#/show/The%20Office');
   assert.equal(byTitle['Beach Games'], '#/item/8');
   assert.equal(byTitle['The Bends'], '#/item/11');
+  assert.equal(byTitle['Radiohead'], '#/artist/Radiohead');
+  const artists = doc.groups.find(g => g.key === 'artists');
+  const section = R.search(doc).split('data-group="artists"')[1].split('</section>')[0];
+  assert.deepEqual(cardTitles(section), artists.items.map(en => unesc(R.esc(en.title))));
+  assert.ok(section.includes('data-nav="#/artist/Radiohead"'), 'the shelf is not opened');
 });
 
 test('a search that matches nothing says so, and is still a page', () => {

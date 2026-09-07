@@ -357,7 +357,7 @@ func (s *server) handlePlay(w http.ResponseWriter, r *http.Request) {
 	}
 	// The shelves leave a title a kid profile may not see out; a play aimed
 	// straight at one — a stale tab, a pasted link — is refused in words.
-	if problem := s.refusePlay(playProfile(r, in.ClientID), *item); problem != nil {
+	if problem := s.refuseItem(playProfile(r, in.ClientID), *item); problem != nil {
 		hyper.WriteProblem(w, *problem)
 		return
 	}

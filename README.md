@@ -76,8 +76,8 @@ a handful of architectural decisions (see design notes below):
    profile name as `client_id` to the unchanged progress API. A kid profile
    is not a second library: the library, search, continue and route documents
    leave out every work whose `certification` is above PG / TV-PG (and every
-   work nobody has rated), and a play addressed straight at one is refused
-   with `not-for-this-profile`. `POST /api/telemetry` appends any JSON object
+   work nobody has rated), and an address aimed straight at one — a play, an
+   item, a work, a read — is refused with `not-for-this-profile`. `POST /api/telemetry` appends any JSON object
    to `data/telemetry.jsonl` for client-side error forensics.
 12. **Self-description feed** — the library can describe itself as WORKS
    rather than files: `internal/works` purely derives one work per movie and
@@ -550,7 +550,7 @@ view has one, and every link minted so far keeps working.
 | `#/show/<title>` | a show's episode list (`<title>` is `encodeURIComponent`'d, matched case-insensitively against both the show's own title and the one its files spell) |
 | `#/artist/<name>` | an artist's shelf: albums with covers, in year order (`<name>` is `encodeURIComponent`'d, matched case-insensitively) |
 | `#/item/<id>` | one item's detail pane; for an audiobook part or a track, the record pane with the work's parts beside it |
-| `#/search/<q>` | what one substring finds across the whole library, in groups: titles, episodes, tracks, parts, books (`<q>` is `encodeURIComponent`'d, matched case-insensitively) |
+| `#/search/<q>` | what one substring finds across the whole library, in groups: titles, artists, episodes, tracks, parts, books (`<q>` is `encodeURIComponent`'d, matched case-insensitively) |
 
 A **passage** is a start and an end within a work — a scene, or a run of
 episodes, or two chapters of a book — and other systems mint links to them,

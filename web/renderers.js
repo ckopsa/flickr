@@ -288,7 +288,8 @@
 
   // The results: a headed row per group the document names, in the document's
   // own order, each drawn with the very tile the library draws — a hit is a
-  // work or a member, and both already say where they go. Nothing is grouped,
+  // work, an artist's shelf or a member, and all three already say where they
+  // go, so the artists row needs nothing of its own. Nothing is grouped,
   // counted or sorted here, and a group the server left out is a heading that
   // is never drawn.
   function search(doc) {

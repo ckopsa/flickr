@@ -26,7 +26,6 @@ import (
 	"io"
 	"net/http"
 	"strconv"
-	"strings"
 	"time"
 
 	"flickr/internal/hyper"
@@ -104,9 +103,13 @@ func (s *server) handleRead(w http.ResponseWriter, r *http.Request) {
 			WithRemedy("send the fields this action's input names, or nothing at all", nil))
 		return
 	}
-	client := strings.TrimSpace(in.ClientID)
-	if client == "" {
-		client = profileOf(r)
+	client := playProfile(r, in.ClientID)
+	// The shelves leave a book a kid profile may not see out — which is every
+	// book, nobody having rated one — so a read aimed straight at it is
+	// refused the way a play is.
+	if problem := s.refuseItem(client, *item); problem != nil {
+		hyper.WriteProblem(w, *problem)
+		return
 	}
 	row := playSession{
 		ID: newSessionID(), ItemID: id, ClientID: client,
