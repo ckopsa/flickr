@@ -226,6 +226,14 @@
     if (fresh.length) {
       html += bandSection('New episodes', fresh, 'band-row', ' id="new-row"');
     }
+    // Then what this profile might like, under the server's own heading —
+    // "Because you watched Frozen" is a sentence about a title, and the
+    // document writes it: nothing here scores or names anything.
+    const because = (doc && doc.because) || null;
+    const picks = ((because && because.items) || []).filter(t => matches(t, state));
+    if (picks.length) {
+      html += bandSection(because.title, picks, 'band-row', ' id="because-row"');
+    }
     const named = {};
     for (const b of (doc.bands || [])) {
       named[b.key] = true;
@@ -584,6 +592,17 @@
       '<div id="artist-albums">' + ((doc.albums || []).map(a => card(a)).join('')) + '</div>';
   }
 
+  // --- more like this ----------------------------------------------------------
+
+  // The work document's own `similar` tiles, drawn with the library's card at
+  // the foot of a member's page. The row is the server's — which titles are
+  // alike, and how many of them — so this is a heading and a filter of one.
+  function similarRow(wk) {
+    const tiles = (wk && wk.similar) || [];
+    if (!tiles.length) return '';
+    return bandSection('More like this', tiles, 'band-row', ' id="similar-row"');
+  }
+
   // --- item --------------------------------------------------------------------
 
   // The detail pane. `ctx.work` is the work document the kernel fetched by
@@ -639,7 +658,8 @@
             siblings.map(m => memberRow(m, { current: m.id === doc.id })).join('') +
           '</div></div>'
         : '') +
-      details(doc);
+      details(doc) +
+      similarRow(wk);
   }
 
   // The genres this title is filed under: the work's list when the kernel has

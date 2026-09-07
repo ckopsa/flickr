@@ -714,13 +714,17 @@ func (s *server) handleWorkDoc(w http.ResponseWriter, r *http.Request) {
 		hyper.WriteProblem(w, serverProblem(err))
 		return
 	}
-	hyper.WriteDoc(w, http.StatusOK, s.workEnvelope(wk, profile, positions))
+	hyper.WriteDoc(w, http.StatusOK, s.workEnvelope(wk, ws, profile, positions))
 }
 
 // workEnvelope is that document, apart from the request that asked for it:
 // the route resolver (route.go) answers a #/show/<title> hash with the very
 // same document, and one work is one document however it was reached.
-func (s *server) workEnvelope(wk *works.Work, profile string, positions map[int64]store.Position) *hyper.Envelope {
+//
+// `ws` is the library the work sits in, which the document needs for one
+// field only: `similar`, the titles like this one (library.go). A work knows
+// nothing about its neighbours by itself.
+func (s *server) workEnvelope(wk *works.Work, ws []works.Work, profile string, positions map[int64]store.Position) *hyper.Envelope {
 	doc := hyper.Doc(workHref(wk.Key), "work", wk.Title)
 	// The work's own kind ("show", "album", "book") is not the DOCUMENT's
 	// kind, which is always "work". The envelope's name wins, so the work's
@@ -763,6 +767,16 @@ func (s *server) workEnvelope(wk *works.Work, profile string, positions map[int6
 		members = append(members, s.itemEnvelope(it, wk, false, positions))
 	}
 	doc.Field("members", members)
+
+	// What else in the library is like this — the "More like this" row at the
+	// foot of a member's page, as the tiles the grid already draws. The list
+	// is filtered the way the shelves are: a kids profile is not offered a
+	// title it would be refused at the door.
+	similar := make([]*hyper.Envelope, 0, similarTiles)
+	for _, like := range similarWorks(wk, s.visibleTo(ws, profile), similarTiles) {
+		similar = append(similar, workTile(like))
+	}
+	doc.Field("similar", similar)
 
 	doc.Link("items", workHref(wk.Key)+"/items", "")
 	if rep != nil {

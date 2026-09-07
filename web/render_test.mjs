@@ -268,6 +268,47 @@ test('new episodes is a row of its own, under what arrived lately', () => {
   assert.ok(!R.library(doc, {}).includes('id="new-row"'));
 });
 
+// The recommendation row is the server's, heading and all: the fixture's two
+// enriched titles share no genre, so — as with the row above — the document
+// is given one here rather than pretending the library has one.
+test('because you watched is a row under the server\'s own heading', () => {
+  const doc = golden('library');
+  const because = { title: 'Because you watched Frozen', items: [doc.items[0]] };
+  const html = R.library(Object.assign({}, doc, { because: because }), {});
+
+  assert.ok(html.indexOf('id="because-row"') < html.indexOf('data-band='));
+  const row = html.split('id="because-row"')[1].split('</section>')[0];
+  assert.match(row, /<h3>Because you watched Frozen<\/h3>/);
+  assert.deepEqual(cardTitles(row), [unesc(R.esc(doc.items[0].title))]);
+
+  // No row in the document is no row on the page — and no heading either.
+  assert.ok(!R.library(doc, {}).includes('id="because-row"'));
+  assert.ok(!R.library(Object.assign({}, doc, { because: { title: 'x', items: [] } }), {})
+    .includes('id="because-row"'));
+});
+
+// The item page's foot: the WORK document's `similar`, drawn with the same
+// card the library draws, and nothing at all when the work has no neighbours.
+test('more like this is the work document\'s own row', () => {
+  const item = golden('item-film');
+  const work = golden('work-show');
+  assert.ok(!R.item(item, { work: work }).includes('id="similar-row"'),
+    'a work with an empty `similar` draws no row');
+
+  const like = Object.assign({}, work, { similar: golden('library').items.slice(0, 2) });
+  const html = R.item(item, { work: like });
+  const row = html.split('id="similar-row"')[1].split('</section>')[0];
+  assert.match(row, /<h3>More like this<\/h3>/);
+  assert.deepEqual(cardTitles(row), like.similar.map(t => unesc(R.esc(t.title))));
+  // It is the last thing on the page, under the details disclosure.
+  assert.ok(html.indexOf('id="detail-details"') < html.indexOf('id="similar-row"'));
+  // And every address in it still came out of the document.
+  for (const a of addresses(html)) {
+    if (a.startsWith('#')) continue;
+    assert.ok(flat(item).includes(a) || flat(like).includes(a), 'composed address: ' + a);
+  }
+});
+
 // Search filters INSIDE the sections, and a section it empties disappears
 // rather than standing as a heading over nothing.
 test('a section the search empties is not drawn', () => {

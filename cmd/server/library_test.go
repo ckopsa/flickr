@@ -304,11 +304,15 @@ func TestNewEpisodes(t *testing.T) {
 	}
 }
 
-// serverOver stands a server up over a library of the caller's own items.
-// The new-episodes row is measured against the wall clock, so the shared
-// fixture — whose arrival dates are written down — can never carry one: a
-// document-level test needs files that arrived minutes ago.
-func serverOver(t *testing.T, items []store.Item) http.Handler {
+// serverOver stands a server up over a library of the caller's own items,
+// enrichment and all — an item carrying one has it written the way the
+// enrichment pass writes it, so a work built over these items has genres.
+//
+// The shared fixture cannot answer either of the two rows below: its arrival
+// dates are written down (and months back), and the only two titles it
+// enriches share no genre. A row is worth testing against a document and not
+// only a table, and this is the library that has one.
+func serverOver(t *testing.T, items []store.Item) (*server, http.Handler) {
 	t.Helper()
 	dir := t.TempDir()
 	library, err := store.OpenLibrary(filepath.Join(dir, "library.db"))
@@ -322,8 +326,24 @@ func serverOver(t *testing.T, items []store.Item) http.Handler {
 	if err := library.UpsertBatch(items); err != nil {
 		t.Fatal(err)
 	}
+	stored, err := library.ListItems()
+	if err != nil {
+		t.Fatal(err)
+	}
+	byKey := map[string]store.Item{}
+	for _, it := range stored {
+		byKey[it.ObjectKey] = it
+	}
+	for _, it := range items {
+		if it.Enrichment == nil {
+			continue
+		}
+		if err := library.SetEnrichment(byKey[it.ObjectKey].ID, it.Enrichment, it.Identity); err != nil {
+			t.Fatal(err)
+		}
+	}
 	srv := &server{library: library, state: state, policy: model.DefaultPolicy()}
-	return srv.routes()
+	return srv, srv.routes()
 }
 
 // The row and the badge as the DOCUMENT carries them: the show whose episode
@@ -331,7 +351,7 @@ func serverOver(t *testing.T, items []store.Item) http.Handler {
 // many arrived — so the browser badges the poster without counting anything.
 func TestLibraryNewEpisodesDocument(t *testing.T) {
 	now := time.Now()
-	h := serverOver(t, []store.Item{
+	_, h := serverOver(t, []store.Item{
 		{ObjectKey: "Shows/Atlanta/S01E01.mkv", ETag: "a1", AddedAt: now.Add(-40 * 24 * time.Hour),
 			Identity:  &model.Identity{Kind: "episode", Title: "Atlanta", Year: 2016, Season: 1, Episode: 1},
 			MediaInfo: &model.MediaInfo{Medium: model.MediumVideo, Container: "mkv", VideoCodec: "h264", AudioCodec: "aac", DurationSeconds: 1500}},
@@ -362,6 +382,268 @@ func TestLibraryNewEpisodesDocument(t *testing.T) {
 	}
 }
 
+// genred is one work in the two tables below: a title, what it is filed
+// under, and the day in one January its file arrived — the tie-break has to
+// have something to break. The item id is the work's own handle in a
+// positions map.
+func genred(id int64, title, kind string, day int, genres ...string) works.Work {
+	w := wk(title, kind, model.MediumVideo, "")
+	w.Genres = genres
+	w.Items = []store.Item{{
+		ID:        id,
+		AddedAt:   time.Date(2026, time.January, day, 12, 0, 0, 0, time.UTC),
+		MediaInfo: &model.MediaInfo{Medium: model.MediumVideo, DurationSeconds: 100},
+	}}
+	return w
+}
+
+// at is one profile's place in one item: seconds into a hundred-second file,
+// so 95 is finished and 50 is halfway.
+func at(id int64, seconds, updated float64) store.Position {
+	return store.Position{ItemID: id, ClientID: "chris", PositionSeconds: seconds, UpdatedAt: updated}
+}
+
+func positionsOf(ps ...store.Position) map[int64]store.Position {
+	out := map[int64]store.Position{}
+	for _, p := range ps {
+		out[p.ItemID] = p
+	}
+	return out
+}
+
+// "More like this" is one rule — shared genres — and this is its table: what
+// scores, what breaks a tie, and what is never in the row.
+func TestSimilarWorks(t *testing.T) {
+	frozen := genred(1, "Frozen", "movie", 10, "Animation", "Family", "Adventure")
+	for _, tc := range []struct {
+		name  string
+		n     int
+		works []works.Work
+		want  string
+	}{
+		{
+			name:  "the most genres in common leads",
+			n:     8,
+			works: []works.Work{frozen, genred(2, "Moana", "movie", 1, "Animation", "Family"), genred(3, "Up", "movie", 2, "Animation")},
+			want:  "Moana, Up",
+		},
+		{
+			name:  "an equal score is broken by what arrived last",
+			n:     8,
+			works: []works.Work{frozen, genred(2, "Up", "movie", 2, "Animation"), genred(3, "Coco", "movie", 20, "Animation")},
+			want:  "Coco, Up",
+		},
+		{
+			name:  "a title sharing nothing is not like it",
+			n:     8,
+			works: []works.Work{frozen, genred(2, "The Office", "show", 5, "Comedy")},
+			want:  "",
+		},
+		{
+			name:  "a work with no genres at all is like nothing",
+			n:     8,
+			works: []works.Work{genred(1, "Dune", "audiobook", 3), genred(2, "Moana", "movie", 1, "Animation")},
+			want:  "",
+		},
+		{
+			name:  "the row is capped at the far end",
+			n:     1,
+			works: []works.Work{frozen, genred(2, "Up", "movie", 2, "Animation"), genred(3, "Coco", "movie", 20, "Animation")},
+			want:  "Coco",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var got []string
+			for _, w := range similarWorks(&tc.works[0], tc.works, tc.n) {
+				got = append(got, w.Title)
+			}
+			if strings.Join(got, ", ") != tc.want {
+				t.Errorf("similar to %q = [%s], want [%s]",
+					tc.works[0].Title, strings.Join(got, ", "), tc.want)
+			}
+		})
+	}
+}
+
+// "Because you watched" is that same rule aimed at a title this profile has
+// played, and this is its table: which watched title seeds the row, what is
+// eligible to be in it, and when there is no row at all.
+func TestBecause(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		works     []works.Work
+		positions map[int64]store.Position
+		wantSeed  string
+		wantTitle string
+		want      string
+	}{
+		{
+			name: "the title they are furthest into seeds the row",
+			works: []works.Work{
+				genred(1, "Frozen", "movie", 10, "Animation", "Family"),
+				genred(2, "The Office", "show", 9, "Comedy"),
+				genred(3, "Moana", "movie", 1, "Animation", "Family"),
+				genred(4, "Parks", "show", 2, "Comedy"),
+			},
+			positions: positionsOf(at(1, 95, 100), at(2, 20, 200)),
+			wantSeed:  "Frozen",
+			wantTitle: "Because you watched Frozen",
+			want:      "Moana",
+		},
+		{
+			name: "a title already started is not a recommendation",
+			works: []works.Work{
+				genred(1, "Frozen", "movie", 10, "Animation"),
+				genred(2, "Moana", "movie", 5, "Animation"),
+				genred(3, "Up", "movie", 1, "Animation"),
+			},
+			positions: positionsOf(at(1, 95, 100), at(2, 30, 90)),
+			wantSeed:  "Frozen",
+			wantTitle: "Because you watched Frozen",
+			want:      "Up",
+		},
+		{
+			name: "a seed with nothing to suggest is passed over",
+			works: []works.Work{
+				genred(1, "Frozen", "movie", 10, "Animation"),
+				genred(2, "The Office", "show", 9, "Comedy"),
+				genred(3, "Parks", "show", 1, "Comedy"),
+			},
+			positions: positionsOf(at(1, 95, 100), at(2, 20, 200)),
+			wantSeed:  "The Office",
+			wantTitle: "Because you watched The Office",
+			want:      "Parks",
+		},
+		{
+			name: "the verb is the medium's",
+			works: []works.Work{
+				func() works.Work {
+					w := genred(1, "Dune", "audiobook", 10, "Science Fiction")
+					w.Medium = model.MediumAudio
+					return w
+				}(),
+				genred(2, "Foundation", "audiobook", 1, "Science Fiction"),
+			},
+			positions: positionsOf(at(1, 95, 100)),
+			wantSeed:  "Dune",
+			wantTitle: "Because you listened to Dune",
+			want:      "Foundation",
+		},
+		{
+			name: "nobody asking, no row",
+			works: []works.Work{
+				genred(1, "Frozen", "movie", 10, "Animation"),
+				genred(2, "Moana", "movie", 1, "Animation"),
+			},
+		},
+		{
+			name: "watched everything like it, no row",
+			works: []works.Work{
+				genred(1, "Frozen", "movie", 10, "Animation"),
+				genred(2, "Moana", "movie", 1, "Animation"),
+			},
+			positions: positionsOf(at(1, 95, 100), at(2, 95, 90)),
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			order := libraryOrder(tc.works, works.Artists(tc.works))
+			seed, picks := because(order, tc.works, tc.positions, becauseTiles)
+			if seed == nil {
+				if tc.wantSeed != "" {
+					t.Fatalf("no row at all; want one seeded by %q", tc.wantSeed)
+				}
+				return
+			}
+			if seed.Title != tc.wantSeed {
+				t.Errorf("seed = %q, want %q", seed.Title, tc.wantSeed)
+			}
+			if got := becauseTitle(seed); got != tc.wantTitle {
+				t.Errorf("heading = %q, want %q", got, tc.wantTitle)
+			}
+			var got []string
+			for _, sh := range picks {
+				got = append(got, sh.Work.Title)
+			}
+			if strings.Join(got, ", ") != tc.want {
+				t.Errorf("because = [%s], want [%s]", strings.Join(got, ", "), tc.want)
+			}
+		})
+	}
+}
+
+// enriched is one film as the enrichment pass leaves it: the identity the
+// path gave it, and TMDB's genres on top — which is the only way a work
+// carries any.
+func enriched(key, title string, year int, genres ...string) store.Item {
+	return store.Item{
+		ObjectKey: "Movies/" + title + " (" + fmt.Sprint(year) + ")/" + title + ".mkv",
+		ETag:      key,
+		AddedAt:   time.Date(2026, time.January, 10, 12, 0, 0, 0, time.UTC),
+		Identity:  &model.Identity{Kind: "movie", Title: title, Year: year},
+		Enrichment: &model.Enrichment{Version: 3, TMDBID: int64(len(key) * 1000), Title: title,
+			Year: year, Genres: genres},
+		MediaInfo: &model.MediaInfo{Medium: model.MediumVideo, Container: "mkv",
+			VideoCodec: "h264", AudioCodec: "aac", DurationSeconds: 100},
+	}
+}
+
+// The two rows as the DOCUMENTS carry them: the home's row is this profile's
+// own, headed with the title it was built from, and the work document carries
+// the same rule as `similar` — the row the item page draws at its foot.
+func TestBecauseAndSimilarDocuments(t *testing.T) {
+	srv, h := serverOver(t, []store.Item{
+		enriched("f", "Frozen", 2013, "Animation", "Family"),
+		enriched("mo", "Moana", 2016, "Animation", "Family"),
+		enriched("off", "Arrival", 2016, "Science Fiction"),
+	})
+	if err := srv.state.SetPosition(1, "chris", 95); err != nil {
+		t.Fatal(err)
+	}
+
+	doc := library(t, h, "/api/library?client_id=chris")
+	if doc.Because == nil {
+		t.Fatal("the profile watched a film and the home offers no row")
+	}
+	if doc.Because.Title != "Because you watched Frozen" {
+		t.Errorf("heading = %q", doc.Because.Title)
+	}
+	var got []string
+	for _, tl := range doc.Because.Items {
+		got = append(got, tl.Title)
+	}
+	if strings.Join(got, ", ") != "Moana" {
+		t.Errorf("because = [%s]; the unwatched title that shares its genres",
+			strings.Join(got, ", "))
+	}
+	// The row is drawn with the grid's own tiles, band and all.
+	if doc.Because.Items[0].Band != "movies" || doc.Because.Items[0].Links["self"].Href == "" {
+		t.Errorf("a because tile is not the grid's: %+v", doc.Because.Items[0])
+	}
+	// Nobody asking, no row: the shelf is the same for everyone, the row is not.
+	if library(t, h, "/api/library").Because != nil {
+		t.Error("a stranger is told what they watched")
+	}
+
+	// The same rule on the work document, itself excluded.
+	var work struct {
+		Similar []tile `json:"similar"`
+	}
+	w := get(t, h, doc.Because.Items[0].Self+"?client_id=chris")
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET %s = %d: %s", doc.Because.Items[0].Self, w.Code, w.Body)
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &work); err != nil {
+		t.Fatal(err)
+	}
+	got = nil
+	for _, tl := range work.Similar {
+		got = append(got, tl.Title)
+	}
+	if strings.Join(got, ", ") != "Frozen" {
+		t.Errorf("similar to Moana = [%s]", strings.Join(got, ", "))
+	}
+}
+
 // tile is a library tile as a test reads it.
 type tile struct {
 	Self        string   `json:"self"`
@@ -389,7 +671,11 @@ type libraryDoc struct {
 	Items         []tile `json:"items"`
 	RecentlyAdded []tile `json:"recently_added"`
 	NewEpisodes   []tile `json:"new_episodes"`
-	Facets        map[string][]struct {
+	Because       *struct {
+		Title string `json:"title"`
+		Items []tile `json:"items"`
+	} `json:"because"`
+	Facets map[string][]struct {
 		Value string `json:"value"`
 		Count int    `json:"count"`
 	} `json:"facets"`

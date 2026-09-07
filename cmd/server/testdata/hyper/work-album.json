@@ -118,6 +118,7 @@
       }
     }
   ],
+  "similar": [],
   "links": {
     "cover": {
       "href": "/api/items/5/cover"

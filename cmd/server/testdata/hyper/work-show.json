@@ -218,6 +218,7 @@
       }
     }
   ],
+  "similar": [],
   "links": {
     "backdrop": {
       "href": "/api/items/8/backdrop"
