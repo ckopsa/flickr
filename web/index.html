@@ -732,6 +732,9 @@ $('audio').onchange = () => {
 // shows: title -> { eps, extras }; movies: one entry per non-episode title,
 // with its bonus material in movieExtras (item id -> extras). Bonus material
 // (kind "extra") never becomes a tile of its own — that is the whole point.
+// Identity kinds of the audio and text media (see model.Identity): kept out
+// of the video grid until their own panes exist.
+const NON_VIDEO_KINDS = new Set(['audiobook_part', 'track', 'book']);
 function buildLibrary(items) {
   const movies = [], shows = new Map(), pending = [];
   const group = name => {
@@ -740,6 +743,12 @@ function buildLibrary(items) {
   };
   for (const it of items) {
     const kind = it.identity?.kind, title = it.identity?.title;
+    // Audio and text items are not tiles here: the movie/show grid has no
+    // way to show or play them yet, and the catch-all below would file an
+    // audiobook part as a movie.
+    // TODO(flickr-q9v, flickr-9au): the audiobook/album pane and the reader
+    // pane take these over.
+    if (NON_VIDEO_KINDS.has(kind)) continue;
     if (kind === 'episode' && title) group(title).eps.push(it);
     else if (kind === 'extra' && title) pending.push(it);
     else movies.push(it);

@@ -7,10 +7,27 @@ package model
 
 const CapabilitySchemaVersion = 1
 
+// Medium is the broad class of a media file — what kind of player it needs
+// rather than what codec it carries. Video is the medium every item had
+// before the field existed; audio (audiobooks, albums) and text (books)
+// joined later, so a stored MediaInfo with an empty Medium is video, and
+// readers go through MediumOrVideo rather than comparing the field directly.
+const (
+	MediumVideo = "video"
+	MediumAudio = "audio"
+	MediumText  = "text"
+)
+
+// Media is the set of admitted Medium values.
+var Media = map[string]bool{MediumVideo: true, MediumAudio: true, MediumText: true}
+
 // MediaInfo is the result of probing a media file. It is the immutable
 // media-side input to the decision engine.
 type MediaInfo struct {
-	Container       string  `json:"container"`   // "mkv", "mp4", ...
+	// Medium is "video", "audio" or "text" (see the Medium constants). Empty
+	// in JSON written before the field existed, which always meant video.
+	Medium          string  `json:"medium"`
+	Container       string  `json:"container"`   // "mkv", "mp4", "m4b", "epub", ...
 	VideoCodec      string  `json:"video_codec"` // "h264", "hevc", "av1", ...
 	AudioCodec      string  `json:"audio_codec"` // "aac", "ac3", "dts", ...
 	Width           int     `json:"width"`
@@ -23,8 +40,18 @@ type MediaInfo struct {
 	// Telecine: film content pulldown-flagged to a higher display rate
 	// (typical of DVDs). Copying passes the flags through harmlessly, but
 	// re-encoding must inverse-telecine or the judder gets baked in.
-	Telecine  bool            `json:"telecine,omitempty"`
-	Chapters  []Chapter       `json:"chapters,omitempty"`
+	Telecine bool `json:"telecine,omitempty"`
+	// Chapters are the file's own navigation points: embedded chapter
+	// markers for video and audio; for text, one entry per spine item (a
+	// book has no clock, so every StartSeconds is 0 and Title carries the
+	// section's TOC label or its spine id).
+	Chapters []Chapter `json:"chapters,omitempty"`
+	// Sections is the spine length of a text item — how many reading-order
+	// documents the book is made of. 0 for video and audio.
+	Sections int `json:"sections,omitempty"`
+	// Document is what a text file says about itself (its package metadata),
+	// as opposed to what its path says (Identity). Only set for text.
+	Document  *Document       `json:"document,omitempty"`
 	Subtitles []SubtitleTrack `json:"subtitles,omitempty"`
 	// AudioTracks lists every audio stream (ordinal = index among audio
 	// streams, mapping to ffmpeg -map 0:a:<ordinal>). The scalar
@@ -32,6 +59,24 @@ type MediaInfo struct {
 	// when a client selects another track (decision.Options.AudioTrack) the
 	// decision engine evaluates that track's codec/channels instead.
 	AudioTracks []AudioTrack `json:"audio_tracks,omitempty"`
+}
+
+// MediumOrVideo returns the item's medium, reading the empty value stored by
+// scans that predate the field as video — every item was a video then.
+func (m *MediaInfo) MediumOrVideo() string {
+	if m == nil || m.Medium == "" {
+		return MediumVideo
+	}
+	return m.Medium
+}
+
+// Document is the embedded metadata of a text item (EPUB package metadata:
+// dc:title, dc:creator, dc:language). It is recorded, not trusted over the
+// path: identity stays deterministic from the object key alone.
+type Document struct {
+	Title    string `json:"title,omitempty"`
+	Creator  string `json:"creator,omitempty"`
+	Language string `json:"language,omitempty"`
 }
 
 // AudioTrack is one audio stream. Default carries ffprobe's
@@ -224,13 +269,30 @@ type PlayDecision struct {
 
 // Identity is the file-to-media identification result — a deterministic,
 // user-overridable step kept separate from metadata enrichment.
-// Kind "extra" is bonus material (featurettes, deleted scenes) that belongs
-// to the work named by Title but is not one of its episodes: Season/Episode,
-// when present, say which episode it accompanies.
+//
+// Kind names what the file IS within its work:
+//   - "movie", "episode" — video; Title names the film or the show.
+//   - "extra" — bonus material (featurettes, deleted scenes) that belongs to
+//     the work named by Title but is not one of its episodes: Season/Episode,
+//     when present, say which episode it accompanies.
+//   - "audiobook_part" — one file of an audiobook; Title is the book, Author
+//     its author, Part its position (0 = a single-file book, or unnumbered).
+//   - "track" — one file of an album; Title is the ALBUM (the work), Author
+//     the artist, Part the track number. The track's own name is not stored
+//     here in this generation — the album is the unit the library presents.
+//   - "book" — a text file; Title and Author name it, Part is unused.
+//   - "unknown" — the path said nothing.
 type Identity struct {
-	Kind    string `json:"kind"` // "movie", "episode", "extra", "unknown"
-	Title   string `json:"title"`
+	Kind  string `json:"kind"`
+	Title string `json:"title"`
+	// Author is the audiobook's author, the album's artist, the book's
+	// author — whatever the directory grammar names between the category
+	// and the title. Empty for video kinds.
+	Author  string `json:"author,omitempty"`
 	Year    int    `json:"year,omitempty"`
 	Season  int    `json:"season,omitempty"`
 	Episode int    `json:"episode,omitempty"`
+	// Part orders the files of a multi-file audio work: an audiobook part or
+	// a track number. 0 = unnumbered (or the work is a single file).
+	Part int `json:"part,omitempty"`
 }

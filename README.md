@@ -94,6 +94,71 @@ a handful of architectural decisions (see design notes below):
    (always correct, just not minimal). Rows from before the migration carry
    seq 0, so a first cursorless fetch returns everything — the correct
    initial sync.
+13. **Medium is a property of the file, not of the server** — every probed
+   item carries `media_info.medium` (`video`, `audio`, `text`; rows written
+   before the field existed are read as `video`), the scan admits files by
+   an extension table per medium, and probing routes on it: audio goes
+   through ffprobe like a film (cover art is never mistaken for a video
+   stream, so an audio item has `video_codec ""` and no dimensions), text
+   through an EPUB reader (`ProbeEpub`: container.xml → OPF → metadata,
+   spine, TOC) that yields one `chapter` per spine item and a `sections`
+   count. Identification gained the `Audiobooks/`, `Music/` and `Books/`
+   grammars (see *Library layout*), and works gained `medium`, `author`,
+   and the `audiobook`/`album`/`book` kinds. Nothing audio or text plays
+   yet: the play endpoints answer 415 for those media, the web grid hides
+   them, and trickplay skips them.
+
+## Library layout
+
+Identification reads the object key only (`scanner.Identify`), so the
+bucket's directory layout IS the catalogue. Category directories are
+matched case-insensitively, anywhere on the path (`csi-fs/Adult/Shows/…`
+works), and nested category directories are walked through
+(`tv/Shows/…`, `Audio/Audiobooks/…`). Nothing under a category directory
+is ever `unknown`: whatever does not fit a shape below still resolves to
+that category's kind with what the path gives.
+
+| Category | Shape | Identity |
+|---|---|---|
+| `Movies/` (`Films/`, `Documentaries/`) | `Movies/<Title (Year)>/<file>`, `Movies/<Title (Year)>.mkv`, `Movies/<Title>/<file>` | kind `movie`, title, year when present; `Extras/` below a title → kind `extra` |
+| `Shows/` (`TV/`, `Series/`) | `Shows/<Show (Year)>/Season <n>/<S01E02 or E02 or 1x02 or 01 - Name>.mkv`, `Shows/<Show>/<file>` | kind `episode`, title = show, season/episode from the filename then the season directory (0 = unnumbered); `Featurettes/`, `Deleted Scenes/` → `extra` |
+| `Audiobooks/` | `Audiobooks/<Author>/<Title (Year)>/<03 - Chapter Three.m4b>`, `Audiobooks/<Author>/<Title>.m4b` | kind `audiobook_part`, author, title, year, `part` from the filename's leading ordinal (`03 - …`, `Part 3`, `03`; 0 when absent or for a single-file book) |
+| `Music/` (`Albums/`) | `Music/<Artist>/<Album (Year)>/<01 Title.flac>` | kind `track`, author = artist, title = ALBUM (the album is the work), `part` = track number; the track's own name is not stored in this generation |
+| `Books/` (`Ebooks/`) | `Books/<Author>/<Title (Year)>.epub`, `Books/<Author>/<Title>/<file>.epub` | kind `book`, author, title (from the file or the directory), year |
+
+Examples, key → identity:
+
+```
+Movies/Frozen (2013)/movie.mp4                       movie      Frozen, 2013
+Shows/Doctor Who (2005)/Season 1/Ep 3.mkv            episode    Doctor Who, 2005, S01E03
+Shows/The Office/Featurettes/S01E01 Deleted.mkv      extra      The Office, S01E01
+Audiobooks/Frank Herbert/Dune (1965)/03 - Part 3.m4b audiobook_part  Frank Herbert · Dune, 1965, part 3
+Audiobooks/Ursula K. Le Guin/The Dispossessed.m4b    audiobook_part  Ursula K. Le Guin · The Dispossessed, part 0
+Music/Radiohead/OK Computer (1997)/01 Airbag.flac    track      Radiohead · OK Computer, 1997, part 1
+Books/George Orwell/1984.epub                        book       George Orwell · 1984
+```
+
+What the scan admits, by medium: **video** `.mkv .mp4 .m4v .avi .mov .webm
+.ts .wmv`; **audio** `.m4b .m4a .mp3 .flac .opus .ogg .aac .wav`; **text**
+`.epub` (`.pdf` is a later bead). Subtitle sidecars (`.srt .ass .ssa .vtt`)
+are matched to the file they sit beside, not admitted on their own.
+
+Vocabulary, from file to work:
+
+| Identity kind | Work kind | Medium | Members ordered by |
+|---|---|---|---|
+| `movie`, `extra` | `movie` | `video` | the film first, extras after |
+| `episode`, `extra` | `show` | `video` | (season, episode), unnumbered last, extras last |
+| `audiobook_part` | `audiobook` (`part_count`) | `audio` | `part`, unnumbered last |
+| `track` | `album` (`track_count`) | `audio` | `part` |
+| `book` | `book` | `text` | — |
+| `unknown` / no identity | `file:<id>` | the item's own | — |
+
+Progress follows the shape: an audiobook's fraction is time heard over the
+sum of its parts' durations (earlier parts count whole), its text reads
+`part 3 of 12 · 41:10`; a book reports a position but no fraction or text
+until the reader bead adds a locator. Audio and text items do not play yet
+— the audio player is bead flickr-q9v, the EPUB reader bead flickr-9au.
 
 ## Run
 
@@ -112,13 +177,13 @@ locally except HLS segments in `data/streams/`.
 | Endpoint | Purpose |
 |---|---|
 | `POST /api/scan`, `GET /api/scan` | trigger / observe incremental scan (enrichment runs after) |
-| `GET /api/items` | library listing (incl. `media_info.subtitles` and `enrichment`) |
-| `GET /api/works` | library as works: movies + whole shows (+ stray files), title-sorted, with `work_key`, counts, and a `representative_item_id` for artwork |
-| `GET /api/works/{key}/items` | one work's member items (episodes in season/episode order); 404 for unknown keys |
+| `GET /api/items` | library listing (incl. `media_info.medium`, `media_info.subtitles` and `enrichment`) |
+| `GET /api/works` | library as works: movies, whole shows, audiobooks, albums, books (+ stray files), title-sorted, each with `work_key`, `kind`, `medium`, `author`, counts, and a `representative_item_id` for artwork |
+| `GET /api/works/{key}/items` | one work's member items (episodes in season/episode order, parts and tracks in part order); 404 for unknown keys |
 | `GET /api/continue?client_id=NAME` | a profile's resume list: most-recent first, max 20, finished (≥90%) and <5 s positions excluded, one entry per work |
 | `GET /api/feed/media?since=CURSOR` | change feed: works changed since the cursor with per-audience progress; response carries the next cursor (`l<n>.s<n>`); no `since` = everything |
-| `POST /api/items/{id}/decision` | dry-run: decision + trace, no side effects |
-| `POST /api/items/{id}/play` | decide and act: presigned URL (direct) or HLS session (transcode) |
+| `POST /api/items/{id}/decision` | dry-run: decision + trace, no side effects (415 for audio/text items — they do not play yet) |
+| `POST /api/items/{id}/play` | decide and act: presigned URL (direct) or HLS session (transcode); 415 for audio/text |
 | `POST /api/items/{id}/identity` | user identity override (persists across scans) |
 | `POST /api/items/{id}/reprobe` | re-probe one item on demand (also re-discovers subtitle sidecars in its directory) |
 | `POST /api/items/{id}/enrich` | TMDB-enrich one item on demand (503 if no API key) |

@@ -35,6 +35,14 @@ type Progress struct {
 // an episode is watched at ≥90% of its duration, plus the furthest episode's
 // partial fraction/episode_count if it isn't itself watched. Finished at
 // fraction ≥ 0.9.
+// Audiobooks and albums: the furthest part with any position anchors the
+// text ("part 3 of 12 · 41:10"); the fraction is time over the SUM of the
+// parts' durations, every earlier part counting as heard in full — a book's
+// parts are one continuous reading, not episodes to tick off. A single-file
+// audiobook reads like a movie. Finished at ≥ 0.9.
+// Books: a position exists, but this generation has no locator to turn it
+// into a place in the text — fraction 0, text "", status "active". The
+// reader bead fills these in.
 func WorkProgress(w *Work, positions map[int64]store.Position) (Progress, bool) {
 	var have []store.Position
 	var updated float64
@@ -50,8 +58,17 @@ func WorkProgress(w *Work, positions map[int64]store.Position) (Progress, bool) 
 		return Progress{}, false
 	}
 
+	if w.Kind == "book" {
+		return Progress{Status: "active", UpdatedAt: updated}, true
+	}
+	if (w.Kind == "audiobook" || w.Kind == "album") && w.PartCount+w.TrackCount > 1 {
+		if pr, ok := partsProgress(w, positions, updated); ok {
+			return pr, true
+		}
+	}
 	if w.Kind != "show" {
-		// Movie/file: single relevant item (merged duplicates: most recent).
+		// Movie/file/single-file audiobook: one relevant item (merged
+		// duplicates: the most recent).
 		best := have[0]
 		for _, p := range have[1:] {
 			if p.UpdatedAt > best.UpdatedAt {
@@ -117,6 +134,51 @@ func WorkProgress(w *Work, positions map[int64]store.Position) (Progress, bool) 
 	return Progress{Status: status, Fraction: frac, ProgressText: text, UpdatedAt: updated}, true
 }
 
+// partsProgress is the audiobook/album derivation. Members are already in
+// part order, so the LAST one with a position is the furthest; everything
+// before it counts as heard in full, and the fraction is seconds heard over
+// the whole work's seconds. A member with unknown duration adds nothing to
+// either side, so the fraction stays honest about what it could measure.
+// ok=false when no part carries a position.
+func partsProgress(w *Work, positions map[int64]store.Position, updated float64) (Progress, bool) {
+	var parts []store.Item
+	for _, it := range w.Items {
+		if !isExtra(it) {
+			parts = append(parts, it)
+		}
+	}
+	furthest := -1
+	for i, it := range parts {
+		if _, ok := positions[it.ID]; ok {
+			furthest = i
+		}
+	}
+	if furthest < 0 {
+		return Progress{}, false
+	}
+	var total, heard float64
+	for i, it := range parts {
+		dur := itemDuration(it)
+		total += dur
+		if i < furthest {
+			heard += dur
+		}
+	}
+	pos := positions[parts[furthest].ID]
+	heard += min(pos.PositionSeconds, itemDuration(parts[furthest]))
+	frac := fraction(heard, total)
+	status := "active"
+	if frac >= watchedAt {
+		status = "finished"
+	}
+	noun := "part"
+	if w.Kind == "album" {
+		noun = "track"
+	}
+	text := fmt.Sprintf("%s %d of %d · %s", noun, furthest+1, len(parts), clock(pos.PositionSeconds))
+	return Progress{Status: status, Fraction: frac, ProgressText: text, UpdatedAt: updated}, true
+}
+
 func itemDuration(it store.Item) float64 {
 	if it.MediaInfo == nil {
 		return 0
@@ -177,8 +239,9 @@ type ContinueEntry struct {
 // its single most-recent item. A finished item (≥90% of duration) normally
 // drops out — but a finished show episode with a following episode advances
 // the entry to that NEXT episode ("up next"): position 0 unless the profile
-// already has its own unfinished progress there, which wins. A finished
-// finale (no next episode) and a finished movie are excluded as before.
+// already has its own unfinished progress there, which wins. An audiobook's
+// parts and an album's tracks advance the same way. A finished finale (no
+// next member) and a finished movie are excluded as before.
 func ContinueList(works []Work, positions []store.Position, max int) []ContinueEntry {
 	itemWork := map[int64]*Work{}
 	items := map[int64]*store.Item{}
@@ -217,14 +280,14 @@ func ContinueList(works []Work, positions []store.Position, max int) []ContinueE
 		w, it := itemWork[p.ItemID], items[p.ItemID]
 		dur := itemDuration(*it)
 		if dur > 0 && p.PositionSeconds >= watchedAt*dur { // finished
-			if w.Kind != "show" {
-				continue // finished movie/file: nothing to resume
+			if !multiPart(w) {
+				continue // finished movie/book/file: nothing to resume
 			}
-			next := nextEpisode(w, p.ItemID)
+			next := nextMember(w, p.ItemID)
 			if next == nil {
-				continue // finished the finale: the show is done
+				continue // finished the finale (or last part): the work is done
 			}
-			// Advance to the next episode. Its own unfinished progress wins;
+			// Advance to the next member. Its own unfinished progress wins;
 			// otherwise it starts at 0. The finished watch remains the entry's
 			// recency (UpdatedAt) — it IS the latest activity.
 			it, dur = next, itemDuration(*next)
@@ -255,11 +318,11 @@ func ContinueList(works []Work, positions []store.Position, max int) []ContinueE
 	return out
 }
 
-// nextEpisode is the next EPISODE member after itemID in the show's
-// (season, episode) ordering — w.Items is already sorted that way, with bonus
-// material last — or nil at the finale. Finishing an episode never advances
-// into a featurette.
-func nextEpisode(w *Work, itemID int64) *store.Item {
+// nextMember is the next real member after itemID in the work's ordering —
+// the next episode by (season, episode), the next part or track by number;
+// w.Items is already sorted that way, with bonus material last — or nil at
+// the finale. Finishing an episode never advances into a featurette.
+func nextMember(w *Work, itemID int64) *store.Item {
 	for i := range w.Items {
 		if w.Items[i].ID != itemID {
 			continue
@@ -276,15 +339,33 @@ func nextEpisode(w *Work, itemID int64) *store.Item {
 
 // itemLabel names one item inside its work: numbered episodes get
 // "S02E05 · <title>" (enrichment episode title when known, else the file
-// basename); everything else — bonus material, and episodes nobody numbered —
-// is just the basename, since a made-up "S00E00" names nothing.
+// basename); a numbered audiobook part is "Part 3" and a numbered track
+// "Track 3" — the identity keeps no track title to add, so there is nothing
+// after the number; everything else — bonus material, episodes and parts
+// nobody numbered, books — is just the basename, since a made-up "S00E00" or
+// "Part 0" names nothing.
 func itemLabel(it store.Item) string {
 	name := path.Base(it.ObjectKey)
-	if it.Identity == nil || it.Identity.Kind != "episode" || it.Identity.Episode == 0 {
+	if it.Identity == nil {
 		return name
 	}
-	if it.Enrichment != nil && it.Enrichment.EpisodeTitle != "" {
-		name = it.Enrichment.EpisodeTitle
+	switch it.Identity.Kind {
+	case "episode":
+		if it.Identity.Episode == 0 {
+			return name
+		}
+		if it.Enrichment != nil && it.Enrichment.EpisodeTitle != "" {
+			name = it.Enrichment.EpisodeTitle
+		}
+		return fmt.Sprintf("S%02dE%02d · %s", it.Identity.Season, it.Identity.Episode, name)
+	case "audiobook_part":
+		if it.Identity.Part > 0 {
+			return fmt.Sprintf("Part %d", it.Identity.Part)
+		}
+	case "track":
+		if it.Identity.Part > 0 {
+			return fmt.Sprintf("Track %d", it.Identity.Part)
+		}
 	}
-	return fmt.Sprintf("S%02dE%02d · %s", it.Identity.Season, it.Identity.Episode, name)
+	return name
 }

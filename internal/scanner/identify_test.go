@@ -184,3 +184,139 @@ func TestIdentifyIsDeterministic(t *testing.T) {
 		t.Errorf("identification must be deterministic: %+v vs %+v", a, b)
 	}
 }
+
+// TestIdentifyAudioAndText covers the v4 grammars — Audiobooks/, Music/,
+// Books/ — including the awkward shapes: no part number, a single-file book
+// filed directly under its author, a nesting prefix above the category, and
+// a year on the title directory.
+func TestIdentifyAudioAndText(t *testing.T) {
+	cases := []struct {
+		key  string
+		want model.Identity
+	}{
+		// Audiobooks: author / title / numbered parts.
+		{
+			"Audiobooks/Brandon Sanderson/The Way of Kings/03 - Chapter Three.m4b",
+			model.Identity{Kind: "audiobook_part", Author: "Brandon Sanderson", Title: "The Way of Kings", Part: 3},
+		},
+		{
+			"Audiobooks/Brandon Sanderson/The Way of Kings/Part 3.mp3",
+			model.Identity{Kind: "audiobook_part", Author: "Brandon Sanderson", Title: "The Way of Kings", Part: 3},
+		},
+		{
+			"Audiobooks/Brandon Sanderson/The Way of Kings/03.mp3",
+			model.Identity{Kind: "audiobook_part", Author: "Brandon Sanderson", Title: "The Way of Kings", Part: 3},
+		},
+		// No number anywhere in the part's name: Part 0, still a part.
+		{
+			"Audiobooks/Brandon Sanderson/The Way of Kings/Epilogue.m4b",
+			model.Identity{Kind: "audiobook_part", Author: "Brandon Sanderson", Title: "The Way of Kings"},
+		},
+		// A single-file book directly under the author directory.
+		{
+			"Audiobooks/Ursula K. Le Guin/The Dispossessed.m4b",
+			model.Identity{Kind: "audiobook_part", Author: "Ursula K. Le Guin", Title: "The Dispossessed"},
+		},
+		// Nesting prefix above the category, a year on the title directory,
+		// and a disc directory below it that the grammar walks past.
+		{
+			"csi-fs/Audio/Audiobooks/Frank Herbert/Dune (1965)/Disc 2/07 Track 7.flac",
+			model.Identity{Kind: "audiobook_part", Author: "Frank Herbert", Title: "Dune", Year: 1965, Part: 7},
+		},
+		// Nested category directories, the way "tv/Shows/..." is tolerated.
+		{
+			"Audiobooks/Audiobooks/Some Author/Some Book/01.mp3",
+			model.Identity{Kind: "audiobook_part", Author: "Some Author", Title: "Some Book", Part: 1},
+		},
+		// Loose file in the category directory: the filename is all we have,
+		// but it is still an audiobook — never "unknown" under a category.
+		{
+			"Audiobooks/Orphan Recording.mp3",
+			model.Identity{Kind: "audiobook_part", Title: "Orphan Recording"},
+		},
+		// A movie-looking name under Audiobooks/ is an audiobook: the
+		// category outranks every filename rule.
+		{
+			"Audiobooks/Arthur C. Clarke/2001 A Space Odyssey (1968)/2001.A.Space.Odyssey.S01E01.mp3",
+			model.Identity{Kind: "audiobook_part", Author: "Arthur C. Clarke", Title: "2001 A Space Odyssey", Year: 1968},
+		},
+		// Music: the album is the work; the artist is the author; the track
+		// number is the part. The track's own title is not kept.
+		{
+			"Music/Radiohead/OK Computer (1997)/01 Airbag.flac",
+			model.Identity{Kind: "track", Author: "Radiohead", Title: "OK Computer", Year: 1997, Part: 1},
+		},
+		{
+			"music/Radiohead/OK Computer (1997)/Hidden Track.flac",
+			model.Identity{Kind: "track", Author: "Radiohead", Title: "OK Computer", Year: 1997},
+		},
+		// A loose track under the artist: the file names the work.
+		{
+			"Music/Radiohead/Spectre.mp3",
+			model.Identity{Kind: "track", Author: "Radiohead", Title: "Spectre"},
+		},
+		// Books: a bare .epub under the author, or a title directory.
+		{
+			"Books/Ursula K. Le Guin/The Left Hand of Darkness (1969).epub",
+			model.Identity{Kind: "book", Author: "Ursula K. Le Guin", Title: "The Left Hand of Darkness", Year: 1969},
+		},
+		{
+			"Books/Ursula K. Le Guin/The Left Hand of Darkness/left-hand.epub",
+			model.Identity{Kind: "book", Author: "Ursula K. Le Guin", Title: "The Left Hand of Darkness"},
+		},
+		// A leading number on a book's filename is part of its title, not a
+		// part number: "1984" is the book.
+		{
+			"Books/George Orwell/1984.epub",
+			model.Identity{Kind: "book", Author: "George Orwell", Title: "1984"},
+		},
+		// Author directories keep their dots and hyphens (they are spelled
+		// that way), underscores become spaces.
+		{
+			"Books/Jean-Paul_Sartre/Nausea.epub",
+			model.Identity{Kind: "book", Author: "Jean-Paul Sartre", Title: "Nausea"},
+		},
+		// A year-like leading number in a part filename is not a part number.
+		{
+			"Audiobooks/Arthur C. Clarke/Odyssey/2001 A Space Odyssey.mp3",
+			model.Identity{Kind: "audiobook_part", Author: "Arthur C. Clarke", Title: "Odyssey"},
+		},
+	}
+	for _, c := range cases {
+		if got := Identify(c.key); got != c.want {
+			t.Errorf("Identify(%q) = %+v, want %+v", c.key, got, c.want)
+		}
+	}
+}
+
+func TestPartNumber(t *testing.T) {
+	for _, tc := range []struct {
+		in   string
+		want int
+	}{
+		{"03 - Chapter Three", 3}, {"Part 3", 3}, {"03", 3}, {"pt.12 The End", 12},
+		{"Disc 2", 2}, {"Track_07", 7}, {"Chapter Three", 0}, {"Epilogue", 0},
+		{"2001 A Space Odyssey", 0}, {"1984", 0}, {"100 Years", 100},
+	} {
+		if got := partNumber(tc.in); got != tc.want {
+			t.Errorf("partNumber(%q) = %d, want %d", tc.in, got, tc.want)
+		}
+	}
+}
+
+// The medium table decides what the scan admits at all, case-insensitively.
+func TestMediumOf(t *testing.T) {
+	for _, tc := range []struct{ key, want string }{
+		{"Movies/Cars.MKV", model.MediumVideo},
+		{"Audiobooks/A/B/01.m4b", model.MediumAudio},
+		{"Music/A/B/01.flac", model.MediumAudio},
+		{"Books/A/B.epub", model.MediumText},
+		{"Books/A/B.pdf", ""}, // a later bead
+		{"Movies/Cars/poster.jpg", ""},
+		{"Movies/Cars/Cars.en.srt", ""}, // sidecars are matched separately
+	} {
+		if got := mediumOf(tc.key); got != tc.want {
+			t.Errorf("mediumOf(%q) = %q, want %q", tc.key, got, tc.want)
+		}
+	}
+}

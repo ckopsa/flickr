@@ -14,7 +14,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/url"
+	"os"
 	"os/exec"
 	"path"
 	"regexp"
@@ -44,11 +46,33 @@ const ProbeVersion = 5
 // v3: nothing under a category directory stays unidentified — bonus material
 // becomes kind "extra" under its work, unnumbered files under a show stay
 // episodes of that show, and a year-less file under Movies/ is still a movie.
-const IdentityVersion = 3
+// v4: the Audiobooks/, Music/ and Books/ grammars (kinds "audiobook_part",
+// "track", "book", with Author and Part), checked before the video grammars
+// so nothing under those directories can be read as a movie or an episode.
+const IdentityVersion = 4
 
-var videoExts = map[string]bool{
-	".mkv": true, ".mp4": true, ".m4v": true, ".avi": true,
-	".mov": true, ".webm": true, ".ts": true, ".wmv": true,
+// mediumExts is the admitted-extension table: which object keys the scan
+// picks up at all, and which medium each one is. Everything else in the
+// bucket (artwork, .nfo files, checksums) is ignored, as it always was.
+// .pdf is deliberately absent: a PDF has no reading order to project into
+// sections and needs its own renderer — a later bead admits it.
+var mediumExts = map[string]string{
+	// video: the original set, unchanged
+	".mkv": model.MediumVideo, ".mp4": model.MediumVideo, ".m4v": model.MediumVideo,
+	".avi": model.MediumVideo, ".mov": model.MediumVideo, ".webm": model.MediumVideo,
+	".ts": model.MediumVideo, ".wmv": model.MediumVideo,
+	// audio
+	".m4b": model.MediumAudio, ".m4a": model.MediumAudio, ".mp3": model.MediumAudio,
+	".flac": model.MediumAudio, ".opus": model.MediumAudio, ".ogg": model.MediumAudio,
+	".aac": model.MediumAudio, ".wav": model.MediumAudio,
+	// text
+	".epub": model.MediumText,
+}
+
+// mediumOf reports an object key's medium from its extension, or "" when the
+// key is not a media file the scan admits.
+func mediumOf(objectKey string) string {
+	return mediumExts[strings.ToLower(path.Ext(objectKey))]
 }
 
 // textSubtitleCodecs are the subtitle codecs ffmpeg can convert to WebVTT.
@@ -121,12 +145,12 @@ func (s *Scanner) Scan(ctx context.Context) error {
 		return err
 	}
 
-	// Listing pass: buffer videos and subtitle sidecars separately. Sidecars
-	// must be matched to videos after the whole listing — lexical object
-	// order means a sidecar ("Movie.en.srt") can arrive before OR after its
-	// video ("Movie.mkv"), so streaming the match is not possible.
+	// Listing pass: buffer media files and subtitle sidecars separately.
+	// Sidecars must be matched to videos after the whole listing — lexical
+	// object order means a sidecar ("Movie.en.srt") can arrive before OR
+	// after its video ("Movie.mkv"), so streaming the match is not possible.
 	present := map[string]bool{}
-	var videos []minio.ObjectInfo
+	var media []minio.ObjectInfo
 	subsByDir := map[string][]sidecarFile{}
 	for obj := range s.Client.ListObjects(ctx, s.Bucket, minio.ListObjectsOptions{Recursive: true}) {
 		if obj.Err != nil {
@@ -142,17 +166,17 @@ func (s *Scanner) Scan(ctx context.Context) error {
 			subsByDir[d] = append(subsByDir[d], sidecarFile{Key: obj.Key, ETag: strings.Trim(obj.ETag, `"`)})
 			continue
 		}
-		if !videoExts[strings.ToLower(path.Ext(obj.Key))] {
+		if mediumOf(obj.Key) == "" {
 			continue
 		}
 		present[obj.Key] = true
-		videos = append(videos, obj)
+		media = append(media, obj)
 	}
 
 	var todo []probeJob
 	var refresh []store.IdentityUpdate
 	var sidecarRefresh []store.SidecarUpdate
-	for _, obj := range videos {
+	for _, obj := range media {
 		subs := matchSidecars(obj.Key, subsByDir[path.Dir(obj.Key)])
 		k, ok := known[obj.Key]
 		if ok && k.ETag == strings.Trim(obj.ETag, `"`) && k.ProbeVersion == ProbeVersion {
@@ -306,13 +330,16 @@ func (s *Scanner) listSidecars(ctx context.Context, videoKey string) []sidecarFi
 	return matchSidecars(videoKey, found)
 }
 
-// probeJob is one probe work unit: the video object plus its matched
+// probeJob is one probe work unit: the media object plus its matched
 // subtitle sidecars from the listing pass.
 type probeJob struct {
 	obj      minio.ObjectInfo
 	sidecars []sidecarFile
 }
 
+// probeOne identifies and probes one object, routing the probe by medium:
+// video and audio go through ffprobe (an audiobook is a container with
+// streams and chapters like any film), text through the EPUB reader.
 func (s *Scanner) probeOne(ctx context.Context, job probeJob) store.Item {
 	obj := job.obj
 	item := store.Item{
@@ -326,12 +353,13 @@ func (s *Scanner) probeOne(ctx context.Context, job probeJob) store.Item {
 	ident := Identify(obj.Key)
 	item.Identity = &ident
 
-	u, err := s.Client.PresignedGetObject(ctx, s.Bucket, obj.Key, 15*time.Minute, url.Values{})
-	if err != nil {
-		item.ProbeError = fmt.Sprintf("presign %s: %v", obj.Key, err)
-		return item
+	var info *model.MediaInfo
+	var err error
+	if mediumOf(obj.Key) == model.MediumText {
+		info, err = s.probeText(ctx, obj.Key)
+	} else {
+		info, err = s.probeStream(ctx, obj.Key)
 	}
-	info, err := Probe(ctx, u.String(), obj.Key)
 	if err != nil {
 		item.ProbeError = fmt.Sprintf("probe %s: %v", obj.Key, err)
 		return item
@@ -339,6 +367,40 @@ func (s *Scanner) probeOne(ctx context.Context, job probeJob) store.Item {
 	attachSidecars(info, obj.Key, job.sidecars)
 	item.MediaInfo = info
 	return item
+}
+
+// probeStream hands ffprobe a presigned URL — nothing is copied locally, the
+// same way playback reads the bucket.
+func (s *Scanner) probeStream(ctx context.Context, objectKey string) (*model.MediaInfo, error) {
+	u, err := s.Client.PresignedGetObject(ctx, s.Bucket, objectKey, 15*time.Minute, url.Values{})
+	if err != nil {
+		return nil, fmt.Errorf("presign: %w", err)
+	}
+	return Probe(ctx, u.String(), objectKey)
+}
+
+// probeText downloads an EPUB to a temporary file and reads its package
+// metadata. A zip needs random access (central directory at the end, then
+// each member), which a streamed object cannot give; a temp file turns one
+// sequential download into a ReaderAt and is gone before the function
+// returns.
+func (s *Scanner) probeText(ctx context.Context, objectKey string) (*model.MediaInfo, error) {
+	obj, err := s.Client.GetObject(ctx, s.Bucket, objectKey, minio.GetObjectOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("get: %w", err)
+	}
+	defer obj.Close()
+	f, err := os.CreateTemp("", "flickr-epub-*")
+	if err != nil {
+		return nil, err
+	}
+	defer os.Remove(f.Name())
+	defer f.Close()
+	size, err := io.Copy(f, obj)
+	if err != nil {
+		return nil, fmt.Errorf("download: %w", err)
+	}
+	return ProbeEpub(f, size)
 }
 
 // --- ffprobe ---
@@ -449,7 +511,16 @@ func parseProbe(out []byte, objectKey string) (*model.MediaInfo, error) {
 		return nil, err
 	}
 
+	// Audio files are probed with the same tool, but read differently: their
+	// "video" stream, when there is one, is embedded cover art (an mjpeg or
+	// png attached picture), not a picture to play, so an audio item always
+	// ends up with VideoCodec "" and Width/Height 0.
+	medium := mediumOf(objectKey)
+	if medium == "" {
+		medium = model.MediumVideo // reprobing a key the table no longer admits
+	}
 	info := &model.MediaInfo{
+		Medium:    medium,
 		Container: strings.TrimPrefix(strings.ToLower(path.Ext(objectKey)), "."),
 	}
 	info.DurationSeconds, _ = strconv.ParseFloat(p.Format.Duration, 64)
@@ -457,8 +528,8 @@ func parseProbe(out []byte, objectKey string) (*model.MediaInfo, error) {
 	for _, st := range p.Streams {
 		switch st.CodecType {
 		case "video":
-			if info.VideoCodec != "" {
-				continue // first video stream wins
+			if info.VideoCodec != "" || medium == model.MediumAudio {
+				continue // first video stream wins; cover art is not video
 			}
 			info.VideoCodec = st.CodecName
 			info.Width, info.Height = st.Width, st.Height
@@ -495,8 +566,15 @@ func parseProbe(out []byte, objectKey string) (*model.MediaInfo, error) {
 			})
 		}
 	}
-	if info.VideoCodec == "" {
-		return nil, fmt.Errorf("no video stream found")
+	switch medium {
+	case model.MediumAudio:
+		if info.AudioCodec == "" {
+			return nil, fmt.Errorf("no audio stream found")
+		}
+	default:
+		if info.VideoCodec == "" {
+			return nil, fmt.Errorf("no video stream found")
+		}
 	}
 	for i, ch := range p.Chapters {
 		start, _ := strconv.ParseFloat(ch.StartTime, 64)
@@ -539,6 +617,21 @@ var (
 // showCategoryDirs are directory names that mark "everything below is TV".
 var showCategoryDirs = map[string]bool{"shows": true, "tv shows": true, "tv": true, "series": true}
 
+// The audio and text category directories. Each one starts a grammar of the
+// same shape — <Category>/<Author>/<Title>/<files> — where the middle
+// directory is the author, the artist, or the writer: the person the work
+// is filed under.
+var (
+	audiobookCategoryDirs = map[string]bool{"audiobooks": true, "audiobook": true, "audio books": true}
+	musicCategoryDirs     = map[string]bool{"music": true, "albums": true}
+	bookCategoryDirs      = map[string]bool{"books": true, "ebooks": true, "e-books": true}
+)
+
+// partNumRe reads the ordinal of a part or track from the start of its
+// filename: "03 - Chapter Three", "Part 3", "Disc 2", "03". Bounded to three
+// digits so a year ("1984", "2001 A Space Odyssey") is never a part number.
+var partNumRe = regexp.MustCompile(`(?i)^(?:(?:part|pt|disc|cd|chapter|ch|track)[ ._-]*)?(\d{1,3})(?:[ ._)-]|$)`)
+
 // movieCategoryDirs mark "everything below is a standalone title". A file
 // under one of these belongs to a movie even when neither the filename nor
 // its parent directory carries a year.
@@ -571,10 +664,37 @@ var extrasDirs = map[string]bool{
 //     (episode 0 = "no number in the path"), because a title-named or
 //     disc-ripped file is an episode nobody numbered, not a mystery;
 //   - a file under Movies/ with no year anywhere is still that movie.
+//
+// The audio and text categories are checked first: they name the medium
+// outright, and a file under Audiobooks/ must never be read as a movie by the
+// filename rules below, whatever its name looks like:
+//   - Audiobooks/<Author>/<Title>/<part file> is kind "audiobook_part", the
+//     part number read from the filename's leading ordinal (0 = unnumbered);
+//     Audiobooks/<Author>/<Title>.m4b is the same kind with Part 0 — a
+//     single-file book filed directly under its author.
+//   - Music/<Artist>/<Album>/<NN Title> is kind "track": Author is the
+//     artist, Title the ALBUM (the work), Part the track number. The track's
+//     own name is not kept on the identity in this generation.
+//   - Books/<Author>/<Title>.epub and Books/<Author>/<Title>/<file>.epub are
+//     kind "book", the title from the file or the directory respectively.
+//
+// A trailing "(Year)" on the title splits off into Year in all three, and
+// anything under a category that fits none of these shapes still resolves to
+// that category's kind with whatever the path gives — never "unknown".
 func Identify(objectKey string) model.Identity {
 	segs := strings.Split(objectKey, "/")
 	base := strings.TrimSuffix(segs[len(segs)-1], path.Ext(segs[len(segs)-1]))
 	dirs := segs[:len(segs)-1]
+
+	if below, ok := categoryContext(dirs, audiobookCategoryDirs); ok {
+		return authoredIdentity("audiobook_part", below, base, true)
+	}
+	if below, ok := categoryContext(dirs, musicCategoryDirs); ok {
+		return authoredIdentity("track", below, base, true)
+	}
+	if below, ok := categoryContext(dirs, bookCategoryDirs); ok {
+		return authoredIdentity("book", below, base, false)
+	}
 
 	// Show-directory context: title comes from the directory, numbers from
 	// wherever they are (filename first, season directory as fallback).
@@ -629,6 +749,71 @@ func Identify(objectKey string) model.Identity {
 		return movieIdentity(cleanTitle(titleDir), 0, dirs)
 	}
 	return model.Identity{Kind: "unknown", Title: cleanTitle(base)}
+}
+
+// categoryContext finds a category directory on the path and returns the
+// directories below it. Nested category directories ("Audio/Audiobooks/...",
+// "Audiobooks/Audiobooks/...") are walked through the same way showContext
+// tolerates "tv/Shows/...": the grammar starts at the innermost one.
+func categoryContext(dirs []string, category map[string]bool) (below []string, ok bool) {
+	for i, d := range dirs {
+		if !category[strings.ToLower(d)] {
+			continue
+		}
+		below = dirs[i+1:]
+		for len(below) > 0 && category[strings.ToLower(below[0])] {
+			below = below[1:]
+		}
+		return below, true
+	}
+	return nil, false
+}
+
+// authoredIdentity resolves the <Author>/<Title>/<file> grammar shared by the
+// audio and text categories. below is the path under the category directory;
+// numbered says whether the filename's leading ordinal is a part number
+// (audiobook parts and tracks) or just part of a title (books).
+//
+// Shapes, by how many directories sit under the category:
+//   - two or more: Author, then the title directory (deeper directories —
+//     "Disc 1", "CD2" — are ignored; the file's own ordinal orders it);
+//   - one: Author, and the file itself is the whole work (a single-file
+//     audiobook, a loose track, a bare .epub);
+//   - none: the file sits in the category directory; the filename is all
+//     there is, and the author is unknown.
+func authoredIdentity(kind string, below []string, base string, numbered bool) model.Identity {
+	id := model.Identity{Kind: kind}
+	switch {
+	case len(below) >= 2:
+		id.Author = cleanAuthor(below[0])
+		id.Title, id.Year = splitTrailingYear(below[1])
+		if numbered {
+			id.Part = partNumber(base)
+		}
+	case len(below) == 1:
+		id.Author = cleanAuthor(below[0])
+		id.Title, id.Year = splitTrailingYear(base)
+	default:
+		id.Title, id.Year = splitTrailingYear(base)
+	}
+	return id
+}
+
+// partNumber reads a leading part/track ordinal from a filename; 0 when the
+// name carries none ("Chapter Three", "Epilogue").
+func partNumber(base string) int {
+	if m := partNumRe.FindStringSubmatch(base); m != nil {
+		n, _ := strconv.Atoi(m[1])
+		return n
+	}
+	return 0
+}
+
+// cleanAuthor tidies an author directory without cleanTitle's dot and hyphen
+// replacement: "J.R.R. Tolkien" and "Jean-Paul Sartre" are spelled that way,
+// where a title's dots are almost always scene-release separators.
+func cleanAuthor(s string) string {
+	return strings.Join(strings.Fields(strings.ReplaceAll(s, "_", " ")), " ")
 }
 
 // movieIdentity tags a resolved movie title, downgrading it to bonus material

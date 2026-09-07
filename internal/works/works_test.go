@@ -1,6 +1,7 @@
 package works
 
 import (
+	"encoding/json"
 	"reflect"
 	"strings"
 	"testing"
@@ -469,5 +470,240 @@ func TestFeed(t *testing.T) {
 	// A deletion after the cursor forces a full resync.
 	if got := Feed(ws, positions, &Cursor{Lib: 20, State: 6}, 21); len(got) != 2 {
 		t.Errorf("deletion resync: %d works", len(got))
+	}
+}
+
+func part(id int64, key, author, title string, part int) store.Item {
+	return store.Item{ID: id, ObjectKey: key,
+		Identity: &model.Identity{Kind: "audiobook_part", Author: author, Title: title, Part: part}}
+}
+
+func track(id int64, key, artist, album string, n int) store.Item {
+	return store.Item{ID: id, ObjectKey: key,
+		Identity: &model.Identity{Kind: "track", Author: artist, Title: album, Part: n}}
+}
+
+func book(id int64, key, author, title string, year int) store.Item {
+	return store.Item{ID: id, ObjectKey: key,
+		Identity:  &model.Identity{Kind: "book", Author: author, Title: title, Year: year},
+		MediaInfo: &model.MediaInfo{Medium: model.MediumText, Container: "epub", Sections: 12}}
+}
+
+// The audio and text kinds project the way shows and movies do: parts and
+// tracks group under their (author, title) into one work each, ordered by
+// part number; a book is a work of one item. Each work knows its medium and
+// author, and the slug key keeps two authors' same-named works apart.
+func TestBuildAudioAndTextWorks(t *testing.T) {
+	items := []store.Item{
+		part(1, "Audiobooks/Frank Herbert/Dune/02.m4b", "Frank Herbert", "Dune", 2),
+		part(2, "Audiobooks/Frank Herbert/Dune/03.m4b", "frank herbert", "dune", 3), // case-insensitive grouping
+		part(3, "Audiobooks/Frank Herbert/Dune/01.m4b", "Frank Herbert", "Dune", 1),
+		track(4, "Music/Radiohead/OK Computer/02 Paranoid Android.flac", "Radiohead", "OK Computer", 2),
+		track(5, "Music/Radiohead/OK Computer/01 Airbag.flac", "Radiohead", "OK Computer", 1),
+		book(6, "Books/Frank Herbert/Dune (1965).epub", "Frank Herbert", "Dune", 1965),
+		// Same title as the audiobook, different author: a different work.
+		part(7, "Audiobooks/Someone Else/Dune.m4b", "Someone Else", "Dune", 0),
+		// A movie called Dune too: kinds never share a key.
+		movie(8, "Movies/Dune (2021)/Dune.mkv", "Dune", 2021),
+	}
+	ws := Build(items)
+	got := keys(ws)
+	// Title order, then key: the four works called "Dune" sort by key.
+	want := []string{
+		"audiobook:frank-herbert-dune", "audiobook:someone-else-dune", "book:frank-herbert-dune-1965",
+		"movie:dune-2021", "album:radiohead-ok-computer",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("keys = %v, want %v", got, want)
+	}
+
+	ab := ws[0]
+	if ab.Kind != "audiobook" || ab.Medium != "audio" || ab.Author != "Frank Herbert" || ab.Title != "Dune" {
+		t.Errorf("audiobook work: %+v", ab)
+	}
+	if ab.PartCount != 3 || ab.ItemCount != 3 || ab.TrackCount != 0 || ab.EpisodeCount != 0 {
+		t.Errorf("audiobook counts: %+v", ab)
+	}
+	// Parts in part order, whatever the input order; the first part is the
+	// representative.
+	if ab.Items[0].ID != 3 || ab.Items[1].ID != 1 || ab.Items[2].ID != 2 || ab.RepresentativeItemID != 3 {
+		t.Errorf("part order: %d %d %d rep=%d", ab.Items[0].ID, ab.Items[1].ID, ab.Items[2].ID, ab.RepresentativeItemID)
+	}
+
+	album := ws[4]
+	if album.Kind != "album" || album.Medium != "audio" || album.Author != "Radiohead" || album.Title != "OK Computer" {
+		t.Errorf("album work: %+v", album)
+	}
+	if album.TrackCount != 2 || album.ItemCount != 2 || album.PartCount != 0 || album.Items[0].ID != 5 || album.RepresentativeItemID != 5 {
+		t.Errorf("album members: %+v", album)
+	}
+
+	bk := ws[2]
+	if bk.Kind != "book" || bk.Medium != "text" || bk.Author != "Frank Herbert" || bk.Year != 1965 || bk.ItemCount != 1 || bk.RepresentativeItemID != 6 {
+		t.Errorf("book work: %+v", bk)
+	}
+	if bk.Genres == nil {
+		t.Error("genres must serialize as [], not null")
+	}
+
+	// Video works have no author and say so; the single-file audiobook is a
+	// work of one part.
+	if mv := ws[3]; mv.Medium != "video" || mv.Author != "" {
+		t.Errorf("movie work: %+v", mv)
+	}
+	if single := ws[1]; single.PartCount != 1 || single.Medium != "audio" {
+		t.Errorf("single-file audiobook: %+v", single)
+	}
+}
+
+// A file work — an item the path could not place — takes its own medium, so
+// an unidentified .mp3 does not claim to be a video; stored JSON without a
+// medium (every item before the field existed) still reads as video.
+func TestBuildFileWorkMedium(t *testing.T) {
+	ws := Build([]store.Item{
+		{ID: 1, ObjectKey: "misc/a.mp3", Identity: &model.Identity{Kind: "unknown", Title: "a"},
+			MediaInfo: &model.MediaInfo{Medium: model.MediumAudio}},
+		{ID: 2, ObjectKey: "misc/b.mkv", Identity: &model.Identity{Kind: "unknown", Title: "b"},
+			MediaInfo: &model.MediaInfo{}},
+		{ID: 3, ObjectKey: "misc/c.mkv"}, // probe failed: no media info at all
+	})
+	if ws[0].Medium != "audio" || ws[1].Medium != "video" || ws[2].Medium != "video" {
+		t.Errorf("file media: %s %s %s", ws[0].Medium, ws[1].Medium, ws[2].Medium)
+	}
+}
+
+// Audiobook progress is time over the whole book: positions on earlier parts
+// count those parts as heard in full, the furthest part contributes its own
+// position, and the text names the place.
+func TestWorkProgressAudiobook(t *testing.T) {
+	ws := Build([]store.Item{
+		withDuration(part(1, "a/d/01.m4b", "Frank Herbert", "Dune", 1), 3600),
+		withDuration(part(2, "a/d/02.m4b", "Frank Herbert", "Dune", 2), 3600),
+		withDuration(part(3, "a/d/03.m4b", "Frank Herbert", "Dune", 3), 1800),
+	})
+	w := &ws[0]
+
+	// Part 1 barely started, part 2 (the furthest) at 41:10: part 1 counts
+	// whole, part 2 adds its position — 6070 of 9000 seconds.
+	p, ok := WorkProgress(w, map[int64]store.Position{1: pos(1, 60, 10), 2: pos(2, 2470, 20)})
+	if !ok {
+		t.Fatal("expected progress")
+	}
+	if want := (3600 + 2470.0) / 9000; p.Fraction != want || p.Status != "active" || p.UpdatedAt != 20 {
+		t.Errorf("audiobook progress: %+v, want fraction %v", p, want)
+	}
+	if p.ProgressText != "part 2 of 3 · 41:10" {
+		t.Errorf("progress_text = %q", p.ProgressText)
+	}
+
+	// Only the last part touched, near its end: the first two count as heard.
+	p, _ = WorkProgress(w, map[int64]store.Position{3: pos(3, 1700, 5)})
+	if want := (3600 + 3600 + 1700.0) / 9000; p.Fraction != want || p.Status != "finished" || p.ProgressText != "part 3 of 3 · 28:20" {
+		t.Errorf("near the end: %+v, want fraction %v", p, want)
+	}
+
+	// A position past a part's duration is clamped to that part.
+	p, _ = WorkProgress(w, map[int64]store.Position{1: pos(1, 9999, 5)})
+	if p.Fraction != 3600.0/9000 {
+		t.Errorf("clamped: %+v", p)
+	}
+
+	// The album variant names tracks.
+	al := Build([]store.Item{
+		withDuration(track(1, "m/r/01.flac", "Radiohead", "OK Computer", 1), 300),
+		withDuration(track(2, "m/r/02.flac", "Radiohead", "OK Computer", 2), 300),
+	})
+	p, _ = WorkProgress(&al[0], map[int64]store.Position{1: pos(1, 100, 1)})
+	if p.ProgressText != "track 1 of 2 · 1:40" || p.Fraction != 100.0/600 {
+		t.Errorf("album: %+v", p)
+	}
+
+	// A single-file audiobook reads like a movie: plain clock, own fraction.
+	single := Build([]store.Item{withDuration(part(9, "a/x/Book.m4b", "A", "Book", 0), 1000)})
+	p, _ = WorkProgress(&single[0], map[int64]store.Position{9: pos(9, 250, 1)})
+	if p.Fraction != 0.25 || p.ProgressText != "4:10" {
+		t.Errorf("single file: %+v", p)
+	}
+
+	// A book: a position is acknowledged, but this generation has no locator
+	// to turn it into a fraction or a place.
+	bk := Build([]store.Item{book(10, "b/a/T.epub", "A", "T", 0)})
+	p, ok = WorkProgress(&bk[0], map[int64]store.Position{10: pos(10, 30, 7)})
+	if !ok || p.Status != "active" || p.Fraction != 0 || p.ProgressText != "" || p.UpdatedAt != 7 {
+		t.Errorf("book: %+v ok=%v", p, ok)
+	}
+}
+
+// The resume list labels parts and tracks by number, and a finished part
+// advances to the next one the way a finished episode does.
+func TestContinueListAudio(t *testing.T) {
+	ws := Build([]store.Item{
+		withDuration(part(1, "a/d/01.m4b", "Frank Herbert", "Dune", 1), 1000),
+		withDuration(part(2, "a/d/02.m4b", "Frank Herbert", "Dune", 2), 1000),
+		withDuration(part(3, "a/d/Epilogue.m4b", "Frank Herbert", "Dune", 0), 1000),
+		withDuration(track(4, "m/r/07 Karma Police.flac", "Radiohead", "OK Computer", 7), 300),
+		book(5, "b/a/T.epub", "A", "T", 0),
+	})
+	entries := ContinueList(ws, []store.Position{pos(1, 400, 10), pos(4, 60, 20)}, 20)
+	if len(entries) != 2 {
+		t.Fatalf("entries: %+v", entries)
+	}
+	if entries[0].ItemID != 4 || entries[0].Label != "Track 7" || entries[0].WorkKey != "album:radiohead-ok-computer" {
+		t.Errorf("track entry: %+v", entries[0])
+	}
+	if entries[1].ItemID != 1 || entries[1].Label != "Part 1" || entries[1].Title != "Dune" {
+		t.Errorf("part entry: %+v", entries[1])
+	}
+
+	// Finished part 1 → up next is part 2 at 0; finished part 2 → the
+	// unnumbered epilogue, labelled by its basename.
+	if got := ContinueList(ws, []store.Position{pos(1, 950, 10)}, 20); len(got) != 1 || got[0].ItemID != 2 || got[0].PositionSeconds != 0 || got[0].Label != "Part 2" {
+		t.Errorf("up next after part 1: %+v", got)
+	}
+	if got := ContinueList(ws, []store.Position{pos(2, 950, 10)}, 20); len(got) != 1 || got[0].ItemID != 3 || got[0].Label != "Epilogue.m4b" {
+		t.Errorf("up next after part 2: %+v", got)
+	}
+	// Finished the last part: the book is done.
+	if got := ContinueList(ws, []store.Position{pos(3, 950, 10)}, 20); len(got) != 0 {
+		t.Errorf("finished audiobook: %+v", got)
+	}
+	// A book with a position lists by its basename, with no duration.
+	if got := ContinueList(ws, []store.Position{pos(5, 30, 10)}, 20); len(got) != 1 || got[0].Label != "T.epub" || got[0].DurationSeconds != 0 {
+		t.Errorf("book entry: %+v", got)
+	}
+}
+
+// FeedWork embeds Work, so kind, medium and author ride into /api/feed/media
+// (and /api/works) without any wiring of their own — pinned here so a later
+// change to either struct cannot silently drop them.
+func TestFeedWorkCarriesMedium(t *testing.T) {
+	ws := Build([]store.Item{
+		part(1, "a/d/01.m4b", "Frank Herbert", "Dune", 1),
+		movie(2, "m/f.mkv", "Frozen", 2013),
+	})
+	fw := Feed(ws, nil, nil, 0)
+	raw, err := json.Marshal(fw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded []map[string]any
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if len(decoded) != 2 {
+		t.Fatalf("feed: %s", raw)
+	}
+	ab, mv := decoded[0], decoded[1]
+	if ab["kind"] != "audiobook" || ab["medium"] != "audio" || ab["author"] != "Frank Herbert" || ab["part_count"] != 1.0 {
+		t.Errorf("audiobook feed work: %v", ab)
+	}
+	if mv["kind"] != "movie" || mv["medium"] != "video" {
+		t.Errorf("movie feed work: %v", mv)
+	}
+	if _, has := mv["author"]; has {
+		t.Errorf("a video work must omit author, got %v", mv["author"])
+	}
+	if _, has := mv["part_count"]; has {
+		t.Errorf("a video work must omit part_count, got %v", mv["part_count"])
 	}
 }
