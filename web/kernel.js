@@ -123,12 +123,17 @@
       !matchMedia('(prefers-reduced-motion: reduce)').matches;
   }
 
+  // swap answers a promise that settles once the DOM has changed: the
+  // browser runs the mutation a frame later, after it has captured the old
+  // view, so anything that paints INTO the new markup — the continue shelf,
+  // the hero — has to wait for it rather than land in the view on its way out.
   function swap(mutate) {
-    if (!animates()) { mutate(); return; }
+    if (!animates()) { mutate(); return Promise.resolve(); }
     const t = document.startViewTransition(mutate);
     // A swap that overtakes another skips it, and a skip rejects `ready`:
     // that is the expected way of two navigations in a row, not an error.
     if (t && t.ready) t.ready.catch(() => {});
+    return t && t.updateCallbackDone ? t.updateCallbackDone.catch(() => {}) : Promise.resolve();
   }
 
   function morph(el) {
@@ -151,7 +156,7 @@
   }
 
   function mount(html) {
-    swap(() => {
+    return swap(() => {
       $('view').innerHTML = html;
       // The tapped tile went with the markup above; its name moves to the
       // poster it became, and a picture already in the cache is already there.
@@ -166,7 +171,7 @@
   }
 
   function showStage(on) {
-    swap(() => {
+    return swap(() => {
       $('stage').hidden = !on;
       $('view').hidden = !!on;
     });
@@ -254,8 +259,8 @@
 
   // --- the library view --------------------------------------------------------
 
-  function paintLibrary() {
-    mount(R.library(libraryDoc, libState, continueDoc));
+  async function paintLibrary() {
+    await mount(R.library(libraryDoc, libState, continueDoc));
     libState.note = '';
     paintContinue();
   }
@@ -460,7 +465,7 @@
     currentWork = null;
     currentItem = null;
     showStage(false);
-    paintLibrary();
+    await paintLibrary();
     loadContinue();
     pendingAutoplay = pendingPlay = null;
   }

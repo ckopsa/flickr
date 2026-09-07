@@ -723,11 +723,18 @@ func (s *server) workEnvelope(wk *works.Work, profile string, positions map[int6
 	if profile != "" {
 		doc.Field("profile", profile)
 	}
-	if pr, ok := works.WorkProgress(wk, positions); ok {
+	// The asking profile's standing, and where they would pick up. A profile
+	// who has never started the work stands at "unwatched" — the pane still
+	// leads with the first episode, so a show nobody has opened is put on the
+	// same way as one half-watched. Only a work with more than one member to
+	// walk names a next: a film or a book is where it is, and naming it as
+	// its own next member would say nothing.
+	if profile != "" {
+		pr, ok := works.WorkProgress(wk, positions)
+		if !ok {
+			pr = works.Progress{Status: "unwatched"}
+		}
 		p := progress{Status: pr.Status, Fraction: pr.Fraction, Text: pr.ProgressText}
-		// Where they would pick up. Only a work with more than one member to
-		// walk has one: a film or a book is where it is, and naming it as
-		// its own next member would say nothing.
 		if next := nextUnfinished(wk, positions); next != nil && walkedMembers(wk) > 1 {
 			p.Next = &hyper.Link{Href: itemHref(next.ID), Title: works.ItemLabel(*next)}
 		}

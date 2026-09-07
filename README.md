@@ -944,6 +944,16 @@ node --test web/*_test.mjs
 - `web/cast_test.mjs` covers the cast bridge's reading of the session
   document: the load spec, the end bound in each clock, the start time.
 
+**The page itself, in a browser.** `node scripts/browser-smoke.mjs` stands the
+fixture library up on a port (`cmd/server/smoke_test.go`, built with
+`-tags smoke`; the media it plays is a WebM Playwright records off a page and
+a WAV written by hand, the books an EPUB and a PDF made in memory) and walks
+every screen in a real Chromium — the gate, the home, the settings, a show, a
+film, a record playing on under the mini-player, both readers, search, a
+phone viewport and a kids profile — failing on any JavaScript error. It needs
+Playwright and its Chromium, which is why it is not in the gate; run it
+before a pull request that touches `web/`.
+
 CI runs both suites, parses every `web/*.js`, and on a pull request fails when
 a SHELL file changed without a `CACHE` bump in `web/sw.js`
 (`scripts/shell-bump-check.sh`): the shell is served cache-first and `sw.js` is
