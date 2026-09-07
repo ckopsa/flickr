@@ -264,14 +264,21 @@ func fixtureServer(t *testing.T) (*server, http.Handler) {
 	}
 	// One profile who is partway through the show, partway through the
 	// audiobook, and seven sections into the book.
+	//
+	// The ORDER of these three writes is the resume shelf's order, reversed:
+	// /api/continue is most-recent first, and updated_at is a millisecond
+	// clock, so three writes in one test may or may not land in the same
+	// millisecond. Written oldest-first in DESCENDING item id, the shelf reads
+	// 1, 3, 8 whether the clock separated them or the tie-break (item id,
+	// ascending) had to — and the continue golden holds still.
 	if err := state.SetPosition(idBeach, "chris", 745); err != nil {
-		t.Fatal(err)
-	}
-	if err := state.SetPosition(idDunePart1, "chris", 4800); err != nil {
 		t.Fatal(err)
 	}
 	if err := state.SetPlace(idHillHouse, "chris", 0,
 		&model.Locator{CFI: "epubcfi(/6/14[ch07]!/4/2/1:0)", Section: 7, Fraction: 0.34}); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.SetPosition(idDunePart1, "chris", 4800); err != nil {
 		t.Fatal(err)
 	}
 
@@ -328,6 +335,7 @@ func TestHyperGolden(t *testing.T) {
 		{"work-book", "/api/works/book%3Ashirley-jackson-the-haunting-of-hill-house-1959?client_id=chris"},
 		{"library", "/api/library?client_id=chris"},
 		{"artist", "/api/artists/Radiohead?client_id=chris"},
+		{"continue", "/api/continue?client_id=chris"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			w := get(t, h, tc.target)

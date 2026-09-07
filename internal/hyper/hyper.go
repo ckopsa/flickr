@@ -127,6 +127,15 @@ func (e *Envelope) Action(name string, a Action) *Envelope {
 	return e
 }
 
+// ActionNamed reads back an action already added, so one document can offer
+// the same write under a second name — a resume row's `resume` IS the item's
+// `play`, and copying the href by hand would be the client's URL-composing
+// mistake made on the server instead.
+func (e *Envelope) ActionNamed(name string) (Action, bool) {
+	a, ok := e.actions[name]
+	return a, ok
+}
+
 // Unavailable records an action this document does not afford, and why.
 func (e *Envelope) Unavailable(name, reason string) *Envelope {
 	if e.unavailable == nil {

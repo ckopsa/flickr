@@ -400,31 +400,6 @@ func (s *server) handleArtists(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, works.Artists(ws))
 }
 
-// handleContinue is a profile's resume list: most-recent first, capped,
-// finished and sub-5s positions dropped, one entry per work.
-func (s *server) handleContinue(w http.ResponseWriter, r *http.Request) {
-	clientID := r.URL.Query().Get("client_id")
-	if clientID == "" {
-		httpErr(w, 400, fmt.Errorf("client_id is required"))
-		return
-	}
-	ws, err := s.buildWorks()
-	if err != nil {
-		httpErr(w, 500, err)
-		return
-	}
-	positions, err := s.state.PositionsFor(clientID)
-	if err != nil {
-		httpErr(w, 500, err)
-		return
-	}
-	entries := works.ContinueList(ws, positions, 20)
-	if entries == nil {
-		entries = []works.ContinueEntry{}
-	}
-	writeJSON(w, entries)
-}
-
 // handleFeed is the change feed: works changed since the `since` cursor
 // (absent = everything), each with per-audience progress, plus the cursor to
 // pass next time. Cursors are monotonic sequence pairs ("l<lib>.s<state>"),
@@ -1043,12 +1018,33 @@ func (s *server) handleTrickplayIndex(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	path := filepath.Join(trickplayDir, id, "index.json")
-	if _, err := os.Stat(path); err != nil {
+	raw, err := os.ReadFile(path)
+	if err != nil {
 		httpErr(w, 404, fmt.Errorf("no trickplay for item %s", id))
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	http.ServeFile(w, r, path)
+	var idx map[string]any
+	if err := json.Unmarshal(raw, &idx); err != nil {
+		httpErr(w, 500, fmt.Errorf("trickplay index for item %s: %w", id, err))
+		return
+	}
+	// The sheets by ADDRESS, one per sheet, rather than a count the caller
+	// has to turn back into a URL. The sidecar on disk keeps its own shape;
+	// this is the route saying where the pictures are, which is the route's
+	// to say (docs/hypermedia.md: addresses are opaque to the client).
+	n, _ := idx["sheets"].(float64)
+	hrefs := make([]string, 0, int(n))
+	for i := 0; i < int(n); i++ {
+		hrefs = append(hrefs, fmt.Sprintf("%s/trickplay/%d.jpg", itemHref(mustID(id)), i))
+	}
+	idx["sheet_hrefs"] = hrefs
+	writeJSON(w, idx)
+}
+
+// mustID re-reads a path value already parsed by the caller.
+func mustID(raw string) int64 {
+	n, _ := strconv.ParseInt(raw, 10, 64)
+	return n
 }
 
 // handleTrickplaySheet serves one sprite sheet ({n}.jpg -> sheet<n>.jpg).
