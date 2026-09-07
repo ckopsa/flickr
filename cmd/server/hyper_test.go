@@ -318,8 +318,9 @@ func fixtureServer(t *testing.T) (*server, http.Handler) {
 // ── the goldens ─────────────────────────────────────────────────────────
 
 // golden compares one document against testdata/hyper/<name>.json, or
-// rewrites it under -update. Documents are compared indented so a diff shows
-// the field that moved rather than the whole line.
+// rewrites it — and the client's copy of it, see shareGolden — under -update.
+// Documents are compared indented so a diff shows the field that moved rather
+// than the whole line.
 func golden(t *testing.T, name string, body []byte) {
 	t.Helper()
 	var pretty bytes.Buffer
@@ -335,6 +336,7 @@ func golden(t *testing.T, name string, body []byte) {
 		if err := os.WriteFile(path, pretty.Bytes(), 0o644); err != nil {
 			t.Fatal(err)
 		}
+		shareGolden(t, name, pretty.Bytes())
 		return
 	}
 	want, err := os.ReadFile(path)
