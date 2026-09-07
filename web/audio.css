@@ -9,12 +9,12 @@
 #audio-cover { width: 200px; height: 200px; border-radius: 10px; object-fit: cover; background: #1e2026;
   flex: 0 0 auto; box-shadow: 0 8px 30px rgba(0,0,0,0.5); }
 #audio-title { font-size: 20px; font-weight: 600; }
-#audio-author { font-size: 14px; color: #9a9daa; margin-top: 4px; }
-#audio-part { font-size: 13px; color: #8db4f0; margin-top: 8px; }
-#audio-list-head { font-size: 11px; color: #9a9daa; text-transform: uppercase; letter-spacing: .06em; margin: 8px 0 4px; }
+#audio-author { font-size: 14px; color: var(--muted); margin-top: 4px; }
+#audio-part { font-size: 13px; color: var(--accent); margin-top: 8px; }
+#audio-list-head { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; margin: 8px 0 4px; }
 #audio-list { border: 1px solid #2a2c33; border-radius: 8px; overflow: auto; max-height: 40vh; }
 #audio-list .item.current { background: #1e2c42; }
-#audio-list .item.current .title::before { content: '▶ '; color: #8db4f0; }
+#audio-list .item.current .title::before { content: '▶ '; color: var(--accent); }
 /* the detail pane already shows the cover and title: the head is for playback */
 #detail-info:not([hidden]) ~ #audio-pane #audio-head { display: none; }
 /* audio mode: the media element plays but has no picture to show */
@@ -25,5 +25,5 @@ body.audio-mode video, body.audio-mode #thumb { display: none !important; }
 #artist-cover { width: 120px; height: 120px; border-radius: 10px; object-fit: cover; background: #1e2026;
   flex: 0 0 auto; box-shadow: 0 8px 30px rgba(0,0,0,0.5); }
 #artist-name { margin: 0; font-size: 22px; }
-#artist-sub { font-size: 13px; color: #9a9daa; margin-top: 4px; }
+#artist-sub { font-size: 13px; color: var(--muted); margin-top: 4px; }
 #artist-albums { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 16px; padding: 16px 20px 30px; }
