@@ -86,6 +86,11 @@ test('the root names everything the client needs to reach', () => {
   assert.equal(root.actions.route.method, 'GET');
   assert.ok(root.actions.route.input.hash, 'the route action does not take a hash');
   assert.ok(root.actions.create_profile, 'the root does not offer a new profile');
+  // The faces the gate offers are the server's list, and the create takes one:
+  // the browser invents no emoji of its own.
+  assert.ok(Array.isArray(root.avatars) && root.avatars.length,
+    'the root offers the gate no faces to pick from');
+  assert.ok(root.actions.create_profile.input.avatar, 'a new profile cannot be given a face');
 });
 
 test('a route answer says which view, and names the document to draw it from', () => {

@@ -63,6 +63,11 @@ func (s *server) handleRootDoc(w http.ResponseWriter, r *http.Request) {
 	if profile != "" {
 		doc.Field("profile", profile)
 	}
+	// The faces the gate offers a new profile to pick from. The list is the
+	// SERVER's — the same one it assigns from when a create names none — so
+	// the browser holds no emoji of its own and a household that gains a face
+	// gains it in one place.
+	doc.Field("avatars", profileAvatars)
 	// The resume list is per profile and refuses without one; when we know
 	// who is asking, the link carries it, so following the relation is the
 	// whole of what the client has to do.

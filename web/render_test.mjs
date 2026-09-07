@@ -319,6 +319,22 @@ test('a search that matches nothing says so, and is still a page', () => {
   assert.ok(html.includes('data-nav="#/"'), 'the way back is still there');
 });
 
+// The box keeps its words on the way back from a results page, so the shelf
+// says which words are hiding half of it — and the chip is the way out.
+test('the library says what is filtering it, and offers the way out', () => {
+  const doc = golden('library');
+  const html = R.library(doc, { q: 'dune' });
+  assert.ok(html.includes('id="lib-filter"'), 'no chip over a filtered shelf');
+  assert.ok(html.includes('dune'), 'the chip does not say what it is filtering by');
+  assert.ok(html.includes('data-clear-q'), 'the chip does not clear the filter');
+  // The chip stands over the tiles it is hiding, not under them.
+  assert.ok(html.indexOf('id="lib-filter"') < html.indexOf('data-band='));
+  // A shelf the filter empties still wears it: it is the only way back.
+  assert.ok(R.library(doc, { q: 'nothing at all' }).includes('data-clear-q'));
+  // An unfiltered shelf says nothing at all.
+  assert.ok(!R.library(doc, {}).includes('id="lib-filter"'));
+});
+
 test('the genre chip and the search box only filter', () => {
   const doc = golden('library');
   const comedy = R.libraryGrid(doc, { genre: 'Comedy' });

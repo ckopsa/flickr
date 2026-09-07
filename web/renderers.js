@@ -184,18 +184,31 @@
       '</section>';
   }
 
+  // What the box is filtering the shelf by, said over the shelf it is
+  // filtering. The box keeps its words on the way back from a results page,
+  // and a home with half its titles missing has to say why — and carry the
+  // one way out of it.
+  function filterChip(state) {
+    const q = (state && state.q) || '';
+    if (!q) return '';
+    return '<div id="lib-filter">' +
+      '<button data-clear-q="1">Filtering by “' + esc(q) + '” <span aria-hidden="true">×</span></button>' +
+      '</div>';
+  }
+
   // The library is ROWS, not one wall: what is new, then a section per band
   // the document names — `bands` is an ordered list of {key, title} and every
   // tile says which band it sits in, so nothing is grouped or sorted here.
   // The search box and the genre chip filter INSIDE the sections, and a
   // section their filter empties is not drawn at all.
   function libraryGrid(doc, state) {
+    const chip = filterChip(state);
     const tiles = (doc && doc.items) || [];
-    if (!tiles.length) return { html: '<div id="empty">No items yet — run a scan.</div>', count: 0 };
+    if (!tiles.length) return { html: chip + '<div id="empty">No items yet — run a scan.</div>', count: 0 };
     const kept = tiles.filter(t => matches(t, state));
-    if (!kept.length) return { html: '<div id="empty">Nothing matches your search.</div>', count: 0 };
+    if (!kept.length) return { html: chip + '<div id="empty">Nothing matches your search.</div>', count: 0 };
 
-    let html = '';
+    let html = chip;
     // What arrived lately leads: the document's own selection of the same
     // tiles, drawn as a row rather than a grid.
     const recent = ((doc && doc.recently_added) || []).filter(t => matches(t, state));

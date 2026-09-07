@@ -3,6 +3,20 @@
   "kind": "root",
   "title": "flickr",
   "profile": "chris",
+  "avatars": [
+    "🦊",
+    "🐼",
+    "🐙",
+    "🦉",
+    "🐝",
+    "🐳",
+    "🦄",
+    "🐢",
+    "🦁",
+    "🐸",
+    "🦖",
+    "🐧"
+  ],
   "links": {
     "artists": {
       "href": "/api/artists",
