@@ -986,6 +986,11 @@
       '<div id="passage-end-title">End of the passage</div>' +
       '<div id="passage-end-sub"></div>' +
       control(name, keep, { id: 'passage-keep' }) +
+      // The third way out is not to leave at all: A-B repeat, which is the
+      // device's own doing — the passage is played again from its start
+      // instead of stopping at its end — so it carries no action.
+      '<button id="passage-loop" aria-pressed="false" title="Play this passage again and again">' +
+        '↻ Loop</button>' +
       '<button id="passage-back"' + (back ? ' title="Back to ' + esc(back.title || '') + '"' : '') +
         '>Back</button>' +
       '</div>';

@@ -150,6 +150,19 @@ test('every skip the session names becomes a button in the server\'s words', () 
   assert.ok(!R.session(bare, {}).includes('id="skips"'));
 });
 
+// The loop is the DEVICE's doing, so the panel offers it without an action:
+// it is on the panel a passage's end puts up, and nowhere else.
+test('the end-of-passage panel offers the loop', () => {
+  const doc = golden('session-play');
+  const html = R.session(doc, {});
+  assert.match(html, /id="passage-loop"[^>]*aria-pressed="false"/);
+  assert.ok(!/id="passage-loop"[^>]*data-act/.test(html), 'the loop is no action of the document\'s');
+  // No passage, no panel — and so no loop to press.
+  const over = JSON.parse(JSON.stringify(doc));
+  delete over.actions.keep_watching;
+  assert.ok(!R.session(over, {}).includes('id="passage-loop"'));
+});
+
 // --- the mini player ---------------------------------------------------------
 
 // The other shape the chrome comes in: the same session document, collapsed

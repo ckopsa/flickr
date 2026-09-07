@@ -51,6 +51,8 @@
   let clipOpen = false;          // the clip bar is up over the scrubber
   let clipDrag = null;           // { kind, seconds } while a handle is held
   let clipMinted = null;         // the last link the server minted for it
+  let looping = false;           // A-B repeat, on the passage or the clip
+  let loopSeekAt = 0;            // when the loop last asked to go back to A
   const DOUBLE_TAP_MS = 300;     // how long a single tap waits for its twin
   const IDLE_MS = 3000;          // how long a still pointer waits before the chrome goes
   const CLIP_SECONDS = 30;       // how long a clip is before anything is dragged
@@ -182,6 +184,9 @@
         // What the clip says, in the server's own words, and the one button
         // that hands it on.
         '<div id="clipbar" hidden><span id="clip-sentence"></span>' +
+          // A-B repeat on the two marks: the clip played over and over while
+          // its ends are dragged into place.
+          '<button id="btn-loop" title="Loop this passage" aria-pressed="false">↻ Loop</button>' +
           '<button id="btn-clip-share">Share</button>' +
           '<button id="btn-clip-done">Done</button></div>' +
         '<div id="controls">' +
@@ -257,6 +262,12 @@
     syncFullscreenButton();
     syncRateControl();
     paintSkips();
+    // The loop toggle on the end-of-passage panel is the DEVICE's control on
+    // the document's panel: the panel is re-rendered with the chrome, so the
+    // listener goes on the button this render drew.
+    const loop = chrome.querySelector('#passage-loop');
+    if (loop) loop.addEventListener('click', toggleLoop);
+    syncLoopButtons();
     hostSleepMenu(chrome);
     syncSleepButton();
     setAutoplay(autoplayNext);
@@ -476,6 +487,7 @@
     }
     hideUpNext();
     creditsCued = false; // another file, another set of credits
+    setLooping(false);   // and a loop is the sitting's, not the library's
     closeClip(); // the marks belonged to the sitting that is ending
     // The chapter bound was THIS item's; a timer is a wall clock and carries
     // on into the next episode, which is what somebody falling asleep meant.
@@ -640,6 +652,7 @@
 
   function setPassage(p) {
     passage = p || null;
+    setLooping(false); // a loop belongs to the passage it was turned on in
     resetPassageEnd();
     renderMarksOnScrub();
   }
@@ -659,11 +672,15 @@
   }
   function passageReadout(pos) {
     const endAt = passageEndNow();
-    if (endAt == null) return `${fmtTime(pos)} · in passage`;
+    const on = looping ? ' · looping' : '';
+    if (endAt == null) return `${fmtTime(pos)} · in passage${on}`;
     const start = passage && passage.t != null ? passage.t : 0;
-    return `${fmtTime(pos - start)} / ${fmtTime(endAt - start)} in passage`;
+    return `${fmtTime(pos - start)} / ${fmtTime(endAt - start)} in passage${on}`;
   }
   function checkPassageEnd() {
+    // A passage on a loop has no end to reach: checkLoop takes it back to the
+    // start instead, and nothing is paused and no panel comes up.
+    if (looping && loopBounds()) return;
     if (!passage || !item || passageEndFired) return;
     if (!isPlaying() && !(casting() && remotePlayer.playerState === 'PAUSED')) return;
     const endAt = passageEndNow();
@@ -701,6 +718,70 @@
     if (id != null && route && route.passage) K.replaceHash(K.itemHash(id, null));
     if (wasNaturalEnd) { endFired = false; onPlaybackEnded(); return; }
     if (!isPlaying()) { casting() ? remoteController.playOrPause() : video.play().catch(() => {}); }
+  }
+
+  // --- the loop ----------------------------------------------------------------
+  //
+  // YouTube's A-B repeat, on the two points the app already has: the passage
+  // being watched, or the clip being marked, which are the same A and B said
+  // at different moments. While it is on, reaching B goes back to A and keeps
+  // playing — the passage never "ends", so nothing pauses and no panel comes
+  // up — and the readout under the picture says so.
+  //
+  // It is off to begin with, and off again the moment the passage is left
+  // (Keep watching) or the sitting ends: a loop is a thing somebody asked for
+  // once, not a setting to be surprised by tomorrow.
+  function loopBounds() {
+    const to = passageEndNow();
+    if (to != null) {
+      const p = (session && session.passage) || passage;
+      const from = p && typeof p.t === 'number' ? p.t : markSecondsHere('in') || 0;
+      return to > from ? { from, to } : null;
+    }
+    // No passage on: the marks being made are the two ends, which is what the
+    // loop in the clip bar is for.
+    const from = markSecondsHere('in'), out = markSecondsHere('out');
+    return from != null && out != null && out > from ? { from, to: out } : null;
+  }
+  // One end of the passage being made, if it was set in the item playing now.
+  function markSecondsHere(kind) {
+    const m = session && session.marks && session.marks[kind];
+    return m && m.item_id === (item && item.id) && typeof m.seconds === 'number' ? m.seconds : null;
+  }
+  function checkLoop() {
+    if (!looping || !isPlaying()) return;
+    const b = loopBounds();
+    if (!b || position() < b.to) return;
+    // A seek takes a moment to land — on the television, several — and the
+    // tick would otherwise ask for it again before the clock had moved.
+    if (Date.now() - loopSeekAt < 1000) return;
+    loopSeekAt = Date.now();
+    seekTo(b.from);
+  }
+  function setLooping(on) {
+    looping = !!on;
+    loopSeekAt = 0;
+    syncLoopButtons();
+  }
+  // Turning it on where the passage has already stopped is the same choice as
+  // "play it again": the panel goes, the clock goes back to A, and the picture
+  // starts. The panel is cleared FIRST, so pressing play is not read as the
+  // "keep watching" a play at the bound otherwise means.
+  function toggleLoop() {
+    setLooping(!looping);
+    if (!looping) return;
+    resetPassageEnd();
+    const b = loopBounds();
+    if (b && position() >= b.to - 0.25) seekTo(b.from);
+    if (!isPlaying()) { casting() ? remoteController.playOrPause() : video.play().catch(() => {}); }
+  }
+  function syncLoopButtons() {
+    for (const id of ['btn-loop', 'passage-loop']) {
+      const b = $(id);
+      if (!b) continue;
+      b.setAttribute('aria-pressed', looping ? 'true' : 'false');
+      b.textContent = looping ? '↻ Looping' : '↻ Loop';
+    }
   }
 
   // --- marks and the minted link -----------------------------------------------
@@ -1482,6 +1563,7 @@
       if (t.id === 'btn-sleep') { toggleSleepMenu(); return; }
       if (t.id === 'btn-autoplay') { setAutoplay(!autoplayNext); return; }
       if (t.id === 'btn-clip') { toggleClip(); return; }
+      if (t.id === 'btn-loop') { toggleLoop(); return; }
       if (t.id === 'btn-clip-share') { shareClip(); return; }
       if (t.id === 'btn-clip-done') { closeClip(); return; }
       if (t.id === 'btn-cast-stop') { stopCasting(); return; }
@@ -1647,6 +1729,7 @@
     paintMini();
     paintSkips();
     checkSleep();
+    checkLoop();
     checkPassageEnd();
     if (passageEndFired && !passageNaturalEnd && isPlaying()) {
       const endAt = passageEndNow();
