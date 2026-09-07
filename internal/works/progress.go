@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"path"
 	"sort"
+	"strings"
 
 	"flickr/internal/model"
 	"flickr/internal/store"
@@ -532,43 +533,118 @@ func nextMember(w *Work, itemID int64) *store.Item {
 }
 
 // ItemLabel names one item inside its work: numbered episodes get
-// "S02E05 · <title>" (enrichment episode title when known, else the file
-// basename); a numbered audiobook part is "Part 3"; a track is
-// "Track 3 · <its title>" when the path named it, "Track 3" when the identity
-// predates track titles, and its title alone when nobody numbered it;
-// everything else — bonus material, episodes and parts nobody numbered,
-// books — is just the basename, since a made-up "S00E00" or "Part 0" names
-// nothing.
+// "S02E05 · <title>" when enrichment knows the episode's title, and the code
+// alone when nobody does; a numbered audiobook part is "Part 3"; a track is
+// "Track 3 · <its title>" when the path named it and "Track 3" when the
+// identity predates track titles. Everything else — bonus material, episodes
+// and parts nobody numbered, films, books — is ItemTitle, since a made-up
+// "S00E00" or "Part 0" names nothing.
 func ItemLabel(it store.Item) string {
-	name := path.Base(it.ObjectKey)
-	if it.Identity == nil {
-		return name
+	id := it.Identity
+	if id == nil {
+		return ItemTitle(it)
 	}
-	switch it.Identity.Kind {
+	switch id.Kind {
 	case "episode":
-		if it.Identity.Episode == 0 {
-			return name
+		if id.Episode > 0 {
+			code := fmt.Sprintf("S%02dE%02d", id.Season, id.Episode)
+			if it.Enrichment != nil && it.Enrichment.EpisodeTitle != "" {
+				return code + " · " + it.Enrichment.EpisodeTitle
+			}
+			return code
 		}
-		if it.Enrichment != nil && it.Enrichment.EpisodeTitle != "" {
-			name = it.Enrichment.EpisodeTitle
-		}
-		return fmt.Sprintf("S%02dE%02d · %s", it.Identity.Season, it.Identity.Episode, name)
 	case "audiobook_part":
-		if it.Identity.Part > 0 {
-			return fmt.Sprintf("Part %d", it.Identity.Part)
+		if id.Part > 0 {
+			return fmt.Sprintf("Part %d", id.Part)
 		}
 	case "track":
-		title := it.Identity.TrackTitle
-		if it.Identity.Part == 0 {
-			if title != "" {
-				return title
+		if id.Part > 0 {
+			if id.TrackTitle != "" {
+				return fmt.Sprintf("Track %d · %s", id.Part, id.TrackTitle)
 			}
-			return name
+			return fmt.Sprintf("Track %d", id.Part)
 		}
-		if title != "" {
-			return fmt.Sprintf("Track %d · %s", it.Identity.Part, title)
+	}
+	return ItemTitle(it)
+}
+
+// ItemTitle is what a screen calls this one file, and it is never the file's
+// name: the work's own title where the work IS this one file (a film, a
+// book, an audiobook nobody split), the episode's title from TMDB — else
+// "Episode 5" — for an episode, the track's own name for a track, and
+// "Part 3" for an audiobook part, or the chapter a part names itself after.
+// Bonus material, and anything the path said nothing about, falls back to
+// the file's STEM tidied into words: a name a person typed is still a name,
+// but ".mkv" was never part of it.
+func ItemTitle(it store.Item) string {
+	id, e := it.Identity, it.Enrichment
+	if id == nil {
+		return stemTitle(it.ObjectKey)
+	}
+	switch id.Kind {
+	case "episode":
+		if e != nil && e.EpisodeTitle != "" {
+			return e.EpisodeTitle
 		}
-		return fmt.Sprintf("Track %d", it.Identity.Part)
+		if id.Episode > 0 {
+			return fmt.Sprintf("Episode %d", id.Episode)
+		}
+	case "audiobook_part":
+		if id.Part > 0 {
+			if ch := soleChapterTitle(it); ch != "" {
+				return ch
+			}
+			return fmt.Sprintf("Part %d", id.Part)
+		}
+		return workTitle(it) // the whole book in one file
+	case "track":
+		if id.TrackTitle != "" {
+			return id.TrackTitle
+		}
+		if id.Part > 0 {
+			return fmt.Sprintf("Track %d", id.Part)
+		}
+		return workTitle(it)
+	case "movie", "book":
+		return workTitle(it)
+	}
+	return stemTitle(it.ObjectKey)
+}
+
+// workTitle is the title borne by the WORK this file belongs to — TMDB's
+// where the enrichment found one, the identification's otherwise.
+func workTitle(it store.Item) string {
+	if e := it.Enrichment; e != nil && e.Title != "" {
+		return e.Title
+	}
+	if it.Identity != nil && it.Identity.Title != "" {
+		return it.Identity.Title
+	}
+	return stemTitle(it.ObjectKey)
+}
+
+// soleChapterTitle is the name a one-chapter file gives itself: an audiobook
+// cut one chapter to a file says which chapter this is better than its part
+// number does. Two chapters or more and the file is not one chapter.
+func soleChapterTitle(it store.Item) string {
+	if mi := it.MediaInfo; mi != nil && len(mi.Chapters) == 1 {
+		return strings.TrimSpace(mi.Chapters[0].Title)
+	}
+	return ""
+}
+
+// stemTitle reads an object key the way a person would: the base name with
+// its extension dropped and the underscores and dots that stand in for
+// spaces put back. It is the last resort, not the rule — and a stem that
+// tidies away to nothing keeps the base name it came from.
+func stemTitle(key string) string {
+	name := path.Base(key)
+	if ext := path.Ext(name); ext != "" && ext != name {
+		name = name[:len(name)-len(ext)]
+	}
+	name = strings.Join(strings.Fields(strings.NewReplacer("_", " ", ".", " ").Replace(name)), " ")
+	if name == "" {
+		return path.Base(key)
 	}
 	return name
 }

@@ -155,10 +155,10 @@
     {
       "self": "/api/items/7",
       "kind": "item",
-      "title": "Deleted Scenes.mkv",
+      "title": "Deleted Scenes",
       "id": 7,
       "medium": "video",
-      "label": "Deleted Scenes.mkv",
+      "label": "Deleted Scenes",
       "extra": true,
       "duration_seconds": 900,
       "tech": "1280x720 h264/aac · 900 MB",

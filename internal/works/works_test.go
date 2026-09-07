@@ -342,7 +342,7 @@ func TestContinueList(t *testing.T) {
 	if entries[0].Label != "S01E02 · Home" {
 		t.Errorf("episode label = %q", entries[0].Label)
 	}
-	if entries[1].ItemID != 1 || entries[1].Label != "Frozen.mkv" || entries[1].DurationSeconds != 6000 {
+	if entries[1].ItemID != 1 || entries[1].Label != "Frozen" || entries[1].DurationSeconds != 6000 {
 		t.Errorf("entry 1: %+v", entries[1])
 	}
 
@@ -369,8 +369,8 @@ func TestContinueListUpNext(t *testing.T) {
 		wantPos   float64
 		wantLabel string
 	}{
-		{"mid-episode unchanged",
-			[]store.Position{pos(1, 300, 10)}, 1, 1, 300, "S01E01 · e1.mkv"},
+		{"mid-episode unchanged", // nobody knows this episode's title: the code alone
+			[]store.Position{pos(1, 300, 10)}, 1, 1, 300, "S01E01"},
 		{"finished mid-season advances to next at 0",
 			[]store.Position{pos(1, 950, 10)}, 1, 2, 0, "S01E02 · Home"},
 		{"finished finale excluded",
@@ -697,19 +697,20 @@ func TestContinueListAudio(t *testing.T) {
 	}
 
 	// Finished part 1 → up next is part 2 at 0; finished part 2 → the
-	// unnumbered epilogue, labelled by its basename.
+	// unnumbered epilogue, which has no number to be labelled by and takes
+	// the book's title rather than its file name.
 	if got := ContinueList(ws, []store.Position{pos(1, 950, 10)}, 20); len(got) != 1 || got[0].ItemID != 2 || got[0].PositionSeconds != 0 || got[0].Label != "Part 2" {
 		t.Errorf("up next after part 1: %+v", got)
 	}
-	if got := ContinueList(ws, []store.Position{pos(2, 950, 10)}, 20); len(got) != 1 || got[0].ItemID != 3 || got[0].Label != "Epilogue.m4b" {
+	if got := ContinueList(ws, []store.Position{pos(2, 950, 10)}, 20); len(got) != 1 || got[0].ItemID != 3 || got[0].Label != "Dune" {
 		t.Errorf("up next after part 2: %+v", got)
 	}
 	// Finished the last part: the book is done.
 	if got := ContinueList(ws, []store.Position{pos(3, 950, 10)}, 20); len(got) != 0 {
 		t.Errorf("finished audiobook: %+v", got)
 	}
-	// A book with a position lists by its basename, with no duration.
-	if got := ContinueList(ws, []store.Position{pos(5, 30, 10)}, 20); len(got) != 1 || got[0].Label != "T.epub" || got[0].DurationSeconds != 0 {
+	// A book with a position lists by its title, with no duration.
+	if got := ContinueList(ws, []store.Position{pos(5, 30, 10)}, 20); len(got) != 1 || got[0].Label != "T" || got[0].DurationSeconds != 0 {
 		t.Errorf("book entry: %+v", got)
 	}
 }
@@ -799,7 +800,8 @@ func TestArtists(t *testing.T) {
 
 // A track's label carries its title once the identity knows it; without a
 // number the title stands alone; an identity from before track titles keeps
-// the bare number.
+// the bare number, and one that has neither takes the record's name — a
+// file nobody numbered or named is the whole record.
 func TestItemLabelTrack(t *testing.T) {
 	for _, tc := range []struct {
 		it   store.Item
@@ -808,10 +810,77 @@ func TestItemLabelTrack(t *testing.T) {
 		{titledTrack(1, "m/r/07 Karma Police.flac", "Radiohead", "OK Computer", 1997, 7, "Karma Police"), "Track 7 · Karma Police"},
 		{titledTrack(2, "m/r/Hidden Track.flac", "Radiohead", "OK Computer", 1997, 0, "Hidden Track"), "Hidden Track"},
 		{track(3, "m/r/07 Karma Police.flac", "Radiohead", "OK Computer", 7), "Track 7"},
-		{track(4, "m/r/Untitled.flac", "Radiohead", "OK Computer", 0), "Untitled.flac"},
+		{track(4, "m/r/Untitled.flac", "Radiohead", "OK Computer", 0), "OK Computer"},
 	} {
 		if got := ItemLabel(tc.it); got != tc.want {
 			t.Errorf("ItemLabel(%s) = %q, want %q", tc.it.ObjectKey, got, tc.want)
+		}
+	}
+}
+
+// No file name is ever a title: every identified kind names itself from what
+// the path or TMDB knows, and only bonus material and the unidentified fall
+// back to the file's stem — without its extension, and with the punctuation
+// standing in for spaces turned back into spaces. The label beside it keeps
+// the structured form a list is read down.
+func TestItemTitleAndLabel(t *testing.T) {
+	chaptered := func(it store.Item, titles ...string) store.Item {
+		mi := model.MediaInfo{}
+		for _, ch := range titles {
+			mi.Chapters = append(mi.Chapters, model.Chapter{Title: ch})
+		}
+		it.MediaInfo = &mi
+		return it
+	}
+	for _, tc := range []struct {
+		name  string
+		it    store.Item
+		title string
+		label string
+	}{
+		{"a film is its work",
+			movie(1, "Movies/Frozen (2013)/Frozen.mkv", "Frozen", 2013), "Frozen", "Frozen"},
+		{"TMDB's title beats the path's",
+			withEnrichment(movie(1, "m/frozen.2013.1080p.mkv", "frozen 2013 1080p", 0),
+				model.Enrichment{Title: "Frozen"}), "Frozen", "Frozen"},
+		{"an episode TMDB named",
+			withEnrichment(episode(2, "s/n/e02.mkv", "Ninjago", 1, 2),
+				model.Enrichment{EpisodeTitle: "Home"}), "Home", "S01E02 · Home"},
+		{"an episode nobody named",
+			episode(2, "s/n/e02.mkv", "Ninjago", 1, 2), "Episode 2", "S01E02"},
+		{"an episode nobody numbered",
+			episode(2, "s/m/B9_t02.mkv", "MASH", 6, 0), "B9 t02", "B9 t02"},
+		{"a track by its own name",
+			titledTrack(3, "m/r/07 Karma Police.flac", "Radiohead", "OK Computer", 1997, 7, "Karma Police"),
+			"Karma Police", "Track 7 · Karma Police"},
+		{"a track from before track titles",
+			track(3, "m/r/07.flac", "Radiohead", "OK Computer", 7), "Track 7", "Track 7"},
+		{"a numbered audiobook part",
+			part(4, "a/d/01 - Part 1.m4b", "Frank Herbert", "Dune", 1), "Part 1", "Part 1"},
+		{"a part cut to one chapter names itself after it",
+			chaptered(part(4, "a/d/05.m4b", "Frank Herbert", "Dune", 5), "The Sleeper Wakes"),
+			"The Sleeper Wakes", "Part 5"},
+		{"a part of many chapters is its number",
+			chaptered(part(4, "a/d/01.m4b", "Frank Herbert", "Dune", 1), "Chapter 01", "Chapter 02"),
+			"Part 1", "Part 1"},
+		{"an audiobook nobody split is the book",
+			part(5, "a/d/Dune.m4b", "Frank Herbert", "Dune", 0), "Dune", "Dune"},
+		{"a book is its book",
+			book(6, "Books/Shirley Jackson/The Haunting of Hill House.epub",
+				"Shirley Jackson", "The Haunting of Hill House", 1959),
+			"The Haunting of Hill House", "The Haunting of Hill House"},
+		{"bonus material by its tidied stem",
+			extra(7, "Shows/The Office/Featurettes/Deleted_Scenes.mkv", "The Office", 3, 22),
+			"Deleted Scenes", "Deleted Scenes"},
+		{"a file the path said nothing about",
+			store.Item{ID: 8, ObjectKey: "misc/holiday.clip.final.mp4"},
+			"holiday clip final", "holiday clip final"},
+	} {
+		if got := ItemTitle(tc.it); got != tc.title {
+			t.Errorf("%s: ItemTitle(%s) = %q, want %q", tc.name, tc.it.ObjectKey, got, tc.title)
+		}
+		if got := ItemLabel(tc.it); got != tc.label {
+			t.Errorf("%s: ItemLabel(%s) = %q, want %q", tc.name, tc.it.ObjectKey, got, tc.label)
 		}
 	}
 }
@@ -930,7 +999,7 @@ func TestContinueListPDF(t *testing.T) {
 	if want := []int64{20, 23}; !reflect.DeepEqual(ids, want) {
 		t.Fatalf("ids = %v, want %v", ids, want)
 	}
-	if e := got[0]; e.Fraction != 213.0/400 || e.Label != "Reading.pdf" || e.PositionSeconds != 0 || e.DurationSeconds != 0 {
+	if e := got[0]; e.Fraction != 213.0/400 || e.Label != "Reading" || e.PositionSeconds != 0 || e.DurationSeconds != 0 {
 		t.Errorf("pdf entry: %+v", e)
 	}
 	if e := got[1]; e.Fraction != 0 {
@@ -964,7 +1033,7 @@ func TestContinueListText(t *testing.T) {
 	if want := []int64{10, 13, 14, 1}; !reflect.DeepEqual(ids, want) {
 		t.Fatalf("ids = %v, want %v", ids, want)
 	}
-	if e := got[0]; e.Fraction != 0.31 || e.Label != "Reading.epub" || e.Title != "Reading" || e.PositionSeconds != 0 || e.DurationSeconds != 0 {
+	if e := got[0]; e.Fraction != 0.31 || e.Label != "Reading" || e.Title != "Reading" || e.PositionSeconds != 0 || e.DurationSeconds != 0 {
 		t.Errorf("book entry: %+v", e)
 	}
 	if e := got[3]; e.Fraction != 0 || e.PositionSeconds != 600 {

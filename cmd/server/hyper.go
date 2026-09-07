@@ -186,7 +186,11 @@ func (s *server) itemEnvelope(it store.Item, wk *works.Work, full bool, position
 	doc := hyper.Doc(base, "item", itemTitle(it)).
 		Field("id", it.ID)
 	if full {
-		doc.Field("object_key", it.ObjectKey)
+		// The whole key, and the name at the end of it: no title is a file
+		// name any more, so the name a person searched their shelf for — or
+		// typed at an ffprobe — is said here, once, on the item's own page.
+		doc.Field("object_key", it.ObjectKey).
+			Field("file_name", path.Base(it.ObjectKey))
 	}
 	doc.Field("medium", medium).
 		Field("label", works.ItemLabel(it))
@@ -400,31 +404,11 @@ func artworkLinks(doc *hyper.Envelope, it store.Item, medium string) {
 }
 
 // itemTitle is what a screen calls this one file: the episode's own title
-// when TMDB knows it, a track's own name, the film's or the book's title,
-// and otherwise the file's basename. Never a made-up code — the code is
-// works.ItemLabel's job, and this document carries both.
-func itemTitle(it store.Item) string {
-	e, id := it.Enrichment, it.Identity
-	if e != nil && e.EpisodeTitle != "" {
-		return e.EpisodeTitle
-	}
-	if id != nil {
-		switch id.Kind {
-		case "track":
-			if id.TrackTitle != "" {
-				return id.TrackTitle
-			}
-		case "movie", "book":
-			if e != nil && e.Title != "" {
-				return e.Title
-			}
-			if id.Title != "" {
-				return id.Title
-			}
-		}
-	}
-	return path.Base(it.ObjectKey)
-}
+// when TMDB knows it, a track's own name, the film's or the book's title —
+// and never the file's name, which reaches the document as `file_name`
+// instead. The rule is works.ItemTitle's, beside the label rule it shares
+// its fallback with; this document carries both.
+func itemTitle(it store.Item) string { return works.ItemTitle(it) }
 
 // playInput is the sketch every play action publishes. `passage` is the
 // object play takes (t, end, until, from, to — passage.go): the server
