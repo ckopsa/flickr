@@ -274,6 +274,7 @@ func (s *server) routes() *http.ServeMux {
 	mux.HandleFunc("POST /api/items/{id}/identity", s.handleOverrideIdentity)
 	mux.HandleFunc("POST /api/items/{id}/reprobe", s.handleReprobe)
 	mux.HandleFunc("POST /api/items/{id}/enrich", s.handleEnrich)
+	mux.HandleFunc("POST /api/items/{id}/watched", s.handleWatched)
 	mux.HandleFunc("GET /api/items/{id}/subtitles/{file}", s.handleSubtitle)
 	mux.HandleFunc("GET /api/items/{id}/poster", s.handlePoster)
 	mux.HandleFunc("GET /api/items/{id}/cover", s.handleCover)

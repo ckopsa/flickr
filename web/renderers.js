@@ -107,14 +107,39 @@
   function control(name, act, opts) {
     if (!act) return '';
     const o = opts || {};
+    // `data` is what the button sends BACK: a value the action's own `input`
+    // named as a literal rather than as a type, written on the button for the
+    // kernel to make the body out of. Nothing here invents one.
+    const data = o.data || {};
     return '<button class="act' + (o.cls ? ' ' + esc(o.cls) : '') + '"' +
       ' data-act="' + esc(name) + '"' +
       ' data-href="' + esc(act.href) + '"' +
       ' data-method="' + esc(act.method || 'POST') + '"' +
+      Object.keys(data).map(k => ' data-' + esc(k) + '="' + esc(data[k]) + '"').join('') +
       (o.title ? ' title="' + esc(o.title) + '"' : '') +
       (o.hidden ? ' hidden' : '') +
       (o.id ? ' id="' + esc(o.id) + '"' : '') +
       '>' + esc(o.label || act.label || name) + '</button>';
+  }
+
+  // The tick, and the way back off it — the item's `watched` action, drawn on
+  // its own page and on every row in a list.
+  //
+  // Which WAY the press goes is the server's: the label says it in words
+  // ("Mark watched", "Mark unwatched") and the action's `input` carries the
+  // value to send back, so all that is decided here is the mark drawn on the
+  // button — a ✓ to tick a thing off, a ↺ to undo one. `wide` is the page's
+  // shape, which has room for the words beside the mark; a row has not.
+  function watchedControl(doc, cls, wide) {
+    const act = action(doc, 'watched');
+    if (!act) return '';
+    const want = String((act.input && act.input.watched) || 'true') !== 'false';
+    const mark = want ? '✓' : '↺';
+    return control('watched', act, {
+      cls: cls, title: act.label,
+      data: { watched: want ? 'true' : 'false' },
+      label: wide ? mark + ' ' + (act.label || '') : mark,
+    });
   }
 
   // The controls a document offers that nothing above has drawn already.
@@ -410,10 +435,14 @@
       (m.overview ? '<div class="overview">' + esc(m.overview) + '</div>' : '');
     const cls = 'item' + (still ? ' enriched' : '') + (o.current ? ' current' : '') +
       (m.watched ? ' watched' : '');
+    // The tick sits at the end of the row, where a person ticks an episode
+    // off. It is a control inside a control: the kernel reads the innermost
+    // [data-act], so pressing it marks the row rather than opening it.
     return '<div class="' + cls + '" tabindex="0" role="link"' +
       ' data-nav="' + esc(itemHash(m.id)) + '">' +
       (still ? '<img class="still" loading="lazy" alt="" src="' + esc(still) + '">' : '') +
       '<div>' + meta + '</div>' +
+      watchedControl(m, 'watch') +
       '</div>';
   }
 
@@ -617,9 +646,10 @@
     const back = href(doc, 'backdrop');
     const chapters = ((doc.media_info && doc.media_info.chapters) || [])
       .filter(() => doc.medium !== 'text');
-    // Play stands alone up here. The curatorial actions are drawn too — but
-    // inside the Details disclosure, so `drawn` names them as handled.
-    const drawn = ['play', 'read'].concat(ADMIN);
+    // Play stands alone up here, with the tick beside it. The curatorial
+    // actions are drawn too — but inside the Details disclosure, so `drawn`
+    // names all of them as handled.
+    const drawn = ['play', 'read', 'watched'].concat(ADMIN);
     const prev = link(doc, 'prev'), next = link(doc, 'next');
     const bonus = wk && wk.work_kind !== 'show' ? extras(wk) : [];
     const siblings = wk && wk.work_kind !== 'show' ? walked(wk) : [];
@@ -637,7 +667,7 @@
           detailMeta(doc, wk) +
           '<p id="detail-overview"' + (doc.overview ? '' : ' hidden') + '>' + esc(doc.overview || '') + '</p>' +
           castLine(doc) +
-          primary(doc) + restControls(doc, drawn) +
+          primary(doc) + watchedControl(doc, 'watch-wide', true) + restControls(doc, drawn) +
           '<div id="detail-chapters">' + chapters.map(ch =>
             '<button data-seek="' + esc(ch.start_seconds) + '">' +
             esc((ch.title || '') + ' · ' + fmtTime(ch.start_seconds)) + '</button>').join('') + '</div>' +
@@ -1027,7 +1057,7 @@
 
   const api = {
     library, libraryGrid, hero, work, artist, item, session, miniPlayer, continueShelf, search,
-    card, memberRow, control, restControls, trace, identityForm,
+    card, memberRow, control, watchedControl, restControls, trace, identityForm,
     esc, fmtTime, fmtRuntime, hashFor, itemHash, showHash, artistHash, searchHash,
     idIn,
     linkHref: href, actionOf: action, unavailableReason: why, artworkOf: artwork,

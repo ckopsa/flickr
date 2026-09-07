@@ -75,6 +75,15 @@
             "seek_seconds": "number?"
           },
           "label": "▶ Resume"
+        },
+        "watched": {
+          "method": "POST",
+          "href": "/api/items/1/watched",
+          "input": {
+            "client_id": "string?",
+            "watched": "true"
+          },
+          "label": "Mark watched"
         }
       },
       "unavailable": {
@@ -185,6 +194,15 @@
             "passage": "passage?"
           },
           "label": "Keep reading"
+        },
+        "watched": {
+          "method": "POST",
+          "href": "/api/items/3/watched",
+          "input": {
+            "client_id": "string?",
+            "watched": "true"
+          },
+          "label": "Mark watched"
         }
       },
       "unavailable": {
@@ -270,6 +288,15 @@
             "seek_seconds": "number?"
           },
           "label": "▶ Resume"
+        },
+        "watched": {
+          "method": "POST",
+          "href": "/api/items/8/watched",
+          "input": {
+            "client_id": "string?",
+            "watched": "true"
+          },
+          "label": "Mark watched"
         }
       },
       "unavailable": {

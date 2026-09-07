@@ -140,6 +140,15 @@
             "passage": "passage?"
           },
           "label": "Read"
+        },
+        "watched": {
+          "method": "POST",
+          "href": "/api/items/3/watched",
+          "input": {
+            "client_id": "string?",
+            "watched": "true"
+          },
+          "label": "Mark watched"
         }
       },
       "unavailable": {

@@ -207,6 +207,26 @@ async function walk(page) {
     await page.waitForFunction(() => document.getElementById('stage').hidden);
   });
 
+  // The one context action a library is asked for most. The row's tick is a
+  // control inside a control, so what this proves is that pressing it MARKS
+  // the row rather than opening it — and that the pane comes back saying so.
+  await step(page, 'watched: the tick marks an episode off, and back on', async () => {
+    await page.goto(base + '/#/');
+    await page.locator('.card', { hasText: 'The Office' }).first().click();
+    await expectVisible(page, 'details.season .item', 'an episode row');
+    const ticked = () => page.$$eval('details.season .item',
+      rows => rows.filter(r => r.classList.contains('watched')).length);
+    const before = await ticked();
+    await page.locator('details.season .item [data-act="watched"]').first().click();
+    await page.waitForFunction(n => document.querySelectorAll('details.season .item.watched').length !== n,
+      before, { timeout: 8000 }).catch(() => { throw new Error('the tick did not move'); });
+    const after = await ticked();
+    await page.locator('details.season .item [data-act="watched"]').first().click();
+    await page.waitForFunction(n => document.querySelectorAll('details.season .item.watched').length !== n,
+      after, { timeout: 8000 }).catch(() => { throw new Error('the tick did not come back off'); });
+    if (await ticked() !== before) throw new Error('the mark did not undo cleanly');
+  });
+
   await step(page, 'film: backdrop, facts, cast, and Escape leaves the player', async () => {
     await page.goto(base + '/#/');
     await page.locator('.card', { hasText: 'Frozen' }).first().click();

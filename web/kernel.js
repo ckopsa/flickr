@@ -1121,6 +1121,15 @@
     const name = el.dataset.act;
     const req = { href: el.dataset.href, method: el.dataset.method || 'POST', name };
     if (el.dataset.clear) req.body = { clear: true };
+    // The tick sends back the value the DOCUMENT chose: the action's `input`
+    // carried it as a literal and the button carries it here, so which way
+    // the mark goes was never the browser's decision.
+    if (el.dataset.watched) req.body = { watched: el.dataset.watched === 'true' };
+    // Marking a thing watched moves a PLACE — and the place is what the row's
+    // ✓, the resume shelf and a show's Next up are all drawn from. So the
+    // answer is followed by forgetting every cached document and re-reading
+    // the view, rather than by patching the screen where it stands.
+    if (name === 'watched') { await write(req); return; }
     // `read` is the kernel's: a book's sitting is the reader pane, not the
     // device. Everything else is the device's, and it takes the action as it
     // was written on the button.
@@ -1131,6 +1140,24 @@
     // The two minting actions are the same answer shown the same way.
     if (name === 'passage' || name === 'link') { await mint(req); return; }
     await root.Player.invoke(req, { item: currentItem, work: currentWork });
+  }
+
+  // One write, and the view read again after it. A refusal is said out loud
+  // and nothing is re-read: the screen still shows what the server still
+  // holds.
+  async function write(req) {
+    try {
+      await api(req.href, {
+        method: req.method,
+        headers: req.body ? { 'Content-Type': 'application/json' } : undefined,
+        body: req.body ? JSON.stringify(req.body) : undefined,
+      });
+    } catch (err) {
+      note(err instanceof Problem ? err.detail : String(err.message || err));
+      return;
+    }
+    forget();
+    applyRoute();
   }
 
   // A form is an action with a BODY: the fields a renderer drew from the

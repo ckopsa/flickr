@@ -495,6 +495,47 @@ test('the show pane leads with Next up, and the play action rides it', () => {
   assert.equal((cold.match(/data-act="play"/g) || []).length, 1);
 });
 
+// The mark, on the row and on the page. Which way it goes is the document's:
+// the label says it in words and the action's `input` carries the value the
+// button sends back, so the browser decides neither.
+test('every episode row carries the tick its document offers', () => {
+  const doc = golden('work-show');
+  const html = R.work(doc);
+  for (const m of doc.members) {
+    const act = m.actions.watched;
+    assert.ok(act, m.label + ': the member offers no watched action');
+    assert.ok(html.includes('data-href="' + R.esc(act.href) + '"'), m.label + ': no tick href');
+    assert.ok(html.includes('data-watched="' + act.input.watched + '"'),
+      m.label + ': the tick does not carry the value the action named');
+    assert.ok(html.includes('title="' + R.esc(act.label) + '"'), m.label + ': no label on the tick');
+  }
+  // A member the server will not let anyone mark is a row with no tick.
+  const bare = JSON.parse(JSON.stringify(doc));
+  for (const m of bare.members) delete m.actions.watched;
+  assert.ok(!R.work(bare).includes('data-act="watched"'));
+});
+
+test('the tick beside Play says which way the next press goes', () => {
+  const doc = golden('item-film');
+  const act = doc.actions.watched;
+  const html = R.item(doc, {});
+  const above = html.split('<details id="detail-details">')[0];
+  assert.ok(above.includes('data-act="watched"'), 'the tick stands beside Play, not in the fold');
+  assert.ok(above.includes('data-href="' + R.esc(act.href) + '"'));
+  assert.ok(above.includes(R.esc(act.label)), 'labelled in the server\'s own words');
+  assert.ok(above.includes('data-watched="true"'), 'and it sends back what the action named');
+  // The other way round: the same control, the server's other label.
+  const seen = JSON.parse(JSON.stringify(doc));
+  seen.actions.watched = Object.assign({}, act, {
+    label: 'Mark unwatched', input: { watched: 'false', client_id: 'string?' },
+  });
+  const back = R.item(seen, {});
+  assert.ok(back.includes('data-watched="false"'));
+  assert.ok(back.includes('Mark unwatched'));
+  // ↺ rather than ✓: the mark is the only thing this side chooses.
+  assert.ok(back.includes('↺') && !back.includes('✓'));
+});
+
 test('a record pane lists its members with the server\'s own labels', () => {
   const html = R.work(golden('work-album'));
   assert.ok(html.includes('Track 1 · Airbag'));

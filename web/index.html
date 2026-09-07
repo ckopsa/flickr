@@ -201,7 +201,15 @@
   .season > summary:hover { background: #1e222c; }
   .season .season-count { float: right; color: var(--muted); font-weight: 400; }
   .season:last-child .season-items .item:last-child { border-bottom: 0; }
-  .item { padding: 10px 16px; border-bottom: 1px solid #1e2026; cursor: pointer; }
+  .item { padding: 10px 16px; border-bottom: 1px solid #1e2026; cursor: pointer;
+    display: flex; gap: 12px; align-items: flex-start; }
+  .item > div { flex: 1 1 auto; min-width: 0; }
+  /* the tick a row is ticked off with, out at the end of it: quiet until the
+     row is under the pointer or the ring, and on a touch screen always there */
+  .item .watch { flex: 0 0 auto; margin-right: 0; padding: 3px 9px; font-size: 13px;
+    opacity: 0; transition: opacity .12s ease; }
+  .item:hover .watch, .item:focus-within .watch { opacity: 1; }
+  @media (hover: none) { .item .watch { opacity: 1; } }
   .item:last-child { border-bottom: 0; }
   .item:hover { background: #1e222c; }
   .item.current { background: #1a1f2b; }
@@ -242,6 +250,8 @@
   #detail-cast { font-size: 12px; color: var(--muted); max-width: 700px; margin: 0 0 12px; }
   #detail-play { font-size: 15px; padding: 9px 26px; background: #2a4a8a; border-color: #3a5da8; }
   #detail-play:hover { background: #33579e; }
+  /* the tick beside Play, with the server's own words on it */
+  .watch-wide { font-size: 14px; padding: 9px 16px; }
   #detail-chapters { margin-top: 16px; display: flex; flex-wrap: wrap; gap: 6px; }
   #detail-chapters button { font-size: 12px; padding: 4px 10px; }
   #detail-epnav { margin-top: 14px; display: flex; flex-wrap: wrap; gap: 8px; }

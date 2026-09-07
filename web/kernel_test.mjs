@@ -180,6 +180,20 @@ test('the activity document is a read, and every row draws itself', () => {
   assert.match(src, /watchActivity\(false\)/, 'the poll never stops');
 });
 
+// The mark is one action with two labels, and the value to send back rides in
+// its `input`: the client never works out which way the press goes.
+test('an item says how it is marked watched, and which way the mark goes', () => {
+  for (const [name, doc] of [['item-film', golden('item-film')],
+                             ['a member', golden('work-show').members[0]]]) {
+    const act = doc.actions.watched;
+    assert.ok(act, `${name}: no watched action`);
+    assert.equal(act.method, 'POST');
+    assert.ok(/^Mark (un)?watched$/.test(act.label), `${name}: label is ${act.label}`);
+    assert.ok(act.input.watched === 'true' || act.input.watched === 'false',
+      `${name}: the action does not carry the value to send back`);
+  }
+});
+
 test('every golden the client renders is the one the server writes', () => {
   // The Go side copies them and fails on drift (goldens_shared_test.go); this
   // is the other half of that sentence — the files are actually here.

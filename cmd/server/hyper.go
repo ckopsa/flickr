@@ -347,6 +347,24 @@ func (s *server) itemEnvelope(it store.Item, wk *works.Work, full bool, position
 		Method: "POST", Href: "/api/progress",
 		Input: progressInputSketch(it), Label: "Save the place",
 	})
+	// Watched, and unwatched again — on the item's own page and on every row
+	// in a list, because a row is where a person ticks an episode off. Which
+	// WAY the press goes is the server's: the label says it in words and the
+	// input carries the value to send back, so the screen decides nothing but
+	// where to draw it. An unprobed file has no end to mark, and says so.
+	if watchable(it) {
+		label, want := "Mark watched", "true"
+		if works.Finished(it, positions[it.ID]) {
+			label, want = "Mark unwatched", "false"
+		}
+		doc.Action("watched", hyper.Action{
+			Method: "POST", Href: base + "/watched",
+			Input: map[string]string{"watched": want, "client_id": "string?"},
+			Label: label,
+		})
+	} else {
+		doc.Unavailable("watched", notMarkable(it))
+	}
 
 	if full {
 		doc.Action("identity", hyper.Action{
