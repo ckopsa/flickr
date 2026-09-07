@@ -360,7 +360,7 @@ rewrites them.
 | **artist** | `GET /api/artists/{name}` | one name's shelf: `name` as the shelf spells it (the match is case-insensitive), `album_count`, `track_count`, and `albums` in year order — the year-less last — as the same tiles the grid draws, with their covers; links `artwork`, `library` | — | `no-such-artist` 404 |
 | **continue** | `GET /api/continue?client_id=NAME` | the resume shelf: `count` and `items`, one per work, each an item envelope with the `work_title` over its own `label`, `position_seconds` (or a book's `fraction`), `percent` — the bar's width in one unit for every medium — and `links.artwork`: the episode's still, the film's poster, the record's or the book's cover, and the work's picture when this one file has none; links `root`, `library` | per entry: `resume`, labelled in the verb the medium uses ("▶ Resume", "Keep reading") | `no-profile` 400 |
 | **route** | `GET /api/-/route?hash=…` | what a hash means: `view` (`library`, `work`, `artist`, `item`), the `document` to render it from, the `passage` resolved — episode codes to item ids, text locators to a book's spine sections or a PDF's pages — and `autoplay`, true for a text passage as for a timed one. For `work` and `item` the document is the whole thing; for `library` and `artist` it is a stub naming the shelf (`links.library`, `links.artist`), one relation away. See *Deep links and passages* | — | `no-such-show`, `no-such-episode`, `no-such-artist`, `no-such-item` 404, `bad-hash` 400 |
-| **passage** | `GET /api/-/passage?item=&t=&end=[&until=]` or `GET /api/-/passage?work=&from=&to=` | a minted link: its absolute `href`, the `sentence` that says it (`S03E22 2:22 – 14:14 of Beach Games`), the `passage` itself, and `links.item` — the item it starts in | — | `bad-item-id`, `empty-passage`, `run-leaves-the-work`, `no-such-place` 400, `no-such-item`, `no-such-work` 404 |
+| **passage** | `GET /api/-/passage?item=&t=&end=[&until=]` or `GET /api/-/passage?work=&from=&to=` | a minted link: its absolute `href`, the `share_href` beside it (the same passage as a PATH, `/s/item/…`, which is the spelling that unfurls), the `sentence` that says it (`S03E22 2:22 – 14:14 of Beach Games`), the `passage` itself, and `links.item` — the item it starts in | — | `bad-item-id`, `empty-passage`, `run-leaves-the-work`, `no-such-place` 400, `no-such-item`, `no-such-work` 404 |
 
 Anything failing below a handler is `server-error` 500 in that same envelope,
 and a document that will not marshal is `document-broken` 500 rather than a
@@ -519,6 +519,7 @@ tools, for waymark, and for the by-hand call.
 | `GET /api/system` | the hardware-accel accept/reject trace, and the LAN-reachable `base_url` a cast device needs | the root's `system` link |
 | `GET /api/users`, `POST /api/users` | list and idempotently create profile names (a client passes the name as `client_id`) | the root's `profiles` link and `create_profile` action |
 | `POST /api/telemetry` | append any JSON object to `data/telemetry.jsonl`; always 200 | no document names it: the cast receiver posts to it by a literal of its own, since it runs on the TV and reads no root |
+| `GET /s/…` | the share page: the hash grammar said as a path (`/s/item/4?t=4740&end=5070`, `/s/show/The%20Office?ep=S03E22`), answered as a small HTML page with the Open Graph tags a chat window unfurls and a redirect to the hash form. See *Making a passage* | the `share_href` on a minted link — and whatever it was pasted into |
 | `GET /streams/…` | the HLS output of a transcode session; every fetch counts as liveness for the idle reaper | the session document's `url` |
 | `GET /` and the rest of `web/` | the app shell, served with `Cache-Control: no-cache` | the browser |
 
@@ -714,8 +715,9 @@ The same link can be **composed rather than marked**, by
   rules hold whether a person marked the passage or picked it. This is the
   address the work document's `passage` action points at.
 
-Both answer the same document: the absolute `href`, the `sentence`, the
-`passage`, and `links.item` — the item the passage starts in. Both refuse in
+Both answer the same document: the absolute `href`, the `share_href` beside
+it, the `sentence`, the `passage`, and `links.item` — the item the passage
+starts in. Both refuse in
 the same envelope: a passage with nowhere to start is `empty-passage`, a
 token the work does not publish (a bare time on a show, which has more than
 one file; an episode it has not; anything that is no place at all) is
@@ -723,6 +725,20 @@ one file; an episode it has not; anything that is no place at all) is
 own work is `run-leaves-the-work` — each with a remedy pointing back at the
 work or the item the caller named, which is where the places it does offer
 are listed.
+
+**A passage link unfurls.** A hash never reaches a server, so
+`#/item/4?t=4740&end=5070` pasted into the family chat is a bare origin with
+nothing to preview. `share_href` is the same passage said as a PATH —
+`GET /s/item/4?t=4740&end=5070`, and `/s/show/<title>?ep=…` for the show
+form — which does reach us: a small HTML page whose Open Graph tags are the
+passage's own `sentence` (`og:title`), the work's overview
+(`og:description`) and its still or poster made absolute (`og:image`), and
+whose body is a `<meta http-equiv=refresh>` and a one-line script that hand
+the browser on to the hash form. Nothing is resolved twice: the path after
+`/s` IS the hash, so `GET /api/-/route`'s own resolver answers it and the
+sentence is the minted link's (`cmd/server/share.go`). A link to something
+the library no longer holds answers 404 with the refusal as its title, and
+still hands the browser on — the client shows the same sentence in words.
 
 `web/passage.js` is what is left of the grammar on the browser's side: the
 hash spellings (`splitHash`, `parsePassage`, `passageQuery`, `parseLocator`)

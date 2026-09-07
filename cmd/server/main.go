@@ -301,6 +301,10 @@ func (s *server) routes() *http.ServeMux {
 	mux.HandleFunc("GET /api/users", s.handleListUsers)
 	mux.HandleFunc("POST /api/users", s.handleCreateUser)
 	mux.HandleFunc("POST /api/telemetry", s.handleTelemetry)
+	// The share page (share.go): the hash grammar said as a path, so a
+	// passage link pasted into a chat has something to unfurl. A subtree,
+	// because "#" + whatever follows /s is the hash it stands for.
+	mux.HandleFunc("GET /s/", s.handleShare)
 	// Log stream fetches: which client asked for which segment with what
 	// Range — a poor man's receiver-side network tab.
 	streamFiles := http.StripPrefix("/streams/", http.FileServer(http.Dir("data/streams")))
