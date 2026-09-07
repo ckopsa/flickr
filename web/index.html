@@ -151,7 +151,16 @@
   #cw { padding: 14px 20px 0; }
   #cw h3 { font-size: 13px; color: var(--muted); margin: 0 0 8px; font-weight: 600; }
   #cw-row { display: flex; gap: 12px; overflow-x: auto; scrollbar-width: thin; padding-bottom: 6px; }
-  .cw-card { flex: 0 0 130px; cursor: pointer; }
+  .cw-card { flex: 0 0 130px; cursor: pointer; position: relative; }
+  /* the × that takes a row off the shelf: in the corner of the picture,
+     under the pointer or the ring — and always there where there is no
+     pointer to hover with */
+  .cw-card .cw-forget { position: absolute; top: 4px; right: 4px; z-index: 1; margin: 0;
+    min-width: 0; padding: 1px 7px 3px; font-size: 14px; line-height: 1.1; border-radius: 50%;
+    background: rgba(10,11,14,.78); color: #c5c8d4; opacity: 0; transition: opacity .12s ease; }
+  .cw-card:hover .cw-forget, .cw-card:focus-within .cw-forget { opacity: 1; }
+  .cw-card .cw-forget:hover { color: #f08080; background: rgba(10,11,14,.92); }
+  @media (hover: none) { .cw-card .cw-forget { opacity: 1; } }
   .cw-card:hover .poster-wrap { outline: 2px solid #5b8def; }
   .cw-card .poster-wrap { aspect-ratio: 2/3; border-radius: 8px; }
   .cw-card .cw-bar { height: 3px; background: #2a2c33; border-radius: 2px; margin-top: 4px; overflow: hidden; }

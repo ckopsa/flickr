@@ -386,10 +386,15 @@
       // and the hash beside them says WHERE it is taken — at the item's own
       // page, whose document carries the place to pick up from.
       const act = action(en, 'resume');
+      const drop = action(en, 'forget');
       return '<div class="cw-card" tabindex="0" role="button"' +
         (act ? ' data-act="resume" data-href="' + esc(act.href) + '"' +
                ' data-method="' + esc(act.method || 'POST') + '"' : '') +
         ' data-nav="' + esc(itemHash(en.id)) + '" data-autoplay="1">' +
+        // The × in the corner: the row's own `forget` action, drawn as a
+        // control INSIDE the control the row is — the kernel reads the
+        // innermost [data-act], so it drops the row rather than resuming it.
+        control('forget', drop, { cls: 'cw-forget', label: '×', title: drop && drop.label }) +
         wrap +
         '<div class="cw-bar"><div style="width:' + pct.toFixed(1) + '%"></div></div>' +
         '<div class="c-title">' + esc(title) + '</div>' +

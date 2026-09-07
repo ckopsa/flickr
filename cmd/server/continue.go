@@ -13,8 +13,11 @@ package main
 // and the one thing a tap does is an action with a label.
 
 import (
+	"fmt"
 	"net/http"
 	"net/url"
+	"strconv"
+	"strings"
 
 	"flickr/internal/hyper"
 	"flickr/internal/model"
@@ -64,7 +67,7 @@ func (s *server) handleContinue(w http.ResponseWriter, r *http.Request) {
 		if it == nil {
 			continue // a position for an item the scan has since dropped
 		}
-		rows = append(rows, s.continueEntry(*it, byItem[en.ItemID], en, positions))
+		rows = append(rows, s.continueEntry(*it, byItem[en.ItemID], en, positions, profile))
 	}
 
 	self := "/api/continue?client_id=" + url.QueryEscape(profile)
@@ -80,7 +83,7 @@ func (s *server) handleContinue(w http.ResponseWriter, r *http.Request) {
 // continueEntry is one row: the member's own envelope, plus what makes it a
 // RESUME row rather than a list row — whose work it is, how far in, and the
 // one action the row offers.
-func (s *server) continueEntry(it store.Item, wk *works.Work, en works.ContinueEntry, positions map[int64]store.Position) *hyper.Envelope {
+func (s *server) continueEntry(it store.Item, wk *works.Work, en works.ContinueEntry, positions map[int64]store.Position, profile string) *hyper.Envelope {
 	doc := s.itemEnvelope(it, wk, false, positions)
 	// The headline is the WORK's title — a resume shelf says "The Office",
 	// not "Beach Games" — and the member's own label is the line under it.
@@ -100,7 +103,75 @@ func (s *server) continueEntry(it store.Item, wk *works.Work, en works.ContinueE
 	if act, ok := resumeAction(doc, it); ok {
 		doc.Action("resume", act)
 	}
+	// And one name for "not this": the × on the row. A shelf is somewhere
+	// things are LEFT, so being able to put one down is half of it.
+	doc.Action("forget", hyper.Action{
+		Method: "DELETE", Href: forgetHref(it.ID, profile),
+		Label: "Remove from Continue watching",
+	})
 	return doc
+}
+
+// forgetHref is the address that drops a place. The item and the profile ride
+// as query parameters because that is how GET /api/progress already spells
+// the same two things.
+func forgetHref(itemID int64, profile string) string {
+	return "/api/progress?item_id=" + strconv.FormatInt(itemID, 10) +
+		"&client_id=" + url.QueryEscape(profile)
+}
+
+// handleForgetProgress is DELETE /api/progress — a row's `forget` action.
+//
+// It clears the profile's place in every member of the item's WORK, not just
+// in the item named: the shelf carries one row per work, so clearing the
+// episode that is showing would only hand the row on to the next episode —
+// the show would still be there, and the × would have done nothing a person
+// can see. A work of one member (a film, a book) is that same rule, cheaply.
+//
+// The answer is the shelf as it now stands, which is the document the caller
+// was looking at.
+func (s *server) handleForgetProgress(w http.ResponseWriter, r *http.Request) {
+	raw := strings.TrimSpace(r.URL.Query().Get("item_id"))
+	id, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		hyper.WriteProblem(w, hyper.Refuse(http.StatusBadRequest, "bad-item-id",
+			"That is not an item id", fmt.Sprintf("%q is not a number", raw)).
+			WithRemedy("follow a resume row's own action rather than composing its address",
+				&hyper.Link{Href: "/api/continue", Title: "Continue watching"}))
+		return
+	}
+	profile := profileOf(r)
+	if profile == "" {
+		hyper.WriteProblem(w, noProfileProblem("There is nobody to forget it for",
+			"a place belongs to one profile, and this request named none"))
+		return
+	}
+	ws, err := s.buildWorks()
+	if err != nil {
+		hyper.WriteProblem(w, serverProblem(err))
+		return
+	}
+	for _, member := range forgettable(ws, id) {
+		if err := s.state.ClearPlace(member, profile); err != nil {
+			hyper.WriteProblem(w, serverProblem(err))
+			return
+		}
+	}
+	s.handleContinue(w, r)
+}
+
+// forgettable are the items one × clears: every member of the item's work, or
+// the item alone when the scan has since dropped it from every work.
+func forgettable(ws []works.Work, itemID int64) []int64 {
+	wk := works.ByItem(ws)[itemID]
+	if wk == nil {
+		return []int64{itemID}
+	}
+	out := make([]int64, 0, len(wk.Items))
+	for _, it := range wk.Items {
+		out = append(out, it.ID)
+	}
+	return out
 }
 
 // continuePercent is how far along the row draws its bar, in one unit: a

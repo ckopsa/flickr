@@ -1125,11 +1125,12 @@
     // carried it as a literal and the button carries it here, so which way
     // the mark goes was never the browser's decision.
     if (el.dataset.watched) req.body = { watched: el.dataset.watched === 'true' };
-    // Marking a thing watched moves a PLACE — and the place is what the row's
-    // ✓, the resume shelf and a show's Next up are all drawn from. So the
-    // answer is followed by forgetting every cached document and re-reading
-    // the view, rather than by patching the screen where it stands.
-    if (name === 'watched') { await write(req); return; }
+    // Marking a thing watched, and dropping a row off the resume shelf, both
+    // move a PLACE — and the place is what the row's ✓, the shelf and a
+    // show's Next up are all drawn from. So the answer is followed by
+    // forgetting every cached document and re-reading the view, rather than
+    // by patching the screen where it stands.
+    if (name === 'watched' || name === 'forget') { await write(req); return; }
     // `read` is the kernel's: a book's sitting is the reader pane, not the
     // device. Everything else is the device's, and it takes the action as it
     // was written on the button.

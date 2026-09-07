@@ -48,6 +48,11 @@
         }
       },
       "actions": {
+        "forget": {
+          "method": "DELETE",
+          "href": "/api/progress?item_id=1\u0026client_id=chris",
+          "label": "Remove from Continue watching"
+        },
         "play": {
           "method": "POST",
           "href": "/api/items/1/play",
@@ -163,6 +168,11 @@
         }
       },
       "actions": {
+        "forget": {
+          "method": "DELETE",
+          "href": "/api/progress?item_id=3\u0026client_id=chris",
+          "label": "Remove from Continue watching"
+        },
         "progress": {
           "method": "POST",
           "href": "/api/progress",
@@ -261,6 +271,11 @@
         }
       },
       "actions": {
+        "forget": {
+          "method": "DELETE",
+          "href": "/api/progress?item_id=8\u0026client_id=chris",
+          "label": "Remove from Continue watching"
+        },
         "play": {
           "method": "POST",
           "href": "/api/items/8/play",

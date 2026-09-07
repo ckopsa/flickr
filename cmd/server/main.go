@@ -303,6 +303,7 @@ func (s *server) routes() *http.ServeMux {
 	mux.HandleFunc("DELETE /api/sessions/{id}", s.handleStopSession)
 	mux.HandleFunc("POST /api/progress", s.handleSetProgress)
 	mux.HandleFunc("GET /api/progress", s.handleGetProgress)
+	mux.HandleFunc("DELETE /api/progress", s.handleForgetProgress)
 	mux.HandleFunc("GET /api/users", s.handleListUsers)
 	mux.HandleFunc("POST /api/users", s.handleCreateUser)
 	mux.HandleFunc("POST /api/telemetry", s.handleTelemetry)

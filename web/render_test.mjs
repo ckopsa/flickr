@@ -558,6 +558,27 @@ test('the resume shelf draws the work title, the place and one action', () => {
   }
 });
 
+// Netflix's ×: the other thing a person does to a resume row.
+test('every resume row carries the × that takes it off the shelf', () => {
+  const doc = golden('continue');
+  const html = R.continueShelf(doc);
+  for (const en of doc.items) {
+    const act = en.actions.forget;
+    assert.ok(act, en.title + ': the row offers no forget action');
+    assert.ok(html.includes('data-href="' + R.esc(act.href) + '"'), en.title + ': no forget href');
+    assert.ok(html.includes('data-method="' + act.method + '"'), en.title + ': no forget method');
+    assert.ok(html.includes('title="' + R.esc(act.label) + '"'), en.title + ': no forget label');
+  }
+  // The × is a control INSIDE the row's own control, and it is drawn before
+  // the picture so a tap on it never lands on the row underneath.
+  const card = html.split('class="cw-card"')[1];
+  assert.ok(card.indexOf('data-act="forget"') < card.indexOf('poster-wrap'));
+  // A row the document does not afford dropping has no × at all.
+  const kept = JSON.parse(JSON.stringify(doc));
+  for (const en of kept.items) delete en.actions.forget;
+  assert.ok(!R.continueShelf(kept).includes('data-act="forget"'));
+});
+
 test('the player chrome is the session document, and nothing else', () => {
   const doc = golden('session-play');
   const html = R.session(doc, {});

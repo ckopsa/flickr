@@ -155,6 +155,7 @@ test('the resume shelf carries its own pictures and one action per row', () => {
   for (const en of doc.items) {
     assert.ok(en.links.artwork, `${en.title}: the row's picture is a link, not a guess`);
     assert.ok(en.actions.resume, `${en.title}: no resume action`);
+    assert.ok(en.actions.forget, `${en.title}: no way to take the row off the shelf`);
     assert.equal(typeof en.percent, 'number');
   }
 });
