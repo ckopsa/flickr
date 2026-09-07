@@ -81,6 +81,11 @@ beads-sync.yml` carries a committed `.beads/issues.jsonl` into the Dolt
 remote on push to `master` — see the header of that file and the bd
 section above before relying on it.
 
+Deploys: a merge to `master` touching the server or web UI runs
+`.github/workflows/image.yml` (build on the `flickr` runners, push to
+the cluster registry, write the Nomad deploy variable). See README
+"Deploy".
+
 ## Architecture Overview
 
 - `cmd/server/` — the HTTP server: routes under `/api/...`, serves

@@ -260,6 +260,22 @@ Requires `ffmpeg`/`ffprobe` on PATH. Media files are read straight from MinIO
 via presigned URLs — both for probing and as FFmpeg input; nothing is copied
 locally except HLS segments in `data/streams/`.
 
+## Deploy
+
+A merge to `master` that touches `cmd/`, `internal/`, `web/` or the Go
+module deploys itself (`.github/workflows/image.yml`): on the household's
+`flickr` runners the server is cross-compiled for arm64, appended as one
+layer to the jellyfin base (its arm64 ffmpeg carries Rockchip MPP) with
+crane — no docker daemon — and pushed to `docker.kopsa.info/flickr:<short
+sha>` and `:latest`. Then one Nomad variable is written,
+`nomad/jobs/flickr/deploy image_tag=<short sha>`; the job's template
+restarts the task on the change and `force_pull` fetches the tag. The
+job, the variable's ACLs and the by-hand and rollback recipes live in
+`ckopsa/home-infrastructure` (`terraform/nomad-jobs/flickr.hcl`,
+`terraform/docs/flickr-stream/RUNBOOK.md`). Without the `NOMAD_ADDR` /
+`NOMAD_TOKEN` repository secrets the workflow pushes the image and
+leaves the variable write to a person.
+
 ## API
 
 | Endpoint | Purpose |
