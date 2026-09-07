@@ -62,6 +62,7 @@ const cases = [
   { name: 'library', golden: 'library', render: d => R.library(d, {}) },
   { name: 'continue', golden: 'continue', render: d => R.continueShelf(d) },
   { name: 'search', golden: 'search', render: d => R.search(d) },
+  { name: 'lines', golden: 'lines', render: d => R.lines(d) },
   { name: 'work (show)', golden: 'work-show', render: d => R.work(d) },
   { name: 'work (album)', golden: 'work-album', render: d => R.work(d) },
   { name: 'work (audiobook)', golden: 'work-audiobook', render: d => R.work(d) },
@@ -461,11 +462,61 @@ test('the results are the groups the search answered, in its order', () => {
   assert.deepEqual(headings, doc.groups.map(g => g.title));
   for (const g of doc.groups) {
     const section = html.split('data-group="' + g.key + '"')[1].split('</section>')[0];
+    // Dialogue is not a tile: it is the line that was said, tested below.
+    if (g.key === 'lines') {
+      assert.deepEqual(lineTexts(section), g.items.map(en => unesc(R.esc(en.text))));
+      continue;
+    }
     assert.deepEqual(cardTitles(section), g.items.map(en => unesc(R.esc(en.title))));
   }
   // What was searched for is said back, and the way out is the library.
   assert.ok(html.includes(R.esc(doc.query)));
   assert.ok(html.includes('data-nav="#/"'));
+});
+
+const lineTexts = html =>
+  [...html.matchAll(/class="line-text">([^<]*)</g)].map(m => unesc(m[1]));
+
+// A line of dialogue is a place in a film: the words, where they are said,
+// when — and a tap that plays the SCENE, which is the passage the server
+// chose spelled as a hash.
+test('a dialogue hit is the line, and opens the passage around it', () => {
+  const doc = golden('search');
+  const lines = doc.groups.find(g => g.key === 'lines');
+  assert.ok(lines && lines.items.length, 'the search golden has no dialogue row');
+  const html = R.search(doc);
+  const section = html.split('data-group="lines"')[1].split('</section>')[0];
+  for (const en of lines.items) {
+    assert.ok(section.includes(R.esc(en.text)), 'the line is not said');
+    assert.ok(section.includes('>' + R.fmtTime(en.start) + '<'), 'the line has no time');
+    assert.ok(section.includes(R.esc(en.subtitle)), 'the line does not say what says it');
+    assert.ok(section.includes('data-nav="#/item/' + en.item_id +
+      '?t=' + en.passage.t + '&amp;end=' + en.passage.end + '"'),
+      'the hit does not open the scene around the line: ' + section);
+  }
+});
+
+// The same rows, from the finder's own document, and an answer either way:
+// a question that found nothing says so rather than leaving the page blank.
+test('the finder draws the lines its document answered', () => {
+  const doc = golden('lines');
+  const html = R.lines(doc);
+  assert.deepEqual(lineTexts(html), doc.items.map(en => unesc(R.esc(en.text))));
+  assert.match(R.lines(Object.assign({}, doc, { items: [] })), /lines-empty/);
+  assert.equal(R.lines({ items: [] }), '', 'a question nobody asked draws nothing');
+});
+
+// The box over a file's own words is drawn where the document offers the
+// relation, and nowhere else — and the address it asks is that relation's.
+test('the item page offers the finder only where there is dialogue', () => {
+  const withLines = golden('item-episode');
+  const html = R.item(withLines, {});
+  assert.ok(html.includes('id="lines-form"'), 'no finder over a transcribed file');
+  assert.ok(html.includes('data-href="' + R.esc(withLines.links.lines.href) + '"'));
+  assert.ok(html.indexOf('id="detail-lines"') < html.indexOf('id="detail-details"'),
+    'the finder stands above Details');
+  assert.ok(!R.item(golden('item-film'), {}).includes('id="lines-form"'),
+    'a file nobody transcribed is offered a search of nothing');
 });
 
 // A hit opens the thing it names: a show by its title, an artist by their

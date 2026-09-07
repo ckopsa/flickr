@@ -12,7 +12,9 @@ import (
 	"database/sql"
 	"encoding/json"
 	"math"
+	"strings"
 	"time"
+	"unicode"
 
 	_ "modernc.org/sqlite"
 
@@ -123,6 +125,11 @@ func OpenLibrary(path string) (*Library, error) {
 	if _, err := db.Exec(transcriptSchema); err != nil {
 		return nil, err
 	}
+	for _, stmt := range cueSchema {
+		if _, err := db.Exec(stmt); err != nil {
+			return nil, err
+		}
+	}
 	return &Library{db: db}, nil
 }
 
@@ -138,6 +145,24 @@ const transcriptSchema = `
 		model TEXT NOT NULL DEFAULT '',
 		generated_at REAL NOT NULL
 	)`
+
+// cueSchema is the dialogue: every line of a generated transcript, with the
+// seconds it is said between, and an FTS5 index over the words. The cues
+// table is the one that answers WHEN (typed columns a player can seek by);
+// the index answers WHICH, and the two are kept in step by rowid inside one
+// transaction — an external-content index would have to be told the old text
+// to forget a row, and a transcript is rewritten whole or not at all.
+var cueSchema = []string{
+	`CREATE TABLE IF NOT EXISTS cues (
+		id INTEGER PRIMARY KEY,
+		item_id INTEGER NOT NULL,
+		start REAL NOT NULL,
+		end REAL NOT NULL,
+		text TEXT NOT NULL
+	)`,
+	`CREATE INDEX IF NOT EXISTS cues_by_item ON cues(item_id)`,
+	`CREATE VIRTUAL TABLE IF NOT EXISTS cues_fts USING fts5(text, item_id UNINDEXED)`,
+}
 
 // metaSchema holds named monotonic counters. feed_seq is the single change
 // counter (bumped once per written row, inside the writing transaction);
@@ -407,8 +432,11 @@ func (l *Library) DeleteMissing(present map[string]bool) (int64, error) {
 			return 0, err
 		}
 		// The generated transcript belonged to that file, not to the id the
-		// next scan may hand to another one.
+		// next scan may hand to another one — and neither did its dialogue.
 		if _, err := tx.Exec(`DELETE FROM transcripts WHERE item_id=?`, id); err != nil {
+			return 0, err
+		}
+		if err := deleteCues(tx, id); err != nil {
 			return 0, err
 		}
 	}
@@ -618,6 +646,121 @@ func (l *Library) Transcripts() (map[int64]Transcript, error) {
 		out[t.ItemID] = t
 	}
 	return out, rows.Err()
+}
+
+// Cue is one line of dialogue: which file says it, when, and the words.
+// The transcription stage parses them out of the WebVTT it just wrote
+// (internal/pipeline.ParseVTT) and they are what a dialogue search matches.
+type Cue struct {
+	ItemID int64   `json:"item_id"`
+	Start  float64 `json:"start"`
+	End    float64 `json:"end"`
+	Text   string  `json:"text"`
+}
+
+// SetCues replaces one item's dialogue. A transcript is written whole, so
+// its cues are too: the old rows go and the new ones land in one
+// transaction, and the index never disagrees with the table.
+func (l *Library) SetCues(itemID int64, cues []Cue) error {
+	tx, err := l.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if err := deleteCues(tx, itemID); err != nil {
+		return err
+	}
+	for _, c := range cues {
+		var id int64
+		if err := tx.QueryRow(`
+			INSERT INTO cues (item_id, start, end, text) VALUES (?, ?, ?, ?)
+			RETURNING id`, itemID, c.Start, c.End, c.Text).Scan(&id); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`INSERT INTO cues_fts (rowid, text, item_id) VALUES (?, ?, ?)`,
+			id, c.Text, itemID); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+func deleteCues(q execQueryer, itemID int64) error {
+	if _, err := q.Exec(`DELETE FROM cues_fts WHERE item_id=?`, itemID); err != nil {
+		return err
+	}
+	_, err := q.Exec(`DELETE FROM cues WHERE item_id=?`, itemID)
+	return err
+}
+
+// CueCount is how many lines of dialogue one item has, which is the whole of
+// what a document needs to decide whether it can be searched.
+func (l *Library) CueCount(itemID int64) (int, error) {
+	var n int
+	err := l.db.QueryRow(`SELECT COUNT(*) FROM cues WHERE item_id=?`, itemID).Scan(&n)
+	return n, err
+}
+
+// SearchCues matches words against the dialogue: the whole library when
+// itemID is 0, one file's lines otherwise. It answers the best `limit` of
+// them — best first, then in the order they are spoken so two runs of the
+// same search read the same — and how many there were altogether, because a
+// search that matched two hundred lines is worth narrowing.
+//
+// The query is FTS5's, spelled by CueMatch: a person types words, not a
+// grammar.
+func (l *Library) SearchCues(q string, itemID int64, limit int) ([]Cue, int, error) {
+	match := CueMatch(q)
+	if match == "" || limit <= 0 {
+		return nil, 0, nil
+	}
+	where := `cues_fts MATCH ?`
+	args := []any{match}
+	if itemID != 0 {
+		where += ` AND c.item_id=?`
+		args = append(args, itemID)
+	}
+	var total int
+	if err := l.db.QueryRow(`
+		SELECT COUNT(*) FROM cues_fts JOIN cues c ON c.id=cues_fts.rowid
+		WHERE `+where, args...).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+	rows, err := l.db.Query(`
+		SELECT c.item_id, c.start, c.end, c.text
+		FROM cues_fts JOIN cues c ON c.id=cues_fts.rowid
+		WHERE `+where+`
+		ORDER BY rank, c.item_id, c.start
+		LIMIT ?`, append(args, limit)...)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+	var out []Cue
+	for rows.Next() {
+		var c Cue
+		if err := rows.Scan(&c.ItemID, &c.Start, &c.End, &c.Text); err != nil {
+			return nil, 0, err
+		}
+		out = append(out, c)
+	}
+	return out, total, rows.Err()
+}
+
+// CueMatch turns what a person typed into an FTS5 query, and it is the only
+// place that grammar is spelled. The words are taken as a PHRASE — dialogue
+// is looked for the way it is said — with the last one a prefix, so a search
+// answers while it is still being typed. Everything that is not a letter or
+// a digit is a separator: a quote or a bracket typed into the box would
+// otherwise be FTS5 syntax rather than a word.
+func CueMatch(q string) string {
+	words := strings.FieldsFunc(q, func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
+	})
+	if len(words) == 0 {
+		return ""
+	}
+	return `"` + strings.Join(words, " ") + `"*`
 }
 
 // OverrideIdentity persists a user correction; scans will never undo it.

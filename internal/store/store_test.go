@@ -583,3 +583,88 @@ func TestTranscriptRoundtrip(t *testing.T) {
 		t.Error("a surviving item lost its transcript row")
 	}
 }
+
+// The dialogue: written whole, matched by words, and gone with the file.
+func TestCues(t *testing.T) {
+	l := openTestLibrary(t)
+	if err := l.UpsertBatch([]Item{
+		{ObjectKey: "a.mkv", ETag: "e1"},
+		{ObjectKey: "b.mkv", ETag: "e2"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	items, err := l.ListItems()
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, b := items[0].ID, items[1].ID
+
+	if err := l.SetCues(a, []Cue{
+		{ItemID: a, Start: 61, End: 64, Text: "He took the job in New York."},
+		{ItemID: a, Start: 300, End: 302.5, Text: "Bears. Beets. Battlestar Galactica."},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := l.SetCues(b, []Cue{
+		{ItemID: b, Start: 10, End: 12, Text: "The job is yours."},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	got, total, err := l.SearchCues("job", 0, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != 2 || len(got) != 2 {
+		t.Fatalf("\"job\" matched %d lines (%d returned), want 2", total, len(got))
+	}
+	// A phrase is looked for the way it is said, and the last word is still
+	// being typed.
+	got, _, err = l.SearchCues("took the jo", 0, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].ItemID != a || got[0].Start != 61 || got[0].End != 64 {
+		t.Fatalf("the phrase matched %+v", got)
+	}
+	// One file's own lines, which is what the in-page finder asks for.
+	got, total, err = l.SearchCues("job", b, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != 1 || len(got) != 1 || got[0].ItemID != b {
+		t.Fatalf("one file's lines = %+v (total %d)", got, total)
+	}
+	// A search says how many it matched even when it answers fewer.
+	if got, total, err = l.SearchCues("the", 0, 1); err != nil || total != 2 || len(got) != 1 {
+		t.Fatalf("\"the\" answered %d of %d lines, want 1 of 2 (%v)", len(got), total, err)
+	}
+	// Words nobody said, and a box with nothing but punctuation in it.
+	for _, q := range []string{"parachute", "  ", `"`} {
+		if got, total, err := l.SearchCues(q, 0, 20); err != nil || total != 0 || got != nil {
+			t.Errorf("%q matched %+v (total %d, err %v)", q, got, total, err)
+		}
+	}
+
+	// Transcribed again: the lines are replaced, not doubled.
+	if err := l.SetCues(a, []Cue{{ItemID: a, Start: 5, End: 7, Text: "The job, again."}}); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := l.CueCount(a); err != nil || n != 1 {
+		t.Fatalf("re-transcribed file has %d lines, want 1 (%v)", n, err)
+	}
+	if _, total, err := l.SearchCues("job", 0, 20); err != nil || total != 2 {
+		t.Fatalf("\"job\" matched %d lines after a re-transcribe, want 2 (%v)", total, err)
+	}
+
+	// The object is gone, and so are the words it said.
+	if _, err := l.DeleteMissing(map[string]bool{"b.mkv": true}); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := l.CueCount(a); err != nil || n != 0 {
+		t.Fatalf("a deleted item kept %d lines (%v)", n, err)
+	}
+	if _, total, err := l.SearchCues("job", 0, 20); err != nil || total != 1 {
+		t.Fatalf("\"job\" matched %d lines after a deletion, want 1 (%v)", total, err)
+	}
+}

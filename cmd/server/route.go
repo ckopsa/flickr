@@ -315,7 +315,7 @@ func (s *server) handleRouteDoc(w http.ResponseWriter, r *http.Request) {
 	case "item":
 		doc = s.itemEnvelope(*target.Item, works.ByItem(ws)[target.Item.ID], true, positions)
 	case "search":
-		doc = searchEnvelope(target.Query, ws)
+		doc = s.searchEnvelope(target.Query, ws)
 	default:
 		doc = libraryEnvelope()
 	}

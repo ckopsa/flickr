@@ -1364,6 +1364,8 @@
   // identity is the one so far, and it is why the button alone could never
   // work — a POST with no body says nothing.
   async function onSubmit(e) {
+    const finder = e.target.closest('#lines-form');
+    if (finder) { e.preventDefault(); await findLines(finder.dataset.href); return; }
     const form = e.target.closest('[data-act]');
     if (!form || form.tagName !== 'FORM') return;
     e.preventDefault();
@@ -1380,6 +1382,25 @@
     // The answer changed what every document says about this thing.
     forget();
     applyRoute();
+  }
+
+  // --- finding a line ----------------------------------------------------------
+  //
+  // The item's own `lines` relation, asked what a person typed: the words
+  // ride as the query the relation is spelled with, the way the hash rides on
+  // the route action. What comes back is a document of hits, drawn by the
+  // renderer that draws the dialogue row of a search — a tap on one is a
+  // passage, and the page it names plays the scene and stops.
+  async function findLines(href) {
+    const box = $('lines-hits');
+    if (!href || !box) return;
+    const q = ($('lines-q') && $('lines-q').value.trim()) || '';
+    if (!q) { box.innerHTML = ''; return; }
+    const sep = href.includes('?') ? '&' : '?';
+    let found;
+    try { found = await api(href + sep + 'q=' + encodeURIComponent(q)); }
+    catch (e) { note(e instanceof Problem ? e.detail : String(e.message || e)); return; }
+    box.innerHTML = R.lines(found);
   }
 
   // The body one form sends: a field per input, typed as the sketch drew it —

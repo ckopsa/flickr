@@ -17,8 +17,12 @@ package main
 // place to go, and what may be done there is that document's answer.
 
 import (
+	"fmt"
+	"log"
+	"math"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 
 	"flickr/internal/hyper"
@@ -35,7 +39,8 @@ const searchMax = 20
 // searchBands is the groups a search answers and the order they are read
 // in, top to bottom — works first, because a title is what most searches
 // are for, then the artists whose shelf is a title of a kind, then the
-// members a title would never have found.
+// members a title would never have found — and last the DIALOGUE, which is
+// not a thing in the library at all but a moment inside one.
 var searchBands = []band{
 	{Key: "works", Title: "Titles"},
 	{Key: "artists", Title: "Artists"},
@@ -43,7 +48,13 @@ var searchBands = []band{
 	{Key: "tracks", Title: "Tracks"},
 	{Key: "parts", Title: "Parts"},
 	{Key: "books", Title: "Books"},
+	lineBand,
 }
+
+// lineBand is the dialogue row. It is named apart because it is the one
+// group searchLibrary does not fill: the words are in an index, not in the
+// works, so searchEnvelope adds it — under this heading, in this place.
+var lineBand = band{Key: "lines", Title: "Dialogue"}
 
 // searchGroup is one headed row of results: how many matched, and the first
 // searchMax of them.
@@ -194,11 +205,89 @@ func itemAuthor(it store.Item) string {
 	return it.Identity.Author
 }
 
+// ── the dialogue ────────────────────────────────────────────────────────
+//
+// What was SAID, which no title carries: the transcription stage parses
+// every generated WebVTT into cues (store.SetCues) and this is the read.
+// A hit is one line — the words, the file that says them, and the seconds
+// they are said between — answered as the same member envelope a search
+// result is, plus a PASSAGE: the scene around the line, which the client
+// spells as `#/item/<id>?t=…&end=…` and the player then plays and stops.
+//
+// cueLead is how much of the scene comes with the line, either side of it.
+// A line landed on exactly starts mid-breath; two seconds is the run-up a
+// person needs to hear what is being answered.
+const cueLead = 2.0
+
+// linesHref is one file's dialogue search, as an address.
+func linesHref(id int64) string { return itemHref(id) + "/lines" }
+
+// lineHits is the cues as documents, against the works this profile may
+// see: a cue whose file is not in them (a kid's shelf, a deleted item) is
+// not a result, which is how the dialogue keeps the same fences as the
+// shelves.
+func lineHits(cues []store.Cue, ws []works.Work) []*hyper.Envelope {
+	byItem := works.ByItem(ws)
+	out := make([]*hyper.Envelope, 0, len(cues))
+	for _, c := range cues {
+		it := itemByID(ws, c.ItemID)
+		if it == nil {
+			continue
+		}
+		doc := searchHit(*it, byItem[c.ItemID])
+		doc.Field("start", c.Start).
+			Field("end", c.End).
+			Field("text", c.Text).
+			// The scene, not the instant: `t` and `end` are what the hash
+			// carries and what the player stops at.
+			Field("passage", map[string]float64{
+				"t": math.Max(0, c.Start-cueLead), "end": c.End + cueLead,
+			})
+		out = append(out, doc)
+	}
+	return out
+}
+
+// searchLines is the dialogue half of a search: the whole library when
+// itemID is 0, one file's own lines otherwise. A library that cannot be
+// asked (a bare test server) has no dialogue, which is an answer.
+func (s *server) searchLines(q string, itemID int64) ([]store.Cue, int) {
+	if s.library == nil || strings.TrimSpace(q) == "" {
+		return nil, 0
+	}
+	cues, total, err := s.library.SearchCues(q, itemID, searchMax)
+	if err != nil {
+		log.Printf("dialogue search %q: %v", q, err)
+		return nil, 0
+	}
+	return cues, total
+}
+
+// hasLines says whether one item has dialogue to search — what decides
+// whether its document offers the finder at all.
+func (s *server) hasLines(id int64) bool {
+	if s.library == nil {
+		return false
+	}
+	n, err := s.library.CueCount(id)
+	if err != nil {
+		log.Printf("cue count for item %d: %v", id, err)
+		return false
+	}
+	return n > 0
+}
+
 // searchEnvelope is the document, apart from the request that asked for it:
 // the route resolver answers a #/search/<q> hash with the very same one.
-func searchEnvelope(q string, ws []works.Work) *hyper.Envelope {
+func (s *server) searchEnvelope(q string, ws []works.Work) *hyper.Envelope {
 	q = strings.TrimSpace(q)
 	groups := searchLibrary(q, ws)
+	if cues, total := s.searchLines(q, 0); total > 0 {
+		if items := lineHits(cues, ws); len(items) > 0 {
+			groups = append(groups, searchGroup{Key: lineBand.Key,
+				Title: lineBand.Title, Count: total, Items: items})
+		}
+	}
 	n := 0
 	for _, g := range groups {
 		n += g.Count
@@ -220,5 +309,35 @@ func (s *server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		hyper.WriteProblem(w, serverProblem(err))
 		return
 	}
-	hyper.WriteDoc(w, http.StatusOK, searchEnvelope(r.URL.Query().Get("q"), ws))
+	hyper.WriteDoc(w, http.StatusOK, s.searchEnvelope(r.URL.Query().Get("q"), ws))
+}
+
+// handleItemLines is GET /api/items/{id}/lines?q=… — the same hits, inside
+// one file, for the finder on its page. It is the item's own `lines`
+// relation; a file with no transcript never offers it, and asking anyway is
+// an empty answer rather than a refusal.
+func (s *server) handleItemLines(w http.ResponseWriter, r *http.Request) {
+	raw := r.PathValue("id")
+	id, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		hyper.WriteProblem(w, hyper.Refuse(http.StatusBadRequest, "bad-item-id",
+			"That is not an item id", fmt.Sprintf("%q is not a number", raw)).
+			WithRemedy("follow an item's link rather than composing its address",
+				&hyper.Link{Href: "/api/library", Title: "Library"}))
+		return
+	}
+	ws, err := s.worksFor(r)
+	if err != nil {
+		hyper.WriteProblem(w, serverProblem(err))
+		return
+	}
+	q := strings.TrimSpace(r.URL.Query().Get("q"))
+	cues, total := s.searchLines(q, id)
+	items := lineHits(cues, ws)
+	doc := hyper.Doc(linesHref(id)+"?q="+url.QueryEscape(q), "lines", "Find in dialogue").
+		Field("query", q).
+		Field("count", total).
+		Field("items", items).
+		Link("item", itemHref(id), "")
+	hyper.WriteDoc(w, http.StatusOK, doc)
 }

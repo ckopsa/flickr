@@ -252,6 +252,20 @@ a handful of architectural decisions (see design notes below):
    builds both argvs purely and takes the runner as a seam, so the whole flow
    is tested without a binary — `WHISPER_LANGUAGE` names a language when the
    library is in one, and otherwise whisper's own detection fills the row in.
+19. **Find the line, land on the scene** — a transcript is the only place the
+   WORDS of a film are written down, so at transcript time the WebVTT is
+   parsed back into cues (`pipeline.ParseVTT`, pure) and stored in `library.db`
+   (`cues`: item id, start, end, text) behind an FTS5 index. `GET /api/search`
+   then grows a **Dialogue** row — up to twenty lines, each answered as the
+   same member envelope every other hit is, plus `text`, the seconds it is
+   said between, and a `passage` of the scene around it (two seconds either
+   side). A tap opens `#/item/<id>?t=…&end=…`, which is the passage grammar
+   the player already stops at: the search does not seek, it hands over a
+   scene. The item's own document carries `links.lines`
+   (`GET /api/items/{id}/lines?q=`) where there is dialogue to search, and its
+   page draws a *Find in dialogue* box over the same rows. A file nobody has
+   transcribed offers no relation, so the box is never drawn over nothing, and
+   a cue whose file this profile may not see is not a result.
 
 ## Library layout
 

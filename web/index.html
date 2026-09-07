@@ -305,6 +305,20 @@
   #detail-extras a { background: #23252d; color: #c5c8d4; border: 1px solid #3a3d47;
     border-radius: 6px; padding: 6px 12px; font-size: 13px; text-decoration: none; }
   #detail-extras a:hover { background: #2c2f38; }
+  /* Find in dialogue: the box over a file's own words, and the lines it
+     finds — the same rows the search results draw under their heading. */
+  #detail-lines { margin: 26px 0 0; border-top: 1px solid #2a2c33; padding-top: 12px; max-width: 700px; }
+  #lines-form { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  #lines-form label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+  #lines-q { flex: 1; min-width: 180px; }
+  .lines { display: flex; flex-direction: column; gap: 4px; margin-top: 12px; }
+  .lines-empty { margin-top: 12px; font-size: 12px; color: var(--muted); }
+  .line { display: flex; gap: 12px; align-items: baseline; text-align: left; width: 100%;
+    background: #23252d; border: 1px solid #3a3d47; border-radius: 6px; padding: 8px 12px; }
+  .line:hover { background: #2c2f38; }
+  .line-text { flex: 1; font-size: 13px; color: #e6e8ef; }
+  .line-where { font-size: 11px; color: var(--muted); }
+  .line-time { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
   /* the item page's Details disclosure: what the FILE is, folded away */
   #detail-details { margin: 26px 0 0; border-top: 1px solid #2a2c33; padding-top: 12px; max-width: 700px; }
   #detail-details summary { font-size: 11px; color: var(--muted); cursor: pointer; text-transform: uppercase; letter-spacing: .06em; }

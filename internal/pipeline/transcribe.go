@@ -10,12 +10,16 @@ package pipeline
 // a whisper binary, an ffmpeg, or a byte of audio.
 
 import (
+	"bufio"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -123,4 +127,106 @@ func (t *Transcriber) Transcribe(ctx context.Context, inputURL, destPath string)
 		lang = DetectedLanguage(out)
 	}
 	return lang, os.Rename(vtt, destPath)
+}
+
+// ── the cues, read back ─────────────────────────────────────────────────
+//
+// The transcript is written as WebVTT because that is what a <track> reads.
+// It is also the only place the words of a film are written down, so it is
+// read back here into cues a search index can hold: ParseVTT is pure — bytes
+// in, cues out — and the stage that stores them owns no grammar of its own.
+
+// Cue is one line of dialogue and when it is said, in seconds.
+type Cue struct {
+	Start float64
+	End   float64
+	Text  string
+}
+
+// cueTiming matches a WebVTT timing line: "00:01:02.500 --> 00:01:05.000",
+// with or without the hour, and with whatever cue settings follow the end.
+var cueTiming = regexp.MustCompile(`^((?:\d+:)?\d{1,2}:\d{1,2}(?:[.,]\d{1,3})?)\s*-->\s*((?:\d+:)?\d{1,2}:\d{1,2}(?:[.,]\d{1,3})?)`)
+
+// vttTag is the markup a cue may carry — <v Speaker>, <i>, <00:00:01.000> —
+// none of which is a word anybody searched for.
+var vttTag = regexp.MustCompile(`</?[^>]*>`)
+
+// ParseVTT reads a WebVTT file into its cues. A cue with no words, or one
+// whose timing line does not parse, is not a line of dialogue and is
+// dropped; NOTE, STYLE and REGION blocks are not cues at all. The lines of
+// one cue are joined with a space, because a search is over a sentence and
+// WebVTT breaks a sentence wherever it fits on screen.
+func ParseVTT(r io.Reader) []Cue {
+	var out []Cue
+	var cur *Cue
+	var text []string
+	flush := func() {
+		if cur != nil {
+			if s := strings.TrimSpace(strings.Join(text, " ")); s != "" {
+				cur.Text = s
+				out = append(out, *cur)
+			}
+		}
+		cur, text = nil, nil
+	}
+	sc := bufio.NewScanner(r)
+	sc.Buffer(make([]byte, 0, 64*1024), 1<<20) // one line, generously
+	skipping := false                          // inside a block that is not a cue
+	for sc.Scan() {
+		line := strings.TrimRight(strings.TrimPrefix(sc.Text(), "\ufeff"), "\r")
+		if strings.TrimSpace(line) == "" {
+			flush()
+			skipping = false
+			continue
+		}
+		if skipping {
+			continue
+		}
+		if m := cueTiming.FindStringSubmatch(line); m != nil {
+			flush()
+			start, okStart := vttSeconds(m[1])
+			end, okEnd := vttSeconds(m[2])
+			if okStart && okEnd {
+				cur = &Cue{Start: start, End: end}
+			}
+			continue
+		}
+		if cur == nil {
+			// Before any timing line: the header, a block that is not a cue,
+			// or the cue's own identifier — none of them dialogue.
+			switch {
+			case strings.HasPrefix(line, "WEBVTT"), strings.HasPrefix(line, "NOTE"),
+				strings.HasPrefix(line, "STYLE"), strings.HasPrefix(line, "REGION"):
+				skipping = true
+			}
+			continue
+		}
+		if s := strings.TrimSpace(vttTag.ReplaceAllString(line, "")); s != "" {
+			text = append(text, s)
+		}
+	}
+	flush()
+	return out
+}
+
+// vttSeconds reads one WebVTT timestamp — "mm:ss.mmm" or "hh:mm:ss.mmm",
+// with a comma for the decimal point where an SRT-minded writer used one.
+func vttSeconds(s string) (float64, bool) {
+	parts := strings.Split(strings.Replace(s, ",", ".", 1), ":")
+	if len(parts) < 2 || len(parts) > 3 {
+		return 0, false
+	}
+	total := 0.0
+	for _, p := range parts[:len(parts)-1] {
+		n, err := strconv.Atoi(p)
+		if err != nil {
+			return 0, false
+		}
+		total = total*60 + float64(n)
+	}
+	sec, err := strconv.ParseFloat(parts[len(parts)-1], 64)
+	if err != nil {
+		return 0, false
+	}
+	return total*60 + sec, true
 }

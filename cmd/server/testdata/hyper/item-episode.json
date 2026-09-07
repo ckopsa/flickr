@@ -72,6 +72,10 @@
     "backdrop": {
       "href": "/api/items/9/backdrop"
     },
+    "lines": {
+      "href": "/api/items/9/lines",
+      "title": "Find in dialogue"
+    },
     "poster": {
       "href": "/api/items/9/poster"
     },
