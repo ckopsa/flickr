@@ -392,6 +392,7 @@ let endFired = false;           // one natural-end per stream load (re-armed on 
 // scene replayed for a talk is not where the person is in the film — the
 // saved place belongs to normal viewing.
 let passage = null;
+let swReloadPending = false; // a new service worker took control mid-stream; reload when the player closes
 let passageEndFired = false;    // the end bound (or the run's last item) has been reached and the panel shown
 let passageNaturalEnd = false;  // …by the item ending on its own rather than by the `end` bound
 // making a passage (the producer side; logic in passage.js): the in/out
@@ -1384,6 +1385,7 @@ function closePlayer() {
   $('player-pane').hidden = true;
   $('detail-info').hidden = false;
   renderContinueWatching(); // playback session ended: refresh resume points
+  if (swReloadPending) location.reload(); // the deploy that landed mid-stream, taken now
 }
 
 $('detail-back').onclick = () => {
@@ -2037,7 +2039,20 @@ $('scan').onclick = async () => {
 // boot
 // ---------------------------------------------------------------------------
 if ('serviceWorker' in navigator) {
+  // The shell is cache-first (sw.js), so the first visit after a deploy runs
+  // the OLD index.html while the new worker installs behind it — and a deep
+  // link the old router does not know (a passage's `?ep=…`, 2026-09-07)
+  // fell through to the root. When a new worker takes control of a page an
+  // old one was serving, reload once, unless the player is mid-stream: a
+  // film should not restart because a deploy landed. First-ever install
+  // (no previous controller) does not reload.
+  const hadController = !!navigator.serviceWorker.controller;
   navigator.serviceWorker.register('/sw.js').catch(e => console.warn('SW registration failed', e));
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!hadController) return;
+    if (currentItem && !$('player-pane').hidden) { swReloadPending = true; return; }
+    location.reload();
+  });
 }
 window.addEventListener('beforeunload', stopSession);
 if (clientId) { $('profile-chip').textContent = '👤 ' + clientId; }
