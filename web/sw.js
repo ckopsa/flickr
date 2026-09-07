@@ -20,7 +20,12 @@
 // forgetting bit: the shell is cache-first and this file is the only thing
 // the browser re-checks, so EVERY change to a SHELL file needs a bump here
 // or no browser ever sees it. A CI check for that is worth a bead.
-const CACHE = 'flickr-shell-v11';
+// v12: the precache and every refill are fetched with cache: 'reload',
+// bypassing the browser's HTTP cache — which, with no Cache-Control
+// from the server, had kept a weeks-old index.html "fresh" and fed it
+// straight into v7 through v11 (2026-09-07). The server now says
+// no-cache too; this is the belt to that suspenders.
+const CACHE = 'flickr-shell-v12';
 const SHELL = ['/', '/index.html', '/passage.js', '/audio.js', '/audio.css', '/reader.js', '/pdfreader.js',
                '/vendor/jszip.min.js', '/vendor/epub.min.js',
                '/vendor/pdf.min.mjs', '/vendor/pdf.worker.min.mjs',
@@ -28,7 +33,9 @@ const SHELL = ['/', '/index.html', '/passage.js', '/audio.js', '/audio.css', '/r
 
 self.addEventListener('install', (e) => {
   e.waitUntil(
-    caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting())
+    caches.open(CACHE)
+      .then((c) => c.addAll(SHELL.map((u) => new Request(u, { cache: 'reload' }))))
+      .then(() => self.skipWaiting())
   );
 });
 
@@ -52,7 +59,7 @@ self.addEventListener('fetch', (e) => {
   if (!SHELL.includes(path)) return;
   e.respondWith(
     caches.match(req).then(
-      (hit) => hit || fetch(req).then((resp) => {
+      (hit) => hit || fetch(new Request(req, { cache: 'reload' })).then((resp) => {
         if (resp.ok) {
           const copy = resp.clone();
           caches.open(CACHE).then((c) => c.put(req, copy));
