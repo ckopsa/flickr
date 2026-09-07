@@ -60,18 +60,66 @@ This protocol applies when ending a Beads implementation workflow. It is subordi
 
 ## Build & Test
 
-_Add your build and test commands here_
+Plain Go, no external services: the tests never shell out (`os/exec`
+only lives in runtime paths — pipeline sessions, hardware-accel
+detection, the scanner's ffprobe call), so no ffmpeg, no MinIO and no
+`.env` are needed to run them.
 
 ```bash
-# Example:
-# npm install
-# npm test
+gofmt -l .             # must print nothing
+go vet ./...
+go build ./...
+go test -count=1 ./...
 ```
+
+CI (`.github/workflows/tests.yml`) runs exactly those four steps on
+every push to `master`, every pull request and on demand, and its
+`test` check is the merge gate: a red `test` blocks the merge; fix and
+push rather than waiting. Running the four commands locally before
+pushing is cheap (seconds) and expected. `.github/workflows/
+beads-sync.yml` carries a committed `.beads/issues.jsonl` into the Dolt
+remote on push to `master` — see the header of that file and the bd
+section above before relying on it.
 
 ## Architecture Overview
 
-_Add a brief overview of your project architecture_
+- `cmd/server/` — the HTTP server: routes under `/api/...`, serves
+  `web/`, owns the scan schedule, the transcode-session reaper and the
+  post-scan enrichment and trickplay stages.
+- `internal/decision/` — `Decide(media, caps, policy)`: the pure,
+  side-effect-free playback decision (direct play / remux / transcode)
+  with a trace answering "why did this transcode?" for every verdict.
+- `internal/pipeline/` — the only package that knows FFmpeg exists:
+  `BuildArgs` (job → argv) is pure; sessions own the subprocess and HLS
+  output; hardware-accel detection, subtitle and trickplay extraction
+  live here too.
+- `internal/scanner/` — incremental, job-based library scanning (list →
+  diff etags → probe changed objects → batch-write → reconcile) plus
+  `Identify`, the deterministic, versioned object-key → identity rule.
+- `internal/store/`, `internal/tmdb/`, `internal/works/`,
+  `internal/model/` — split SQLite storage (`library.db` metadata,
+  `state.db` playback positions), TMDB enrichment as a separate
+  post-scan stage, the pure works/feed derivation, and the shared types.
+- `web/` — the vanilla-JS single-page UI (`index.html`), Cast receiver
+  page and PWA manifest/service worker; capability presets show the same
+  file direct-playing or transcoding per client.
+
+Start with `README.md`: its numbered list is the design rationale, item
+by item.
 
 ## Conventions & Patterns
 
-_Add your project-specific conventions here_
+- The interesting logic is pure functions, table-tested:
+  `decision.Decide`, `pipeline.BuildArgs`, `scanner.Identify` (and
+  `works` derivation). Add a case to the table before touching the
+  function; the tests pin contracts (filter order, seek-before-input,
+  copy paths), not implementation.
+- Identification never does I/O. `scanner.Identify` maps an object key
+  to an identity from the key alone; bumping `IdentityVersion` makes the
+  next scan recompute identities without a re-probe. Enrichment is a
+  separate stage keyed off identity, never folded into it.
+- FFmpeg stays behind `internal/pipeline`; the decision engine is
+  hardware-agnostic and encoder choice happens at that boundary.
+- The web UI is one vanilla-JS file (`web/index.html`) with no build
+  step, and `location.hash` is the single source of truth for
+  navigation — change the hash, never the view directly.
