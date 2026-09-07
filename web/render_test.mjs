@@ -169,6 +169,23 @@ test('a bar with no picture is still a bar, and a book gets none at all', () => 
   assert.equal(R.miniPlayer(null, {}), '');
 });
 
+// The bar's own controls are the device's — play/pause, +-30s — but ending
+// the sitting is the DOCUMENT's, so it is drawn from the session's stop action
+// and the kernel's delegate follows it exactly as the full chrome's Stop does.
+test('the bar can end the sitting without being opened back up', () => {
+  const doc = golden('session-play');
+  const html = R.miniPlayer(doc, {});
+  const stop = doc.actions.stop;
+  assert.ok(html.includes('data-act="stop"'), 'the bar draws the session\'s stop');
+  assert.ok(html.includes('data-href="' + stop.href + '"'), 'at the action\'s own address');
+  assert.ok(html.includes('data-method="' + stop.method + '"'), 'with the action\'s own method');
+  assert.ok(html.includes('>' + R.esc(stop.label) + '<'), 'labelled in the document\'s words');
+  // A session that does not afford stopping gets no button for it.
+  const held = JSON.parse(JSON.stringify(doc));
+  delete held.actions.stop;
+  assert.ok(!R.miniPlayer(held, {}).includes('data-act="stop"'));
+});
+
 test('a reading session has no player chrome at all', () => {
   assert.equal(R.session(golden('session-read'), {}), '');
   assert.equal(R.session(golden('session-read-pdf'), {}), '');

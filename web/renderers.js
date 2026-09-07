@@ -922,6 +922,10 @@
         '<button id="mini-back" title="Back 30s" aria-label="Back 30 seconds">⏪</button>' +
         '<button id="mini-play" title="Play/Pause" aria-label="Play/Pause">⏵</button>' +
         '<button id="mini-fwd" title="Forward 30s" aria-label="Forward 30 seconds">⏩</button>' +
+        // The three above are the DEVICE's and player.js answers them. This one
+        // is the document's: the session's own stop, said in the server's words,
+        // so a sitting can be ended from the bar without opening it back up.
+        control('stop', action(doc, 'stop'), { id: 'mini-stop' }) +
       '</div>' +
       '<div id="mini-device" hidden><div id="device-slot"></div></div>' +
       '<div id="mini-progress"><div id="mini-fill"></div></div>' +

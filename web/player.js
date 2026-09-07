@@ -38,6 +38,7 @@
   let baseUrl = location.origin;
   let remotePlayer = null, remoteController = null;
   let castLastState = null, castEndSuppressed = false;
+  let castPosition = 0;          // where the television got to, kept for the hand-back
   let endFired = false, passageEndFired = false, passageNaturalEnd = false;
   let selectedSubOrdinal = null, burnSubOrdinal = null, selectedAudioOrdinal = null;
   let trickplay = null, trickplayItemId = null;
@@ -162,8 +163,10 @@
           // between the two marks, and a grip at each end to drag. The chips
           // under the picture do the same thing with a keyboard.
           '<div id="clip-range" hidden><div id="clip-region" hidden></div>' +
-            '<div class="clip-handle" id="clip-in" aria-label="Clip start" hidden></div>' +
-            '<div class="clip-handle" id="clip-out" aria-label="Clip end" hidden></div></div>' +
+            '<div class="clip-handle" id="clip-in" aria-label="Clip start"' +
+              ' role="slider" tabindex="0" aria-valuemin="0" aria-valuenow="0" hidden></div>' +
+            '<div class="clip-handle" id="clip-out" aria-label="Clip end"' +
+              ' role="slider" tabindex="0" aria-valuemin="0" aria-valuenow="0" hidden></div></div>' +
           '<div id="thumb" hidden><div id="thumb-img"></div><div id="thumb-time"></div></div></div>' +
         '<div id="timebar"><span id="t-now">0:00</span><span id="t-total">0:00</span></div>' +
         // What the clip says, in the server's own words, and the one button
@@ -216,8 +219,10 @@
       if (old) old.remove();
       element.prepend(title);
     }
-    // The immersive layout belongs to the PICTURE: a record has none to fill.
-    document.body.classList.toggle('theatre', !!item && item.medium !== 'audio');
+    // The immersive layout belongs to the PICTURE: a record has none to fill,
+    // and neither does the remote — while the television has the picture this
+    // page is a card of controls, which the theatre bars would sit on top of.
+    document.body.classList.toggle('theatre', inTheatre());
     renderChapters();
     renderMarksOnScrub();
     paintClip();
@@ -240,6 +245,10 @@
   function onMiniClick(e) {
     const b = e.target.closest && e.target.closest('button');
     if (!b) return;
+    // Stop is not the device's, it is the DOCUMENT's: leave the click alone so
+    // it reaches the kernel's delegate, which reads [data-act] before the
+    // bar's own tap and so ends the sitting instead of expanding it.
+    if (b.dataset && b.dataset.act) return;
     e.stopPropagation();
     if (b.id === 'mini-play') togglePlay();
     else if (b.id === 'mini-back') seekTo(position() - 30);
@@ -259,6 +268,8 @@
   // --- clocks ------------------------------------------------------------------
 
   function casting() { return !!(remotePlayer && remotePlayer.isConnected); }
+  // Theatre mode is for a picture on THIS page: not a record, not a remote.
+  function inTheatre() { return !!item && item.medium !== 'audio' && !casting(); }
   function duration() {
     return (item && item.duration_seconds) ||
       (item && item.media_info && item.media_info.duration_seconds) || (video && video.duration) || 0;
@@ -715,6 +726,11 @@
       if (b[kind] == null) continue;
       h.style.left = pct(b[kind]) + '%';
       h.title = (kind === 'in' ? 'Clip starts at ' : 'Clip ends at ') + fmtTime(b[kind]);
+      // It is a slider, so it says where it is: seconds for the machine, the
+      // clock for the person listening to it.
+      h.setAttribute('aria-valuemax', String(Math.round(dur)));
+      h.setAttribute('aria-valuenow', String(Math.round(b[kind])));
+      h.setAttribute('aria-valuetext', fmtTime(b[kind]));
     }
     const region = $('clip-region');
     if (!region) return;
@@ -823,6 +839,29 @@
         postMark(kind, at);
       });
       h.addEventListener('pointercancel', () => { clipDrag = null; hideThumb(); paintClip(); });
+      // The same drag, done with the keys: Left and Right walk the grip a
+      // second at a time (Shift: ten), and the key coming up posts the mark
+      // exactly as a finger coming off does. The player's own arrows seek, so
+      // a grip that has the focus keeps the key to itself.
+      h.addEventListener('keydown', e => {
+        const dir = e.key === 'ArrowRight' ? 1 : e.key === 'ArrowLeft' ? -1 : 0;
+        if (!dir || e.ctrlKey || e.metaKey || e.altKey) return;
+        e.preventDefault();
+        e.stopPropagation();
+        const at = clipDrag && clipDrag.kind === kind ? clipDrag.seconds : (clipBounds()[kind] || 0);
+        const dur = duration();
+        const moved = at + dir * (e.shiftKey ? 10 : 1);
+        clipDrag = { kind, seconds: Math.max(0, dur > 0 ? Math.min(dur, moved) : moved) };
+        paintClip();
+      });
+      h.addEventListener('keyup', e => {
+        if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+        if (!clipDrag || clipDrag.kind !== kind) return;
+        const at = clipDrag.seconds;
+        clipDrag = null;
+        e.stopPropagation();
+        postMark(kind, at);
+      });
     }
   }
 
@@ -983,6 +1022,8 @@
   // threw away. An iPhone allows no element but the video to go full, and
   // lends its own player instead; that is the fallback, not the default.
   function toggleFullscreen() {
+    // Nothing here to fill the screen: the picture is on the other device.
+    if (casting()) return;
     if (document.fullscreenElement) { document.exitFullscreen(); return; }
     if (element && element.requestFullscreen) element.requestFullscreen().catch(() => {});
     else if (video && video.webkitEnterFullscreen) video.webkitEnterFullscreen();
@@ -1072,7 +1113,9 @@
     element.classList.remove('idle');
     clearTimeout(idleTimer);
     idleTimer = null;
-    if (!isPlaying()) return;
+    // Nothing fades on a remote: the controls ARE the page while the picture
+    // is on the television, and a still pointer means nothing there.
+    if (casting() || !isPlaying()) return;
     idleTimer = setTimeout(() => { if (isPlaying()) element.classList.add('idle'); }, IDLE_MS);
   }
 
@@ -1308,6 +1351,9 @@
     }
     syncPlayButton();
     updatePositionState();
+    // The receiver's clock, copied while it is still readable: after the
+    // disconnect there is no remote player left to ask (onCastConnectionChanged).
+    if (casting()) { const p = position(); if (p > 0) castPosition = p; }
     // A stop the media element never announced — a cast device's pause, a
     // stream that ran out — lights the room back up all the same.
     if (element.classList.contains('idle') && !isPlaying()) wake();
@@ -1496,14 +1542,22 @@
   function onCastConnectionChanged() {
     document.body.classList.toggle('casting', casting());
     if (casting()) {
+      castPosition = 0; // a fresh sitting on the television; the tick fills it in
       const s = root.cast.framework.CastContext.getInstance().getCurrentSession();
       const dev = s && s.getCastDevice();
       if ($('cast-device')) $('cast-device').textContent = (dev && dev.friendlyName) || 'Chromecast';
       paintCastRemote();
       video.pause();
     }
+    // The room changed: theatre mode follows the picture, and the chrome comes
+    // back up (and stays up, while this page is the remote).
+    document.body.classList.toggle('theatre', inTheatre());
+    wake();
     if (item) {
-      const pos = position();
+      // Coming back from the television, position() reads the LOCAL video —
+      // paused where the cast began. Where the sitting actually got to is the
+      // last place the receiver reported, which the tick kept.
+      const pos = casting() ? position() : (castPosition || position());
       const act = R.actionOf(item, 'play');
       if (act) startPlayback(act, pos > 5 ? pos : 0);
     }
