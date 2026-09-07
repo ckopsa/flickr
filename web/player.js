@@ -121,6 +121,8 @@
     ['Space / K', 'Play or pause'],
     ['← / →', 'Back 10s / forward 10s'],
     ['J / L', 'Back 30s / forward 30s'],
+    ['0 … 9', 'Jump to that tenth'],
+    ['. / ,', 'Frame forward / back, paused'],
     ['↑ / ↓', 'Volume'],
     ['M', 'Mute'],
     ['Shift+. / Shift+,', 'Faster / slower'],
@@ -1253,6 +1255,9 @@
     else if (k === 'ArrowUp') nudgeVolume(0.1);
     else if (k === 'ArrowDown') nudgeVolume(-0.1);
     else if (k === 'm') toggleMute();
+    else if (/^[0-9]$/.test(k)) seekTenth(Number(k));
+    else if (k === '.') stepFrame(1);
+    else if (k === ',') stepFrame(-1);
     else if (k === '>') stepRate(1);
     else if (k === '<') stepRate(-1);
     else if (k === 'f') toggleFullscreen();
@@ -1284,6 +1289,28 @@
     // the device's own and must not undo a choice made while it ran.
     if (sleepVolume != null) sleepVolume = v;
     if ($('vol')) $('vol').value = String(v);
+  }
+
+  // 0..9 land on that tenth of the file, the way YouTube's do: 0 is the start,
+  // 5 the middle. A file whose length nobody knows has no tenths to land on.
+  function seekTenth(n) {
+    const dur = duration();
+    if (!(dur > 0)) return;
+    const t = dur * n / 10;
+    seekRipple(t < position() ? 'left' : 'right', n * 10 + '%');
+    seekTo(t);
+  }
+  // A frame at a time, and only while paused: stepping through a picture that
+  // is already running is nothing anybody asked for. The rate is the file's
+  // own when the probe read one and 25 when it did not — the point is to step,
+  // not to land on an exact frame boundary, and a wrong guess is a hair out.
+  function frameSeconds() {
+    const fps = item && item.media_info && item.media_info.fps;
+    return 1 / (typeof fps === 'number' && fps > 0 ? fps : 25);
+  }
+  function stepFrame(dir) {
+    if (isPlaying()) return;
+    seekTo(position() + dir * frameSeconds());
   }
 
   // 'c' walks the subtitle select the way clicking through it would: Off, then
