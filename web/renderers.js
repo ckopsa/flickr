@@ -139,7 +139,10 @@
       ? '<div class="poster-wrap"><img loading="lazy" alt="" src="' + esc(art) + '"></div>'
       : '<div class="poster-wrap text-tile"><div class="tile-title">' + esc(title) +
         '</div><div class="tile-sub">' + esc(t.subtitle || t.tech || '') + '</div></div>';
-    return '<div class="' + esc(cls || 'card') + '" data-nav="' + esc(hashFor(t)) + '">' +
+    // A tile is a div, so the keyboard would walk straight past it: tabindex
+    // puts it in the tab order and the role says what activating it does.
+    return '<div class="' + esc(cls || 'card') + '" tabindex="0" role="link"' +
+      ' data-nav="' + esc(hashFor(t)) + '">' +
       wrap +
       '<div class="c-title">' + esc(title) + '</div>' +
       (t.subtitle ? '<div class="c-sub">' + esc(t.subtitle) + '</div>' : '') +
@@ -212,7 +215,7 @@
       // and the hash beside them says WHERE it is taken — at the item's own
       // page, whose document carries the place to pick up from.
       const act = action(en, 'resume');
-      return '<div class="cw-card"' +
+      return '<div class="cw-card" tabindex="0" role="button"' +
         (act ? ' data-act="resume" data-href="' + esc(act.href) + '"' +
                ' data-method="' + esc(act.method || 'POST') + '"' : '') +
         ' data-nav="' + esc(itemHash(en.id)) + '" data-autoplay="1">' +
@@ -243,7 +246,8 @@
       (m.duration_seconds ? '<div class="meta">' + esc(fmtTime(m.duration_seconds)) + '</div>' : '') +
       (m.overview ? '<div class="overview">' + esc(m.overview) + '</div>' : '');
     const cls = 'item' + (still ? ' enriched' : '') + (o.current ? ' current' : '');
-    return '<div class="' + cls + '" data-nav="' + esc(itemHash(m.id)) + '">' +
+    return '<div class="' + cls + '" tabindex="0" role="link"' +
+      ' data-nav="' + esc(itemHash(m.id)) + '">' +
       (still ? '<img class="still" loading="lazy" alt="" src="' + esc(still) + '">' : '') +
       '<div>' + meta + '</div>' +
       '</div>';

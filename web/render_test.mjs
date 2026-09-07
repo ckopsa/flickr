@@ -153,6 +153,30 @@ test('the library draws one card per tile, in the document order', () => {
   assert.match(html, /6 titles/);
 });
 
+// A tile is a div, so it is reachable only if the renderer says so: the
+// keyboard's half of the click delegation is worth nothing without this.
+test('every tile is focusable and says what activating it does', () => {
+  const views = [
+    ['library', R.library(golden('library'), {})],
+    ['continue', R.continueShelf(golden('continue'))],
+    ['work (show)', R.work(golden('work-show'))],
+  ];
+  const isTile = c => c === 'card' || c === 'cw-card' || c === 'item';
+  let seen = 0;
+  for (const [name, html] of views) {
+    for (const m of html.matchAll(/<div\b[^>]*>/g)) {
+      const tag = m[0];
+      const cls = (tag.match(/class="([^"]*)"/) || ['', ''])[1].split(/\s+/);
+      if (!cls.some(isTile)) continue;
+      seen++;
+      assert.match(tag, /tabindex="0"/, `${name}: tile is not in the tab order: ${tag}`);
+      assert.match(tag, /role="(link|button)"/, `${name}: tile has no role: ${tag}`);
+      assert.match(tag, /data-(nav|act)="/, `${name}: focusable tile activates nothing: ${tag}`);
+    }
+  }
+  assert.ok(seen >= 3, 'no tiles were checked');
+});
+
 test('the genre chip and the search box only filter', () => {
   const doc = golden('library');
   const comedy = R.libraryGrid(doc, { genre: 'Comedy' });

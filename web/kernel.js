@@ -576,6 +576,20 @@
     }
   }
 
+  // The keyboard does what the mouse does. The renderers' tiles are divs with
+  // tabindex, not links, so nothing activates them on their own: Enter and
+  // Space on one are handed to the same delegation, which already knows how to
+  // read a control. Native controls keep their own behaviour.
+  function onKeydown(e) {
+    if (e.key !== 'Enter' && e.key !== ' ' && e.key !== 'Spacebar') return;
+    const t = e.target;
+    if (!t || !t.closest) return;
+    if (t.closest('a, button, input, textarea, select')) return;
+    if (!t.closest('[data-nav], [data-act]')) return;
+    e.preventDefault(); // Space would scroll the page
+    onClick(e);
+  }
+
   // Invoking a control is the same three lines whatever it is: the action's
   // method, the action's href, and the answer handed to whoever owns it.
   async function invoke(el) {
@@ -595,6 +609,7 @@
 
   async function boot() {
     document.addEventListener('click', onClick);
+    document.addEventListener('keydown', onKeydown);
     window.addEventListener('hashchange', applyRoute);
     window.addEventListener('beforeunload', () => root.Player.close());
     $('profile-chip').onclick = openGate;
