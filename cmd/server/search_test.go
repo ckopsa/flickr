@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -205,10 +206,15 @@ func TestSearchDocument(t *testing.T) {
 		t.Errorf("count = %d, %d hits", doc.Count, n)
 	}
 
-	byTitle := map[string]string{} // title → the group it landed in
+	// Title → the first group it landed in. One title can answer twice — an
+	// episode found by its name is also an episode whose dialogue says the
+	// word — and the row it is FOUND in is the first one.
+	byTitle := map[string]string{}
 	for _, g := range doc.Groups {
 		for _, en := range g.Items {
-			byTitle[en.Title] = g.Key
+			if _, seen := byTitle[en.Title]; !seen {
+				byTitle[en.Title] = g.Key
+			}
 		}
 	}
 	for title, want := range map[string]string{
@@ -273,5 +279,137 @@ func TestSearchWithoutAQuery(t *testing.T) {
 	}
 	if !strings.Contains(w.Body.String(), `"groups":[]`) {
 		t.Errorf("groups is a list, empty or not: %s", w.Body)
+	}
+}
+
+// linesDoc is the dialogue answer, whether it comes as a group of a search
+// or as one file's own document.
+type lineHit struct {
+	Title   string  `json:"title"`
+	ItemID  int64   `json:"item_id"`
+	Start   float64 `json:"start"`
+	End     float64 `json:"end"`
+	Text    string  `json:"text"`
+	Passage struct {
+		T   float64 `json:"t"`
+		End float64 `json:"end"`
+	} `json:"passage"`
+	Links map[string]struct {
+		Href string `json:"href"`
+	} `json:"links"`
+}
+
+type linesDoc struct {
+	Self  string    `json:"self"`
+	Kind  string    `json:"kind"`
+	Query string    `json:"query"`
+	Count int       `json:"count"`
+	Items []lineHit `json:"items"`
+}
+
+// A line of dialogue is a place: the words, the file that says them, and the
+// scene around them — a couple of seconds either side, so the passage plays
+// what was being answered rather than dropping in mid-breath.
+func TestDialogueSearch(t *testing.T) {
+	_, h := fixtureServer(t)
+	w := get(t, h, "/api/search?q=took%20the%20job&client_id=chris")
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET /api/search = %d: %s", w.Code, w.Body)
+	}
+	var doc searchDoc
+	if err := json.Unmarshal(w.Body.Bytes(), &doc); err != nil {
+		t.Fatal(err)
+	}
+	// Nothing in the library is CALLED "took the job": the dialogue is the
+	// only row that answers, which is the whole point of it.
+	if len(doc.Groups) != 1 || doc.Groups[0].Key != "lines" || doc.Groups[0].Title != "Dialogue" {
+		t.Fatalf("the groups = %+v", doc.Groups)
+	}
+	var hits struct {
+		Groups []struct {
+			Items []lineHit `json:"items"`
+		} `json:"groups"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &hits); err != nil {
+		t.Fatal(err)
+	}
+	got := hits.Groups[0].Items
+	if len(got) != 1 {
+		t.Fatalf("%d lines, want 1: %+v", len(got), got)
+	}
+	line := got[0]
+	if line.ItemID != idTheJob || line.Text != "He took the job in New York." {
+		t.Errorf("the line = %+v", line)
+	}
+	if line.Passage.T != line.Start-cueLead || line.Passage.End != line.End+cueLead {
+		t.Errorf("the passage %+v is not the scene around %v–%v",
+			line.Passage, line.Start, line.End)
+	}
+	if line.Links["self"].Href != itemHref(idTheJob) {
+		t.Errorf("a line does not lead to the file that says it: %+v", line.Links)
+	}
+
+	// The same words asked of one file: the finder on its page.
+	w = get(t, h, "/api/items/9/lines?q=battlestar&client_id=chris")
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET /api/items/9/lines = %d: %s", w.Code, w.Body)
+	}
+	var lines linesDoc
+	if err := json.Unmarshal(w.Body.Bytes(), &lines); err != nil {
+		t.Fatal(err)
+	}
+	if lines.Kind != "lines" || lines.Count != 1 || len(lines.Items) != 1 ||
+		lines.Items[0].Start != 302 {
+		t.Fatalf("one file's dialogue = %+v", lines)
+	}
+
+	// Words nobody says, and a file nobody transcribed: an empty answer, not
+	// a refusal.
+	for _, target := range []string{
+		"/api/items/9/lines?q=parachute&client_id=chris",
+		"/api/items/4/lines?q=job&client_id=chris",
+		"/api/items/9/lines?client_id=chris",
+	} {
+		w := get(t, h, target)
+		if w.Code != http.StatusOK {
+			t.Fatalf("GET %s = %d: %s", target, w.Code, w.Body)
+		}
+		var empty linesDoc
+		if err := json.Unmarshal(w.Body.Bytes(), &empty); err != nil {
+			t.Fatal(err)
+		}
+		if empty.Count != 0 || len(empty.Items) != 0 {
+			t.Errorf("GET %s answered %+v", target, empty)
+		}
+	}
+	if w := get(t, h, "/api/items/nine/lines"); w.Code != http.StatusBadRequest {
+		t.Errorf("an id that is not a number = %d", w.Code)
+	}
+}
+
+// The finder is offered by the item that has words to search, and by no
+// other: a file nobody has transcribed carries no `lines` relation, so the
+// box is never drawn over nothing.
+func TestLinesLinkFollowsTheTranscript(t *testing.T) {
+	_, h := fixtureServer(t)
+	for id, want := range map[int64]bool{idTheJob: true, idFrozen: false} {
+		w := get(t, h, fmt.Sprintf("/api/items/%d?client_id=chris", id))
+		if w.Code != http.StatusOK {
+			t.Fatalf("GET item %d = %d: %s", id, w.Code, w.Body)
+		}
+		var doc struct {
+			Links map[string]struct {
+				Href string `json:"href"`
+			} `json:"links"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &doc); err != nil {
+			t.Fatal(err)
+		}
+		if got := doc.Links["lines"].Href != ""; got != want {
+			t.Errorf("item %d offers links.lines = %v, want %v", id, got, want)
+		}
+		if want && doc.Links["lines"].Href != linesHref(id) {
+			t.Errorf("item %d: links.lines = %q", id, doc.Links["lines"].Href)
+		}
 	}
 }

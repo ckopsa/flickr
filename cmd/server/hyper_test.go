@@ -303,6 +303,15 @@ func fixtureServer(t *testing.T) (*server, http.Handler) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	// And the lines of it, parsed out of that WebVTT the way the stage does:
+	// what the episode SAYS, which no title carries. The first of them is
+	// what the search golden's own query finds in the dialogue row.
+	if err := library.SetCues(idTheJob, []store.Cue{
+		{ItemID: idTheJob, Start: 61.5, End: 64, Text: "He took the job in New York."},
+		{ItemID: idTheJob, Start: 302, End: 304.25, Text: "Bears. Beets. Battlestar Galactica."},
+	}); err != nil {
+		t.Fatal(err)
+	}
 	// One profile who is partway through the show, partway through the
 	// audiobook, and seven sections into the book.
 	//
@@ -391,8 +400,10 @@ func TestHyperGolden(t *testing.T) {
 		{"work-book", "/api/works/book%3Ashirley-jackson-the-haunting-of-hill-house-1959?client_id=chris"},
 		{"library", "/api/library?client_id=chris"},
 		// "he" rather than "the": the one query this library answers in every
-		// row the search has, the artist's shelf among them.
+		// row the search has, the artist's shelf and the dialogue among them.
 		{"search", "/api/search?q=he&client_id=chris"},
+		// The same dialogue, asked of one file: the finder on its page.
+		{"lines", "/api/items/9/lines?q=job&client_id=chris"},
 		{"artist", "/api/artists/Radiohead?client_id=chris"},
 		{"continue", "/api/continue?client_id=chris"},
 		{"list", "/api/list?client_id=chris"},

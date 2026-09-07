@@ -3,6 +3,7 @@
 //
 //   library   the banded rows, their headings and the genre chips
 //   search    the same tiles, in the groups the search answered
+//   lines     the dialogue a search found: the words, where, and when
 //   work      the show's episode list, the album's or audiobook's pane, the book's
 //   artist    one name's shelf of records
 //   item      the detail pane
@@ -394,8 +395,72 @@
       return head + '<div id="empty">Nothing in the library matches.</div>';
     }
     return head + '<div id="search-results">' +
-      groups.map(g => bandSection(g.title, g.items, 'band-grid',
-        ' data-group="' + esc(g.key) + '"')).join('') +
+      groups.map(g => g.key === 'lines'
+        // A line of dialogue is not a tile: it is words, and where they are
+        // said. Same heading, same order, its own row.
+        ? '<section class="band" data-group="' + esc(g.key) + '">' +
+            '<h3>' + esc(g.title) + '</h3>' + lines(g.items) + '</section>'
+        : bandSection(g.title, g.items, 'band-grid',
+            ' data-group="' + esc(g.key) + '"')).join('') +
+      '</div>';
+  }
+
+  // --- dialogue ----------------------------------------------------------------
+
+  // The lines a search found, drawn the same way wherever they are found: on
+  // the results page under their own heading, and under the finder on an
+  // item's page. Each row is the words, what says them, and when \u2014 and a tap
+  // is a PASSAGE, so the scene plays and stops rather than the film running
+  // on from a seek.
+  //
+  // The passage is the server's (`passage`: the seconds either side of the
+  // line it chose); what is composed here is the hash that spells it, which
+  // is the client's own grammar.
+  function cueHash(en) {
+    const p = (en && en.passage) || {};
+    const q = [];
+    if (p.t != null) q.push('t=' + p.t);
+    if (p.end != null) q.push('end=' + p.end);
+    return itemHash(en && en.item_id, q.length ? '?' + q.join('&') : '');
+  }
+
+  function lineRow(en) {
+    const where = en.subtitle || en.label || en.title || '';
+    return '<button class="line" data-nav="' + esc(cueHash(en)) + '">' +
+      '<span class="line-text">' + esc(en.text || '') + '</span>' +
+      '<span class="line-where">' + esc(where) + '</span>' +
+      '<span class="line-time">' + fmtTime(en.start) + '</span>' +
+      '</button>';
+  }
+
+  // The rows, from a list of hits or from the `lines` document the finder's
+  // own address answers \u2014 a search that found nothing says so, because an
+  // empty box under a question reads as a page that is still thinking.
+  function lines(hits) {
+    const rows = Array.isArray(hits) ? hits : ((hits && hits.items) || []);
+    if (!rows.length) {
+      const asked = !Array.isArray(hits) && hits && hits.query;
+      return asked ? '<div class="lines-empty">Nothing is said like that.</div>' : '';
+    }
+    return '<div class="lines">' + rows.map(en => lineRow(en)).join('') + '</div>';
+  }
+
+  // The finder itself: a box over the file's own words. It is drawn only
+  // where the document offers `lines` \u2014 a file nobody has transcribed has
+  // nothing to search \u2014 and the address it asks is that relation's, carried
+  // on the form for the kernel to follow.
+  function linesBox(doc) {
+    const l = link(doc, 'lines');
+    if (!l) return '';
+    const label = l.title || 'Find in dialogue';
+    return '<div id="detail-lines">' +
+      '<form id="lines-form" data-href="' + esc(l.href) + '">' +
+        '<label for="lines-q">' + esc(label) + '</label>' +
+        '<input id="lines-q" name="q" type="search" autocomplete="off"' +
+          ' placeholder="a line you remember">' +
+        '<button type="submit" class="act">Find</button>' +
+      '</form>' +
+      '<div id="lines-hits"></div>' +
       '</div>';
   }
 
@@ -727,6 +792,7 @@
             siblings.map(m => memberRow(m, { current: m.id === doc.id })).join('') +
           '</div></div>'
         : '') +
+      linesBox(doc) +
       details(doc) +
       similarRow(wk);
   }
@@ -1174,6 +1240,7 @@
 
   const api = {
     library, libraryGrid, hero, work, artist, item, session, miniPlayer, continueShelf, search,
+    lines,
     card, memberRow, control, watchedControl, bookmarkControl, restControls, trace, identityForm,
     esc, fmtTime, fmtRuntime, hashFor, itemHash, showHash, artistHash, searchHash,
     idIn,

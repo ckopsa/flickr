@@ -1,0 +1,44 @@
+{
+  "self": "/api/items/9/lines?q=job",
+  "kind": "lines",
+  "title": "Find in dialogue",
+  "query": "job",
+  "count": 1,
+  "items": [
+    {
+      "self": "/api/items/9",
+      "kind": "item",
+      "title": "The Job",
+      "item_id": 9,
+      "label": "S03E23 · The Job",
+      "work_key": "tmdb:2316",
+      "subtitle": "The Office",
+      "start": 61.5,
+      "end": 64,
+      "text": "He took the job in New York.",
+      "passage": {
+        "end": 66,
+        "t": 59.5
+      },
+      "links": {
+        "artwork": {
+          "href": "/api/items/9/still"
+        },
+        "self": {
+          "href": "/api/items/9",
+          "title": "The Job"
+        },
+        "work": {
+          "href": "/api/works/tmdb%3A2316",
+          "title": "The Office"
+        }
+      }
+    }
+  ],
+  "links": {
+    "item": {
+      "href": "/api/items/9"
+    }
+  }
+}
+

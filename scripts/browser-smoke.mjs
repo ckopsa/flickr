@@ -307,6 +307,20 @@ async function walk(page) {
     await page.waitForFunction(() => /Beach Games/.test(document.getElementById('view').textContent));
   });
 
+  // The transcribed episode is the one file with dialogue to search, and a
+  // hit is a place: the row carries the passage around the line as its hash.
+  await step(page, 'dialogue: the finder on an item page lands on the scene', async () => {
+    await page.goto(base + '/#/item/9');
+    await expectVisible(page, '#lines-form', 'the Find in dialogue box');
+    await page.fill('#lines-q', 'job');
+    await page.keyboard.press('Enter');
+    await expectVisible(page, '#lines-hits .line', 'a line of dialogue');
+    const hash = await page.getAttribute('#lines-hits .line', 'data-nav');
+    if (!/^#\/item\/9\?t=\d/.test(hash || '')) {
+      throw new Error(`a hit opens ${hash}, not the passage around the line`);
+    }
+  });
+
   await step(page, 'phone: nothing overflows sideways at 390px', async () => {
     await page.setViewportSize({ width: 390, height: 844 });
     for (const hash of ['#/', '#/show/The%20Office', '#/item/4']) {

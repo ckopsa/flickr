@@ -303,6 +303,13 @@ func (s *server) itemEnvelope(it store.Item, wk *works.Work, full bool, position
 		if subs := subtitlesOf(it, s.transcriptOf(it.ID)); len(subs) > 0 {
 			doc.Field("subtitles", subs)
 		}
+		// The words this file says, searchable: the transcript's cues are
+		// indexed (search.go), so the page can offer a finder and a hit is a
+		// scene to land in. A file nobody has transcribed carries no such
+		// link, and the finder is simply not drawn.
+		if s.hasLines(it.ID) {
+			doc.Link("lines", linesHref(it.ID), "Find in dialogue")
+		}
 		if it.ProbeError != "" {
 			doc.Field("probe_error", it.ProbeError)
 		}

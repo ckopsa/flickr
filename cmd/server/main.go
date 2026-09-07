@@ -307,6 +307,7 @@ func (s *server) routes() *http.ServeMux {
 	mux.HandleFunc("POST /api/items/{id}/enrich", s.handleEnrich)
 	mux.HandleFunc("POST /api/items/{id}/watched", s.handleWatched)
 	mux.HandleFunc("GET /api/items/{id}/subtitles/{file}", s.handleSubtitle)
+	mux.HandleFunc("GET /api/items/{id}/lines", s.handleItemLines)
 	mux.HandleFunc("GET /api/items/{id}/poster", s.handlePoster)
 	mux.HandleFunc("GET /api/items/{id}/cover", s.handleCover)
 	mux.HandleFunc("GET /api/items/{id}/still", s.handleStill)
@@ -865,10 +866,32 @@ func (s *server) transcribe(ctx context.Context, item *store.Item) error {
 	if err != nil {
 		return err
 	}
-	return s.library.SetTranscript(store.Transcript{
+	if err := s.library.SetTranscript(store.Transcript{
 		ItemID: item.ID, ETag: item.ETag, Language: lang,
 		Model: filepath.Base(s.transcriber.Model), GeneratedAt: time.Now(),
-	})
+	}); err != nil {
+		return err
+	}
+	return s.indexCues(item.ID)
+}
+
+// indexCues reads the WebVTT just written back into the lines it holds and
+// stores them for the dialogue search (search.go). It is a second pass over
+// a file that is already on disk rather than part of the generation: a
+// transcript that is servable but not yet searchable is a transcript, and
+// the next pass over it is cheap.
+func (s *server) indexCues(id int64) error {
+	f, err := os.Open(transcriptPath(id))
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	parsed := pipeline.ParseVTT(f)
+	cues := make([]store.Cue, 0, len(parsed))
+	for _, c := range parsed {
+		cues = append(cues, store.Cue{ItemID: id, Start: c.Start, End: c.End, Text: c.Text})
+	}
+	return s.library.SetCues(id, cues)
 }
 
 // transcriptOf is the item document's view of the same table: the generated

@@ -145,3 +145,63 @@ func TestTranscribeLeavesNothingOnFailure(t *testing.T) {
 		t.Errorf("a failed run left %d files behind", len(entries))
 	}
 }
+
+// The cues, read back out of the WebVTT: one table over everything a
+// generated transcript can hold.
+func TestParseVTT(t *testing.T) {
+	cases := []struct {
+		name string
+		vtt  string
+		want []Cue
+	}{
+		{
+			name: "what whisper writes",
+			vtt: "WEBVTT\n\n" +
+				"00:00:01.000 --> 00:00:03.500\n" +
+				"He took the job in New York.\n\n" +
+				"00:00:03.500 --> 00:00:06.000\n" +
+				"And he never said a word about it.\n",
+			want: []Cue{
+				{Start: 1, End: 3.5, Text: "He took the job in New York."},
+				{Start: 3.5, End: 6, Text: "And he never said a word about it."},
+			},
+		},
+		{
+			name: "an identifier, cue settings, an hour and a wrapped line",
+			vtt: "WEBVTT\n\nNOTE this file was generated\n\n" +
+				"cue-7\n01:02:03.250 --> 01:02:05.000 align:start position:10%\n" +
+				"Let it go,\nlet it go.\n",
+			want: []Cue{{Start: 3723.25, End: 3725, Text: "Let it go, let it go."}},
+		},
+		{
+			name: "markup is not a word anybody searched for",
+			vtt:  "WEBVTT\n\n00:10.000 --> 00:12.000\n<v Michael>These are <i>my</i> people.\n",
+			want: []Cue{{Start: 10, End: 12, Text: "These are my people."}},
+		},
+		{
+			name: "an empty cue is not a line, and neither is a broken timing",
+			vtt: "WEBVTT\n\n00:00.000 --> 00:02.000\n[silence]\n\n" +
+				"00:02.000 --> 00:04.000\n\n\n" +
+				"nonsense --> also nonsense\nnever said\n\n" +
+				"00:04,000 --> 00:06,000\nStill here.\n",
+			want: []Cue{
+				{Start: 0, End: 2, Text: "[silence]"},
+				{Start: 4, End: 6, Text: "Still here."},
+			},
+		},
+		{name: "an empty file has no dialogue", vtt: "WEBVTT\n", want: nil},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := ParseVTT(strings.NewReader(c.vtt))
+			if len(got) != len(c.want) {
+				t.Fatalf("%d cues, want %d: %+v", len(got), len(c.want), got)
+			}
+			for i := range got {
+				if got[i] != c.want[i] {
+					t.Errorf("cue %d = %+v, want %+v", i, got[i], c.want[i])
+				}
+			}
+		})
+	}
+}
