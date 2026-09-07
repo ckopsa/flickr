@@ -217,7 +217,11 @@
   .badge.transcode { background: #4a3413; color: #f0b45c; }
   .badge.deny { background: #4a1a1a; color: #f08080; }
   #trace { margin-top: 14px; font-size: 13px; }
-  #trace h3 { font-size: 13px; color: #9a9daa; margin: 14px 0 6px; }
+  /* the steps hide behind a disclosure: the badge line is the answer, this is
+     only for whoever asks why */
+  #trace summary { font-size: 13px; color: #9a9daa; margin: 14px 0 6px; cursor: pointer; width: fit-content; }
+  #trace summary:hover { color: #c5c8d4; }
+  #trace details[open] summary { margin-bottom: 8px; }
   .step { display: flex; gap: 8px; padding: 3px 0; font-family: ui-monospace, monospace; font-size: 12px; }
   .step .mark { width: 16px; }
   .step.pass .mark { color: #6ee7a0; }

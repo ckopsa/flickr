@@ -538,23 +538,42 @@
 
   // --- the trace ---------------------------------------------------------------
   // Not a document kind of its own: the decision the session document carries,
-  // drawn for the system panel under the player.
+  // drawn for the system panel under the player. The badge line stays out in
+  // the open — one quiet line saying what is happening — and the step by step
+  // "why" hides behind a disclosure, because nobody sitting down to watch
+  // something asked for it.
   function trace(decision, encoder, dest) {
     if (!decision) return '';
     const m = decision.method || '';
     const cls = m === 'direct_play' ? 'direct' : m === 'transcode' ? 'transcode' : 'deny';
     const steps = decision.trace || [];
+    if (!steps.length) {
+      return { status: statusLine(cls, m, steps, encoder, dest), trace: '' };
+    }
     return {
-      status: '<span class="badge ' + cls + '">' + esc(m.replace('_', ' ')) + '</span>' +
-        esc((steps.length && steps[steps.length - 1].detail) || '') +
-        (encoder ? ' <span style="color:#8db4f0">via ' + esc(encoder) + '</span>' : '') +
-        (dest ? ' <span style="color:#8db4f0">→ ' + esc(dest) + '</span>' : ''),
-      trace: '<h3>Decision trace</h3>' + steps.map(s =>
+      status: statusLine(cls, m, steps, encoder, dest),
+      trace: '<details><summary>' + esc(traceQuestion(m)) + '</summary>' + steps.map(s =>
         '<div class="step ' + (s.passed ? 'pass' : 'fail') + '">' +
         '<span class="mark">' + (s.passed ? '✓' : '✗') + '</span>' +
         '<span class="check">' + esc(s.check) + '</span>' +
-        '<span class="detail">' + esc(s.detail) + '</span></div>').join(''),
+        '<span class="detail">' + esc(s.detail) + '</span></div>').join('') +
+        '</details>',
     };
+  }
+
+  function statusLine(cls, m, steps, encoder, dest) {
+    return '<span class="badge ' + cls + '">' + esc(m.replace('_', ' ')) + '</span>' +
+      esc((steps.length && steps[steps.length - 1].detail) || '') +
+      (encoder ? ' <span style="color:#8db4f0">via ' + esc(encoder) + '</span>' : '') +
+      (dest ? ' <span style="color:#8db4f0">→ ' + esc(dest) + '</span>' : '');
+  }
+
+  // The disclosure asks the question the viewer would ask, in the words of
+  // what actually happened.
+  function traceQuestion(method) {
+    if (method === 'direct_play') return 'Why does this play directly?';
+    if (method === 'transcode') return 'Why is this transcoding?';
+    return 'Why can’t this play?';
   }
 
   const api = {

@@ -225,3 +225,23 @@ test('a mark that has been set shows where it was set', () => {
   assert.ok(html.includes('markchip set'));
   assert.ok(html.includes('data-act="link"'));
 });
+
+test('the decision trace hides behind a disclosure, closed by default', () => {
+  const doc = golden('session-play');
+  const t = R.trace(doc.decision, 'h264_vaapi', '');
+  // The badge line stays out in the open: the verdict, said once.
+  assert.ok(t.status.includes('badge direct') && t.status.includes('direct play'));
+  assert.ok(t.status.includes('via h264_vaapi'));
+  // The steps are all still there, but behind a summary that asks the question
+  // the viewer would ask — and nothing opens it for them.
+  assert.ok(t.trace.startsWith('<details><summary>Why does this play directly?</summary>'),
+    'the steps are closed by default');
+  assert.ok(!t.trace.includes('<details open'));
+  for (const s of doc.decision.trace) assert.ok(t.trace.includes(R.esc(s.check)), s.check);
+
+  const transcoding = {
+    method: 'transcode',
+    trace: [{ check: 'video_codec', passed: false, detail: 'file is hevc; client plays h264' }],
+  };
+  assert.ok(R.trace(transcoding, '', '').trace.includes('<summary>Why is this transcoding?</summary>'));
+});
