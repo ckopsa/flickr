@@ -656,14 +656,20 @@
   // the <video> lives inside it and is created once for the life of the page,
   // so swapping this chrome for the next document's never drops the buffer.
   // No renderer ever emits a <video> tag; web/render_test.mjs checks that.
+  //
+  // #player-title — the way back and what is playing — is drawn here and MOVED
+  // into the device by player.js (attach), where it overlays the top of the
+  // picture, goes fullscreen with it and fades with the transport.
   function session(doc, ctx) {
     if (!doc || doc.method === 'read') return '';
     const c = ctx || {};
     const back = link(doc, 'back');
     const drawn = ['keep_watching', 'keep_reading', 'next', 'mark_in', 'mark_out', 'link', 'stop'];
     const marks = doc.marks || {};
-    return '<button class="back" id="detail-back">← ' + esc(back && back.title ? back.title : 'Back') + '</button>' +
-      '<div id="now-playing">' + esc(nowPlaying(doc, c)) + '</div>' +
+    return '<div id="player-title">' +
+        '<button class="back" id="detail-back">← ' + esc(back && back.title ? back.title : 'Back') + '</button>' +
+        '<div id="now-playing">' + esc(nowPlaying(doc, c)) + '</div>' +
+      '</div>' +
       '<div id="device-slot"></div>' +
       '<div id="doc-controls">' +
         prevNext(doc) +

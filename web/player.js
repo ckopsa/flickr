@@ -4,7 +4,8 @@
 // the cast session, the clock, the scrub bar and its chapter ticks and
 // passage flags, the volume, the subtitle and audio-track selects, the
 // trickplay previews, the tap the browser wants when it refuses autoplay,
-// and the heartbeat that writes where the person is.
+// the keys that drive all of it, and the heartbeat that writes where the
+// person is.
 //
 // It owns no rules. Which item plays, what may be done to it, where the
 // bytes are, what to show while they play, where the passage ends, what the
@@ -44,7 +45,9 @@
   let autoplayNext = localStorage.autoplayNext !== 'off';
   let scrubbing = false;         // a finger (or a mouse) is dragging the bar
   let tapTimer = null, lastTapAt = 0, rippleTimer = null;
+  let idleTimer = null;          // the countdown to a dark room
   const DOUBLE_TAP_MS = 300;     // how long a single tap waits for its twin
+  const IDLE_MS = 3000;          // how long a still pointer waits before the chrome goes
 
   // --- capability profiles -----------------------------------------------------
   // What the PLAYING device can take. The dropdown simulates other devices;
@@ -100,6 +103,21 @@
 
   // --- the persistent element --------------------------------------------------
 
+  // The keyboard, said in words. Every one of these does exactly what one of
+  // the buttons below does — the keys reach nothing the transport does not —
+  // and the '?' card is this list, drawn once.
+  const SHORTCUTS = [
+    ['Space / K', 'Play or pause'],
+    ['← / →', 'Back 10s / forward 10s'],
+    ['J / L', 'Back 30s / forward 30s'],
+    ['↑ / ↓', 'Volume'],
+    ['M', 'Mute'],
+    ['F', 'Fullscreen'],
+    ['C', 'Next subtitle track'],
+    ['N', 'Next episode'],
+    ['Esc', 'Leave fullscreen, or back out'],
+  ];
+
   function build() {
     element = document.createElement('div');
     element.id = 'device';
@@ -130,6 +148,10 @@
           '<button id="btn-cast-stop">Stop casting</button>' +
         '</div>' +
       '</div>' +
+      // What the keys do, listed where they are used, behind the '?' below.
+      '<div id="keys-help" hidden><dl>' +
+        SHORTCUTS.map(([k, what]) => '<dt>' + k + '</dt><dd>' + what + '</dd>').join('') +
+      '</dl></div>' +
       '<div id="transport">' +
         '<div id="scrub"><div class="rail"></div><div class="avail"></div><div class="fill"></div>' +
           '<div id="thumb" hidden><div id="thumb-img"></div><div id="thumb-time"></div></div></div>' +
@@ -144,6 +166,7 @@
           '<select id="audio" title="Audio track" style="display:none"></select>' +
           '<button id="btn-autoplay"></button>' +
           '<button id="btn-pip" title="Picture in picture" aria-label="Picture in picture" hidden>⧉</button>' +
+          '<button id="btn-keys" title="Keyboard shortcuts" aria-label="Keyboard shortcuts">?</button>' +
           '<button id="btn-fs" title="Fullscreen" aria-label="Fullscreen">⛶</button>' +
           '<google-cast-launcher id="cast-btn"></google-cast-launcher>' +
         '</div>' +
@@ -160,6 +183,18 @@
     const slot = chrome.querySelector('#device-slot');
     if (!slot) return;
     slot.replaceWith(element);
+    // The way back and what is playing ride INSIDE the device, as a title bar
+    // over the top of the picture: there they go fullscreen with it and fade
+    // with the transport. The chrome is re-rendered from the session document,
+    // so the bar this render drew replaces the one the last render did.
+    const title = chrome.querySelector('#player-title');
+    if (title) {
+      const old = element.querySelector('#player-title');
+      if (old) old.remove();
+      element.prepend(title);
+    }
+    // The immersive layout belongs to the PICTURE: a record has none to fill.
+    document.body.classList.toggle('theatre', !!item && item.medium !== 'audio');
     renderChapters();
     renderMarksOnScrub();
     if (session) paintTrace();
@@ -170,6 +205,7 @@
     setAutoplay(autoplayNext);
     renderSubSelector();
     renderAudioSelector();
+    wake();
   }
 
   // --- clocks ------------------------------------------------------------------
@@ -457,6 +493,8 @@
     item = null;
     method = null;
     document.body.classList.remove('audio-mode');
+    document.body.classList.remove('theatre');
+    wake(); // nothing plays: the room comes back up
     const chrome = $('player-chrome');
     if (chrome) chrome.hidden = true;
   }
@@ -731,6 +769,88 @@
     b.setAttribute('aria-label', b.title);
   }
 
+  // --- the keyboard ------------------------------------------------------------
+  //
+  // The keys are a transport, not a second set of rules: each one calls the
+  // function its button calls. A key typed into a field is the field's — that
+  // is the whole of the guard — and Space on a focused button is that button's,
+  // which already answers it.
+  function typingIn(t) {
+    return !!(t && (t.isContentEditable || /^(INPUT|SELECT|TEXTAREA)$/.test(t.tagName)));
+  }
+  function onKey(e) {
+    if (!item || e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey) return;
+    const t = e.target;
+    if (typingIn(t)) return;
+    const space = e.key === ' ' || e.key === 'Spacebar';
+    if (space && t && t.closest && t.closest('button')) return;
+    const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+    if (space || k === 'k') togglePlay();
+    else if (k === 'ArrowLeft') { seekTo(position() - 10); seekRipple('left', '−10s'); }
+    else if (k === 'ArrowRight') { seekTo(position() + 10); seekRipple('right', '+10s'); }
+    else if (k === 'j') { seekTo(position() - 30); seekRipple('left', '−30s'); }
+    else if (k === 'l') { seekTo(position() + 30); seekRipple('right', '+30s'); }
+    else if (k === 'ArrowUp') nudgeVolume(0.1);
+    else if (k === 'ArrowDown') nudgeVolume(-0.1);
+    else if (k === 'm') toggleMute();
+    else if (k === 'f') toggleFullscreen();
+    else if (k === 'c') cycleSubs();
+    else if (k === 'n') advance();
+    else if (k === '?') toggleKeys();
+    else if (k === 'Escape') escapeOut();
+    else return;
+    e.preventDefault(); // Space would scroll the page, the arrows too
+    wake();
+  }
+
+  // Escape is the way out, in the order the room offers one: the help card,
+  // then fullscreen, then the sitting itself — which is what Back does.
+  function escapeOut() {
+    if ($('keys-help') && !$('keys-help').hidden) { showKeys(false); return; }
+    if (document.fullscreenElement) { document.exitFullscreen(); return; }
+    K.closeStage();
+    K.applyRoute();
+  }
+
+  // The volume the keys set is the one the slider sets, on whichever device is
+  // playing; the slider follows so the two never disagree.
+  function nudgeVolume(delta) {
+    const now = casting() ? (remotePlayer.volumeLevel || 0) : (video ? video.volume : 0);
+    const v = Math.max(0, Math.min(1, now + delta));
+    if (casting()) { remotePlayer.volumeLevel = v; if (remoteController) remoteController.setVolumeLevel(); }
+    else if (video) video.volume = v;
+    if ($('vol')) $('vol').value = String(v);
+  }
+
+  // 'c' walks the subtitle select the way clicking through it would: Off, then
+  // each track the ITEM document published, then round again.
+  function cycleSubs() {
+    const sel = $('subs');
+    if (!sel || sel.style.display === 'none' || !sel.options.length) return;
+    sel.selectedIndex = (sel.selectedIndex + 1) % sel.options.length;
+    onSubChange(sel.value);
+  }
+
+  function showKeys(on) {
+    const el = $('keys-help');
+    if (el) el.hidden = !on;
+  }
+  function toggleKeys() { showKeys(!!($('keys-help') && $('keys-help').hidden)); }
+
+  // --- the room darkens ---------------------------------------------------------
+  //
+  // While the picture runs and nothing moves, the title bar, the transport and
+  // the cursor fade out; any movement, tap or key brings them back. Paused,
+  // they stay: a stopped picture with no controls is a dead page.
+  function wake() {
+    if (!element) return;
+    element.classList.remove('idle');
+    clearTimeout(idleTimer);
+    idleTimer = null;
+    if (!isPlaying()) return;
+    idleTimer = setTimeout(() => { if (isPlaying()) element.classList.add('idle'); }, IDLE_MS);
+  }
+
   // What a double tap answers with, so the finger knows it landed: the amount
   // seeked, on the side it was tapped, gone again in half a second. Hiding it
   // first restarts the fade when a second tap comes straight after.
@@ -815,9 +935,18 @@
       if (t.id === 'btn-fwd') { seekTo(position() + 30); return; }
       if (t.id === 'btn-mute') { toggleMute(); return; }
       if (t.id === 'btn-fs') { toggleFullscreen(); return; }
+      if (t.id === 'btn-keys') { toggleKeys(); return; }
       if (t.id === 'btn-autoplay') { setAutoplay(!autoplayNext); return; }
       if (t.id === 'btn-cast-stop') { stopCasting(); return; }
     });
+
+    // The chrome comes back for any sign of life over the picture, and the
+    // keys are the device's wherever the focus is (the guard is in onKey).
+    element.addEventListener('pointermove', wake);
+    element.addEventListener('pointerdown', wake);
+    document.addEventListener('keydown', onKey);
+    video.addEventListener('play', wake);
+    video.addEventListener('pause', wake);
 
     // The picture is a control too, now that no native bar is drawn over it.
     // A mouse has nothing to disambiguate, so its click acts at once; a
@@ -950,6 +1079,9 @@
     }
     syncPlayButton();
     updatePositionState();
+    // A stop the media element never announced — a cast device's pause, a
+    // stream that ran out — lights the room back up all the same.
+    if (element.classList.contains('idle') && !isPlaying()) wake();
     checkPassageEnd();
     if (passageEndFired && !passageNaturalEnd && isPlaying()) {
       const endAt = passageEndNow();
