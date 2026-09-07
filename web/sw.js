@@ -32,7 +32,12 @@
 // tiles and audio.js lost audioWorks()/artists(), so a v13 shell has neither
 // the grouping code nor the document that replaced it. Both halves of the
 // old client are gone now; this bump is what makes the new pair meet.
-const CACHE = 'flickr-shell-v14';
+// v15: the player reads the SESSION DOCUMENT (hyper 4) — play answers it,
+// progress goes to its action and a 409 means a passage is on, and the marks
+// are the server's; passage.js lost its marking half too, so a v14 shell
+// serving the new index.html would call functions that are no longer there
+// either.
+const CACHE = 'flickr-shell-v15';
 const SHELL = ['/', '/index.html', '/passage.js', '/audio.js', '/audio.css', '/reader.js', '/pdfreader.js',
                '/vendor/jszip.min.js', '/vendor/epub.min.js',
                '/vendor/pdf.min.mjs', '/vendor/pdf.worker.min.mjs',

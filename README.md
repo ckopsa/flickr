@@ -300,7 +300,7 @@ leaves the variable write to a person.
 | `GET /api/continue?client_id=NAME` | a profile's resume list: most-recent first, max 20, finished (≥90%) and <5 s positions excluded, one entry per work; a book entry carries `fraction` instead of a meaningful seconds/duration pair |
 | `GET /api/feed/media?since=CURSOR` | change feed: works changed since the cursor with per-audience progress; response carries the next cursor (`l<n>.s<n>`); no `since` = everything |
 | `POST /api/items/{id}/decision` | dry-run: decision + trace, no side effects; audio items take the audio branch (415 for text — books are read, not streamed) |
-| `POST /api/items/{id}/play` | decide and act: presigned URL (direct) or HLS session (transcode, audio-only for audio items); 415 for text |
+| `POST /api/items/{id}/play` | decide and act: presigned URL (direct) or HLS session (transcode, audio-only for audio items); 415 for text. Answers the **session document** (below), and takes an optional `passage` |
 | `POST /api/items/{id}/identity` | user identity override (persists across scans) |
 | `POST /api/items/{id}/reprobe` | re-probe one item on demand (also re-discovers subtitle sidecars in its directory) |
 | `POST /api/items/{id}/enrich` | TMDB-enrich one item on demand (503 if no API key) |
@@ -313,7 +313,15 @@ leaves the variable write to a person.
 | `GET /api/items/{id}/trickplay.json` | scrub-preview sprite index (404 if not generated) |
 | `GET /api/items/{id}/trickplay/{n}.jpg` | sprite sheet n |
 | `POST /api/items/{id}/trickplay` | force-generate sprites for one item (synchronous) |
-| `DELETE /api/sessions/{id}` | stop a transcode session (idle sessions are auto-reaped) |
+| `GET /api/sessions/{id}` | the session document: url, method, decision trace, the passage resolved, the marks, and the actions below |
+| `POST /api/sessions/{id}/progress` | the place, written to the same store as `/api/progress` — **409 `passage-on`** while a passage is on |
+| `POST /api/sessions/{id}/keep_watching` | leave the passage; progress writes are accepted from then on. Answers the session |
+| `POST /api/sessions/{id}/next` | start the work's next member on the same device, carrying a run's `until` forward. Answers the NEW session |
+| `POST /api/sessions/{id}/mark/{in\|out}` | set one end of a passage at `{"seconds": n}` (or `{"clear": true}`); snapped, swapped and turned into a run by the server. Answers the session |
+| `GET /api/sessions/{id}/link` | the marked passage: the absolute link and the sentence that says it; 409 until an in point exists |
+| `GET /api/-/passage?item=&t=&end=[&until=]` | the same, composed rather than marked |
+| `GET /api/-/passage?work=&from=&to=` | …or composed from two of the `places` the work document publishes (`S03E22 2:22`, `1:19:00`, `ch. 3`): the server resolves them against the work's members, swaps a backwards pair, and turns a later member into the run's `until` |
+| `DELETE /api/sessions/{id}` | stop a session: the transcode, if any, and the row (idle sessions are auto-reaped) |
 | `POST/GET /api/progress` | playback position per (item, client): `position_seconds` for video/audio; for text also `locator` (an EPUB CFI), `fraction` (0..1, the book's own percentage; 400 outside that range) and optional `section` (1-based spine index, derived from the CFI when omitted); for a PDF `page` (1-based; 400 when negative) with the same `fraction` (page over count). GET returns the text fields only when the row holds a locator |
 | `GET/POST /api/users` | list / idempotently create profile names (clients use the name as `client_id`) |
 | `POST /api/telemetry` | append any JSON object to `data/telemetry.jsonl`; always 200 |
@@ -331,11 +339,12 @@ to demonstrate how the same file direct-plays or transcodes per client.
 
 flickr is becoming backend-driven: the server says what exists and what may
 be done to it, and the browser renders what it is told (`docs/hypermedia.md`
-has the envelope, the document table and the order of work). Six of those
+has the envelope, the document table and the order of work). Seven of those
 documents are served now, beside — not instead of — everything above, and the
 browser reads every one of them but the root: the router asks what a hash
-means, and the grid, the show pane, the detail pane and the artist's shelf
-are drawn from the answer and from the documents it points at:
+means, the grid, the show pane, the detail pane and the artist's shelf are
+drawn from the answer and from the documents it points at, and the player
+reads the session document it gets back from play:
 
 | Endpoint | Document |
 |---|---|
@@ -344,14 +353,17 @@ are drawn from the answer and from the documents it points at:
 | `GET /api/works/{key}` | one work: the fields `/api/works` publishes, `members` in order as item envelopes, `places` (the passage grammar's tokens with the labels a chip shows — `S03E22 0:00` · "S03E22 · Beach Games", `1:19:00` · "Let It Go", `ch. 7` · "The Cellar"), the profile's progress, and the actions `play`, `read`, `passage` |
 | `GET /api/library` | the grid: `items`, one tile per thing in the order the grid draws them (see *Library layout*), a `genre` facet for the chip row, and `count`. A tile is a small envelope — `self` and `links.self` (the work or artist document), `kind` (`work`/`artist`), `title`, `subtitle` ("3 seasons · 42 episodes", "Radiohead · 1997 · 12 tracks", "3 albums"), `tech`, `medium`, `work_kind`, `year`, `genres`, `item_id` (the member a tap opens) and `links.artwork`, the poster or the file's own cover, chosen here rather than in the browser |
 | `GET /api/artists/{name}` | one artist's shelf: `name` as the shelf spells it (the match is case-insensitive), `album_count`, `track_count`, `albums` in year order (the year-less last) as the same tiles with their covers, and `links.artwork`. An unknown name is a `no-such-artist` problem with the library as the remedy |
+| `GET /api/sessions/{id}` | one play — direct play included, which used to have no id: `url`, `method`, `decision`, `started_at`, the `passage` resolved (with `ends_at`, the bound that applies to THIS item) and the `marks` being made, `links.item`/`back`/`work`/`next`, and the actions `progress`, `keep_watching`, `stop`, `next`, `mark_in`, `mark_out`, `link` |
 | `GET /api/-/route?hash=` | what a hash means: `view` (`library`, `work`, `artist`, `item`), the `document` to render, the `passage` resolved to item ids and spine sections, and `autoplay`. See "Deep links and passages" |
+| `GET /api/-/passage?…` | a minted passage: its absolute `href` and the `sentence` that says it (`S03E22 2:22 – 14:14 of Beach Games`) — from an item and two times, or from a work and two of the places it publishes |
 
 Every document is one JSON object with `self`, `kind`, `title`, its own
 fields, then `links`, `actions` (each with an `input` sketch and a `label`)
 and `unavailable` — the actions the kind has that this document does not
 afford, each with a reason in words. Errors are RFC 7807
-`application/problem+json` with a `remedy`. One relation still names a
-document a later step serves (`/api/-/passage`) and 404s until then.
+`application/problem+json` with a `remedy`. Every relation these documents
+publish now names a document that is served — the last two, `/api/library`
+and `/api/-/passage`, landed with the steps above.
 `internal/hyper` is the envelope; the goldens are
 `cmd/server/testdata/hyper/*.json` (`go test ./cmd/server -run TestHyperGolden -update`
 rewrites them).
@@ -435,58 +447,88 @@ Examples:
 #/item/80?from=pg%3A213&to=pg%3A240    pages 213 through 240 of PDF 80
 ```
 
-Three rules hold for every passage session:
+### Passages are session state
 
-1. **Start there.** `t` wins over saved progress; a passage never resumes
-   from `/api/progress`.
-2. **Stop there.** At `end` (or once the `until` episode has finished) the
-   player pauses and shows *End of the passage*. It is not a natural end: no
+A passage is not a mode the browser puts itself in: it is **state on the
+session**, and the three rules are the server's. `POST /api/items/{id}/play`
+takes the passage (`{"passage": {"t": 142, "end": 854, "until": 9}}`, item
+ids — the show form is resolved before play) and answers the session
+document, which carries it back resolved, with `ends_at`: the bound that
+applies to the item now playing, which for the earlier items of a run is
+nothing at all.
+
+1. **Start there.** The server seeds the seek from `t`; a passage never
+   resumes from the saved place, and the client does not ask for it.
+2. **Stop there.** The clock is the browser's — it is the one playing — so
+   it still pauses at `passage.ends_at` and shows *End of the passage*. What
+   the panel offers is the document's: `actions.keep_watching` (labelled as
+   the server labels it) and `links.back`. It is not a natural end: no
    up-next countdown, no "finished" mark. Both bounds are flagged on the
    scrub bar and the time readout counts within the passage
-   (`2:14 / 5:30 in passage`).
-3. **No progress is written.** A scene replayed for a talk is not where the
-   person is in the film; the saved place belongs to normal viewing. Nothing
-   in a passage session — heartbeat, end, run — touches `/api/progress` or
-   the continue-watching row.
+   (`2:14 / 5:30 in passage`). A run's next episode is `links.next`.
+3. **No progress is written.** A progress write during a passage is
+   **refused**: `409 application/problem+json`, `type: "passage-on"`, with
+   `keep_watching` as the remedy — on the session's own progress action and
+   on the legacy `POST /api/progress` alike, which refuses the same way when
+   that item has a live passage session for that profile. The client not
+   sending is no longer the rule; the client is simply told no.
 
-The escape hatch is **Keep watching**: it leaves passage mode from the
-current position, drops the passage from the route, and normal behaviour
-resumes — progress writes included. Pressing play while paused at the end
-is the same choice. **Back** closes the player and leaves the bare item
-route behind. Casting honours all of this from the sender side: the page
-watches the receiver's time and pauses it at `end`.
+The escape hatch is **Keep watching**: `actions.keep_watching` clears the
+passage on the session, and progress is accepted from then on. The client
+drops the passage from the route too, so a reload is normal viewing.
+Pressing play while paused at the end is the same choice. **Back** closes
+the player and leaves the bare item route behind. Casting honours all of
+this from the sender side: the page watches the receiver's time and pauses
+it at `end`.
 
 ### Making a passage
 
-The player mints these links too. While watching, **Mark in** and **Mark
-out** in the control row set the bounds at the current position (the cast
-receiver's position while casting); a mark within two seconds of a chapter
-start snaps to it, since the scrubber's chapter ticks are the natural cut
-points. Marking out before the in point swaps the two. A set chip shows its
-time (`In 1:19:00`), tapping it again re-marks at the current position, and
-its small × clears it; the amber flags appear on the scrub bar exactly as a
-played passage's do. Once an in point exists, **Copy passage link** writes
-the absolute `#/item/<id>?t=…&end=…` URL to the clipboard and always shows
-it as selectable text under the controls — a phone on plain `http://` has no
+The player mints these links too, and **the server keeps the marks and mints
+the link**. While watching, **Mark in** and **Mark out** in the control row
+post the current position (the cast receiver's position while casting) to
+`actions.mark_in` / `actions.mark_out`, and the session document comes back
+with the marks as the server kept them: a mark within two seconds of a
+chapter start snapped to it, since the scrubber's chapter ticks are the
+natural cut points, and an out point before the in point swapped with it —
+the person said where the passage is, not which end they meant. A set chip
+shows its time (`In 1:19:00`), tapping it again re-marks at the current
+position, and its small × clears that end (`{"clear": true}`); the amber
+flags appear on the scrub bar exactly as a played passage's do. Once an in
+point exists `actions.link` appears — until then it is an `unavailable` with
+the reason in words — and **Copy passage link** GETs it for the absolute
+`#/item/<id>?t=…&end=…` URL and the sentence that says it (`S03E22 2:22 –
+14:14 of Beach Games`), writes the URL to the clipboard and shows both under
+the controls as selectable text — a phone on plain `http://` has no
 clipboard API but can still long-press and copy. Marks survive an episode
-advance within the same show, so marking in on one episode and out after
-up-next has moved to a later one makes a run: the link carries
-`&until=<that episode's id>` with `end` inside it. Marks are dropped when the
-player closes or another work starts. Nothing is stored: a passage is its
-URL, and the household's day planner is where it is kept.
+advance within the same work, so marking in on one episode and out after
+up-next has moved to a later one makes a run: the server sees the out point
+land on a later member and the link carries `&until=<that episode's id>`
+with `end` inside it. Marks are dropped when the player closes or another
+work starts. Nothing is stored in the library: a passage is its URL, and the
+household's day planner is where it is kept. The same link can be composed
+rather than marked: `GET /api/-/passage?item=&t=&end=[&until=]` in the
+grammar's own spelling, or `GET /api/-/passage?work=&from=&to=` in the
+`places` the work document publishes — `from=S03E22 2:22&to=S03E23 14:14` is
+that run, `from=1:19:00&to=1:24:30` that scene of the film, `from=ch. 3&to=ch.
+4` those two sections of the book. Both answer the same document: the
+absolute `href`, the `sentence`, and the item the passage starts in.
 
 The reader keeps the same three rules for a text passage: it opens at
 `from` (never at the saved locator), shows *End of the passage* on reaching
 `to` and refuses to turn further, and reports no place while the passage is
 on — its position leaves through the same `saveProgress()` gate the player
 uses, which is closed while a passage is set. **Keep reading** and **Back**
-are the same two ways out.
+are the same two ways out. A book is read, not played, so it has no session
+document yet: that client-side gate is the reader's rule until the read
+action lands (`docs/hypermedia.md`, step 5).
 
 `web/passage.js` holds the grammar (`parsePassage`, `passageQuery`, and for
-text `parseLocator`, `sectionFromCFI`, `locatorSection`), both end
-predicates (`passageEnded`, `textPassageEnded`) and the marking logic
-(`snapToChapter`, `markBounds`, `passageLink`) as pure functions; `node
---test web/passage_test.mjs` runs their tests without a build step.
+text `parseLocator`, `sectionFromCFI`, `locatorSection`) and both end
+predicates (`passageEnded`, `textPassageEnded`) as pure functions; `node
+--test web/passage_test.mjs` runs their tests without a build step. The
+marking logic left it for the server (`cmd/server/passage.go`, tested in
+`cmd/server/session_test.go`): one implementation, and the rules hold for
+every client rather than for the one that remembers them.
 `web/reader.js` resolves locators against the open EPUB, `web/pdfreader.js`
 against the open PDF.
 

@@ -6,7 +6,6 @@ import assert from 'node:assert/strict';
 import passage from './passage.js';
 const { splitHash, parsePassage, passageQuery, isTimedPassage,
         passageEndAt, passageEnded, runContinues, passageForNext,
-        markTime, snapToChapter, markBounds, clearMark, marksOn, markPassage, passageLink,
         parseLocator, formatLocator, sectionFromCFI, locatorSection,
         isTextPassage, textPassageEnded } = passage;
 
@@ -119,134 +118,9 @@ test('passageForNext keeps until and drops the first item\'s t/end', () => {
 // is what the browser still owns: the parse of a passage it is handed, the
 // clock predicates, and the marks it makes.
 
-// --- making a passage while watching ----------------------------------------
-
-// a mark state with every field null except the overrides
-const M = o => ({ t: null, inItem: null, end: null, endItem: null, ...o });
-const BASE = 'http://flickr.lan:8099/';
-
-test('markTime spells seconds the way the grammar does', () => {
-  assert.equal(markTime(4740), 4740);
-  assert.equal(markTime(79.5), 79.5);
-  assert.equal(markTime(79.96), 80);
-  assert.equal(markTime(79.04), 79);
-  assert.equal(markTime(1.25), 1.3);
-  assert.equal(String(markTime(60.0)), '60');
-  assert.equal(markTime(-3), 0);
-  assert.equal(markTime(NaN), 0);
-  assert.equal(markTime(undefined), 0);
-});
-
-test('snapToChapter takes the nearest chapter start within tolerance, else the position', () => {
-  const starts = [0, 600, 1200.5];
-  assert.equal(snapToChapter(601.4, starts), 600);
-  assert.equal(snapToChapter(598.2, starts), 600);
-  assert.equal(snapToChapter(1202.5, starts), 1200.5); // exactly at the tolerance counts
-  assert.equal(snapToChapter(603, starts), 603);
-  assert.equal(snapToChapter(1.5, starts), 0);
-  assert.equal(snapToChapter(605, starts, 5), 600);   // a wider tolerance
-  assert.equal(snapToChapter(605, starts, 0), 605);   // none at all
-  assert.equal(snapToChapter(300, []), 300);
-  assert.equal(snapToChapter(300, null), 300);
-  assert.equal(snapToChapter(599.3, [598, 601]), 598); // two within reach: the nearer
-  assert.equal(snapToChapter(300, [NaN, null, 'x']), 300);
-});
-
-test('markBounds: in then out on one item', () => {
-  let s = markBounds(null, 'in', 4740.03, 51);
-  assert.deepEqual(s, M({ t: 4740, inItem: 51 }));
-  s = markBounds(s, 'out', 5070.5, 51);
-  assert.deepEqual(s, M({ t: 4740, inItem: 51, end: 5070.5, endItem: 51 }));
-  assert.equal(passageLink(BASE, s), BASE + '#/item/51?t=4740&end=5070.5');
-});
-
-test('markBounds: tapping a set chip again re-marks at the new position', () => {
-  let s = markBounds(M({ t: 4740, inItem: 51, end: 5070, endItem: 51 }), 'in', 4800, 51);
-  assert.deepEqual(s, M({ t: 4800, inItem: 51, end: 5070, endItem: 51 }));
-  s = markBounds(s, 'out', 5000, 51);
-  assert.deepEqual(s, M({ t: 4800, inItem: 51, end: 5000, endItem: 51 }));
-});
-
-test('markBounds: an out before the in swaps them, and so does an in past the out', () => {
-  let s = markBounds(M({ t: 4740, inItem: 51 }), 'out', 4000, 51);
-  assert.deepEqual(s, M({ t: 4000, inItem: 51, end: 4740, endItem: 51 }));
-  s = markBounds(M({ t: 4000, inItem: 51, end: 4740, endItem: 51 }), 'in', 5000, 51);
-  assert.deepEqual(s, M({ t: 4740, inItem: 51, end: 5000, endItem: 51 }));
-});
-
-test('markBounds: out first is fine; in later completes the passage', () => {
-  let s = markBounds(null, 'out', 5070, 51);
-  assert.deepEqual(s, M({ end: 5070, endItem: 51 }));
-  assert.equal(passageLink(BASE, s), null); // no in point, no link yet
-  s = markBounds(s, 'in', 4740, 51);
-  assert.deepEqual(s, M({ t: 4740, inItem: 51, end: 5070, endItem: 51 }));
-  assert.equal(passageLink(BASE, s), BASE + '#/item/51?t=4740&end=5070');
-});
-
-test('markBounds: the same instant twice is a point, not a passage', () => {
-  const s = markBounds(M({ t: 4740, inItem: 51 }), 'out', 4740.04, 51);
-  assert.deepEqual(s, M({ t: 4740, inItem: 51 }));
-});
-
-test('markBounds: an episode run — out on a later episode sets until', () => {
-  const order = [58, 59, 60];
-  let s = markBounds(null, 'in', 120, 58, order);
-  s = markBounds(s, 'out', 900, 60, order);
-  assert.deepEqual(s, M({ t: 120, inItem: 58, end: 900, endItem: 60 }));
-  assert.deepEqual(markPassage(s), P({ t: 120, end: 900, until: 60 }));
-  assert.equal(passageLink(BASE, s), BASE + '#/item/58?t=120&end=900&until=60');
-  // the link plays back as the run it describes
-  const p = parsePassage(splitHash(passageLink(BASE, s).slice(BASE.length)).query);
-  assert.equal(passageEndAt(p, 58), null);
-  assert.equal(passageEndAt(p, 59), null);
-  assert.equal(passageEndAt(p, 60), 900);
-  assert.equal(runContinues(p, 59), true);
-  assert.equal(runContinues(p, 60), false);
-});
-
-test('markBounds: across episodes the later episode is later even at an earlier second', () => {
-  const order = [58, 59, 60];
-  // out on the next episode at 0:10, in was at 1:00:00 of the previous — no swap
-  let s = markBounds(M({ t: 3600, inItem: 58 }), 'out', 10, 59, order);
-  assert.deepEqual(s, M({ t: 3600, inItem: 58, end: 10, endItem: 59 }));
-  // out on an EARLIER episode than the in: swapped, the run goes forward
-  s = markBounds(M({ t: 120, inItem: 60 }), 'out', 900, 58, order);
-  assert.deepEqual(s, M({ t: 900, inItem: 58, end: 120, endItem: 60 }));
-  // moving the in point onto the out point's episode collapses the run
-  s = markBounds(M({ t: 120, inItem: 58, end: 900, endItem: 60 }), 'in', 300, 60, order);
-  assert.deepEqual(s, M({ t: 300, inItem: 60, end: 900, endItem: 60 }));
-  assert.equal(markPassage(s).until, null);
-  // ids outside the order (a film) compare by seconds alone
-  s = markBounds(M({ t: 120, inItem: 7 }), 'out', 60, 7, order);
-  assert.deepEqual(s, M({ t: 60, inItem: 7, end: 120, endItem: 7 }));
-});
-
-test('clearMark removes one end and returns null when none is left', () => {
-  const both = M({ t: 120, inItem: 58, end: 900, endItem: 60 });
-  assert.deepEqual(clearMark(both, 'in'), M({ end: 900, endItem: 60 }));
-  assert.deepEqual(clearMark(both, 'out'), M({ t: 120, inItem: 58 }));
-  assert.equal(clearMark(M({ t: 120, inItem: 58 }), 'in'), null);
-  assert.equal(clearMark(null, 'out'), null);
-});
-
-test('marksOn shows each flag only on the item it was set in', () => {
-  const run = M({ t: 120, inItem: 58, end: 900, endItem: 60 });
-  assert.deepEqual(marksOn(run, 58), { t: 120, end: null });
-  assert.deepEqual(marksOn(run, 59), { t: null, end: null });
-  assert.deepEqual(marksOn(run, 60), { t: null, end: 900 });
-  assert.deepEqual(marksOn(M({ t: 120, inItem: 58, end: 900, endItem: 58 }), 58), { t: 120, end: 900 });
-  assert.deepEqual(marksOn(null, 58), { t: null, end: null });
-});
-
-test('passageLink builds the absolute item form with the grammar\'s spelling', () => {
-  assert.equal(passageLink('http://localhost:8099/', M({ t: 79.5, inItem: 51, end: 330.25, endItem: 51 })),
-               'http://localhost:8099/#/item/51?t=79.5&end=330.25');
-  assert.equal(passageLink('http://localhost:8099/', M({ t: 120, inItem: 58 })),
-               'http://localhost:8099/#/item/58?t=120'); // an in point alone: start there, play on
-  assert.equal(passageLink('http://localhost:8099/', M({ end: 900, endItem: 58 })), null);
-  assert.equal(passageLink('http://localhost:8099/', null), null);
-  assert.equal(markPassage(null), null);
-});
+// Making a passage — markTime, snapToChapter, markBounds, clearMark,
+// marksOn, markPassage, passageLink — is the SERVER's now (hyper 4): its
+// tests are cmd/server/session_test.go, over the same rules.
 
 // --- text locators -----------------------------------------------------------
 
