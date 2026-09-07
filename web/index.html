@@ -673,6 +673,10 @@
       max-width: none; margin-right: 0; background: #1b1d24; box-shadow: 0 10px 40px rgba(0,0,0,0.7); }
     /* the corner panels have no corner to sit in */
     #upnext, #passage-end, .rd-end { left: 12px; right: 12px; max-width: none; }
+    /* a phone keeps the transport UNDER the picture, so the foot of the
+       device is the foot of the controls: the skip goes to the top of the
+       picture instead, clear of the title bar over it */
+    #skips { right: 12px; bottom: auto; top: 56px; }
   }
 
   @media (pointer: coarse) {
