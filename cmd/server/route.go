@@ -285,7 +285,7 @@ func artistEnvelope(name string) *hyper.Envelope {
 // handleRouteDoc is GET /api/-/route?hash=<hash>.
 func (s *server) handleRouteDoc(w http.ResponseWriter, r *http.Request) {
 	hash := r.URL.Query().Get("hash")
-	ws, err := s.buildWorks()
+	ws, err := s.worksFor(r)
 	if err != nil {
 		hyper.WriteProblem(w, serverProblem(err))
 		return

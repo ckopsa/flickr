@@ -528,7 +528,7 @@ func genreFacet(order []shelf) []facet {
 // is the work document's answer. The document names who asked all the same,
 // so the resume link below it can.
 func (s *server) handleLibrary(w http.ResponseWriter, r *http.Request) {
-	ws, err := s.buildWorks()
+	ws, err := s.worksFor(r)
 	if err != nil {
 		hyper.WriteProblem(w, serverProblem(err))
 		return

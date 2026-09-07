@@ -588,6 +588,11 @@ func OpenState(path string) (*State, error) {
 	if err != nil {
 		return nil, err
 	}
+	// avatar, kid: a profile is a face and an audience, not only a name.
+	// Rows from before the columns read as no face and not a kid's, which is
+	// exactly what they were.
+	db.Exec(`ALTER TABLE users ADD COLUMN avatar TEXT NOT NULL DEFAULT ''`)
+	db.Exec(`ALTER TABLE users ADD COLUMN kid INTEGER NOT NULL DEFAULT 0`)
 	// seq: change-feed sequence for playback rows, its own counter in this
 	// database's meta table (state.db and library.db never share a tx).
 	db.Exec(`ALTER TABLE playback_state ADD COLUMN seq INTEGER NOT NULL DEFAULT 0`)
@@ -632,28 +637,63 @@ func (s *State) SetBookDisplay(itemID int64, images string) error {
 	return err
 }
 
-// ListUsers returns all profile names, oldest first.
-func (s *State) ListUsers() ([]string, error) {
-	rows, err := s.db.Query(`SELECT name FROM users ORDER BY created_at, name`)
+// User is one profile: the name every playback row is keyed by, the face a
+// gate draws it with, and whether it is a child's — the flag the documents
+// filter by certification for.
+type User struct {
+	Name   string `json:"name"`
+	Avatar string `json:"avatar,omitempty"`
+	Kid    bool   `json:"kid,omitempty"`
+}
+
+// ListUsers returns all profiles, oldest first.
+func (s *State) ListUsers() ([]User, error) {
+	rows, err := s.db.Query(`SELECT name, avatar, kid FROM users ORDER BY created_at, name`)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var out []string
+	var out []User
 	for rows.Next() {
-		var n string
-		if err := rows.Scan(&n); err != nil {
+		u, err := scanUser(rows)
+		if err != nil {
 			return nil, err
 		}
-		out = append(out, n)
+		out = append(out, u)
 	}
 	return out, rows.Err()
 }
 
-// CreateUser is idempotent: creating an existing profile is a no-op.
-func (s *State) CreateUser(name string) error {
-	_, err := s.db.Exec(`INSERT OR IGNORE INTO users (name, created_at) VALUES (?, ?)`,
-		name, float64(time.Now().UnixMilli())/1000)
+// User is one profile by name, or nil when nobody goes by it.
+func (s *State) User(name string) (*User, error) {
+	u, err := scanUser(s.db.QueryRow(`SELECT name, avatar, kid FROM users WHERE name = ?`, name))
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &u, nil
+}
+
+// scanUser reads one row, whichever of the two queries produced it.
+func scanUser(row interface{ Scan(...any) error }) (User, error) {
+	var u User
+	var kid int
+	err := row.Scan(&u.Name, &u.Avatar, &kid)
+	u.Kid = kid != 0
+	return u, err
+}
+
+// CreateUser is idempotent: creating an existing profile is a no-op, and the
+// face and audience it already has are the ones it keeps.
+func (s *State) CreateUser(u User) error {
+	kid := 0
+	if u.Kid {
+		kid = 1
+	}
+	_, err := s.db.Exec(`INSERT OR IGNORE INTO users (name, avatar, kid, created_at) VALUES (?, ?, ?, ?)`,
+		u.Name, u.Avatar, kid, float64(time.Now().UnixMilli())/1000)
 	return err
 }
 

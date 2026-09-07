@@ -94,9 +94,11 @@ func (s *server) handleRootDoc(w http.ResponseWriter, r *http.Request) {
 			Input: map[string]string{"hash": "string"},
 			Label: "Open an address",
 		}).
+		// A profile is a name, a face and an audience: the avatar is chosen
+		// for it when none is given, and `kid` is what filters the shelves.
 		Action("create_profile", hyper.Action{
 			Method: "POST", Href: "/api/users",
-			Input: map[string]string{"name": "string"},
+			Input: map[string]string{"name": "string", "avatar": "string?", "kid": "boolean?"},
 			Label: "Create a profile",
 		})
 	hyper.WriteDoc(w, http.StatusOK, doc)

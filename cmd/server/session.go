@@ -355,6 +355,12 @@ func (s *server) handlePlay(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// The shelves leave a title a kid profile may not see out; a play aimed
+	// straight at one — a stale tab, a pasted link — is refused in words.
+	if problem := s.refusePlay(playProfile(r, in.ClientID), *item); problem != nil {
+		hyper.WriteProblem(w, *problem)
+		return
+	}
 	pass := resolvePassage(in.Passage, item.ID)
 	seek := in.SeekSeconds
 	// Rule 1 — start there: a passage's `t` is where playback begins, and

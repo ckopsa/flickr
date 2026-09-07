@@ -1258,36 +1258,50 @@ func (s *server) handleEnrich(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) handleListUsers(w http.ResponseWriter, r *http.Request) {
-	names, err := s.state.ListUsers()
+	users, err := s.state.ListUsers()
 	if err != nil {
 		httpErr(w, 500, err)
 		return
 	}
-	out := []map[string]string{} // contract: empty array, never null
-	for _, n := range names {
-		out = append(out, map[string]string{"name": n})
+	if users == nil {
+		users = []store.User{} // contract: empty array, never null
 	}
-	writeJSON(w, out)
+	writeJSON(w, users)
 }
 
 func (s *server) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		Name string `json:"name"`
+		Name   string `json:"name"`
+		Avatar string `json:"avatar"`
+		Kid    bool   `json:"kid"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 		httpErr(w, 400, err)
 		return
 	}
-	in.Name = strings.TrimSpace(in.Name)
-	if in.Name == "" {
+	u := store.User{
+		Name:   strings.TrimSpace(in.Name),
+		Avatar: strings.TrimSpace(in.Avatar),
+		Kid:    in.Kid,
+	}
+	if u.Name == "" {
 		httpErr(w, 400, fmt.Errorf("name required"))
 		return
 	}
-	if err := s.state.CreateUser(in.Name); err != nil {
+	// Every profile has a face, whether or not the gate offered to pick one.
+	if u.Avatar == "" {
+		u.Avatar = defaultAvatar(u.Name)
+	}
+	if err := s.state.CreateUser(u); err != nil {
 		httpErr(w, 500, err)
 		return
 	}
-	writeJSON(w, map[string]string{"name": in.Name})
+	// The create is idempotent, so the answer is the STORED row: a profile
+	// created twice keeps the face and the audience it already had.
+	if stored, err := s.state.User(u.Name); err == nil && stored != nil {
+		u = *stored
+	}
+	writeJSON(w, u)
 }
 
 // handleTelemetry appends any JSON object to data/telemetry.jsonl. Always

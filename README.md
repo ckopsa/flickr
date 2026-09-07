@@ -71,9 +71,13 @@ a handful of architectural decisions (see design notes below):
    item at a time under `data/trickplay/<id>/`, written atomically, yielding
    to live playback exactly like scans do; `TRICKPLAY=0` disables the stage.
    The web UI shows hover previews on the scrub bar when the sidecar exists.
-11. **Profiles and telemetry stay lightweight** — user profiles are names in
-   `state.db` (`/api/users`); clients pass the profile name as `client_id` to
-   the unchanged progress API. `POST /api/telemetry` appends any JSON object
+11. **Profiles and telemetry stay lightweight** — user profiles are a name,
+   an avatar and a `kid` flag in `state.db` (`/api/users`); clients pass the
+   profile name as `client_id` to the unchanged progress API. A kid profile
+   is not a second library: the library, search, continue and route documents
+   leave out every work whose `certification` is above PG / TV-PG (and every
+   work nobody has rated), and a play addressed straight at one is refused
+   with `not-for-this-profile`. `POST /api/telemetry` appends any JSON object
    to `data/telemetry.jsonl` for client-side error forensics.
 12. **Self-description feed** — the library can describe itself as WORKS
    rather than files: `internal/works` purely derives one work per movie and
@@ -395,7 +399,7 @@ this list:
 | `reprobe` | `POST /api/items/{id}/reprobe` | re-probe one item (also re-discovering subtitle sidecars in its directory) |
 | `enrich` | `POST /api/items/{id}/enrich` | TMDB-enrich one item (503 without an API key, which is why it is usually an `unavailable`) |
 | `scan` | `POST /api/scan` | trigger the incremental scan; enrichment runs after |
-| `create_profile` | `POST /api/users` | idempotently create a profile name |
+| `create_profile` | `POST /api/users` | idempotently create a profile: a `name`, optionally an `avatar` and `kid` |
 | `passage` | `GET /api/-/passage?work=…` | mint a link from two of the work's `places` |
 | `route` | `GET /api/-/route?hash=…` | resolve a hash into a view and a document |
 
@@ -519,7 +523,7 @@ tools, for waymark, and for the by-hand call.
 | `POST /api/items/{id}/trickplay` | force-generate sprites for one item, synchronously | by hand |
 | `POST /api/scan`, `GET /api/scan` | trigger and observe the incremental scan (enrichment runs after) | the root's `scan` action and `scan` link |
 | `GET /api/system` | the hardware-accel accept/reject trace, and the LAN-reachable `base_url` a cast device needs | the root's `system` link |
-| `GET /api/users`, `POST /api/users` | list and idempotently create profile names (a client passes the name as `client_id`) | the root's `profiles` link and `create_profile` action |
+| `GET /api/users`, `POST /api/users` | list and idempotently create profiles — `name` (which a client passes as `client_id`), `avatar` (chosen for it when none is given) and `kid` | the root's `profiles` link and `create_profile` action |
 | `POST /api/telemetry` | append any JSON object to `data/telemetry.jsonl`; always 200 | no document names it: the cast receiver posts to it by a literal of its own, since it runs on the TV and reads no root |
 | `GET /s/…` | the share page: the hash grammar said as a path (`/s/item/4?t=4740&end=5070`, `/s/show/The%20Office?ep=S03E22`), answered as a small HTML page with the Open Graph tags a chat window unfurls and a redirect to the hash form. See *Making a passage* | the `share_href` on a minted link — and whatever it was pasted into |
 | `GET /streams/…` | the HLS output of a transcode session; every fetch counts as liveness for the idle reaper | the session document's `url` |

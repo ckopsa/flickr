@@ -36,9 +36,14 @@
   #gate-box { background: #1b1d24; border: 1px solid #2a2c33; border-radius: 12px; padding: 28px 32px; max-width: 420px; width: 92%; text-align: center; }
   #gate-box h2 { margin: 0 0 18px; font-size: 18px; font-weight: 600; }
   #gate-profiles { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; margin-bottom: 18px; }
-  #gate-profiles button { font-size: 15px; padding: 10px 18px; border-radius: 8px; }
+  #gate-profiles button { font-size: 15px; padding: 10px 18px; border-radius: 8px; display: flex; flex-direction: column; align-items: center; gap: 4px; min-width: 84px; }
+  /* the face: a profile is picked out by it before its name is read */
+  .gate-face { font-size: 30px; line-height: 1.1; }
+  .gate-kid { font-size: 10px; letter-spacing: .06em; text-transform: uppercase; color: var(--accent); }
   #gate-new { display: flex; gap: 8px; justify-content: center; }
   #gate-new input { flex: 1; }
+  #gate-kid { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); margin-top: 10px; cursor: pointer; }
+  #gate-kid input { accent-color: var(--accent); }
   #gate-note { font-size: 11px; color: var(--muted); margin-top: 12px; }
   #profile-chip { background: #1e2c42; color: var(--accent); border-color: #2a3d5c; border-radius: 12px; }
 
@@ -700,8 +705,10 @@
   </div>
 </div>
 
-<!-- profile gate: who is watching. The names are GET (root.links.profiles)
-     and a new one is root.actions.create_profile; kernel.js fills the box. -->
+<!-- profile gate: who is watching, each with the face the server gave them.
+     The rows are GET (root.links.profiles) and a new one is
+     root.actions.create_profile; kernel.js fills the box. A kids profile is
+     shown only what its certification allows, which the server decides. -->
 <div id="gate" hidden>
   <div id="gate-box">
     <h2>Who's watching?</h2>
@@ -710,6 +717,7 @@
       <input type="text" id="gate-name" placeholder="New profile name" maxlength="40">
       <button id="gate-create">Create</button>
     </div>
+    <label id="gate-kid"><input type="checkbox" id="gate-kid-check"> Kids profile</label>
     <div id="gate-note"></div>
   </div>
 </div>

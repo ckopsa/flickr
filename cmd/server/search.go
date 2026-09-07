@@ -205,7 +205,7 @@ func searchEnvelope(q string, ws []works.Work) *hyper.Envelope {
 // query is not a refusal: it is a search that has found nothing yet, which
 // is what a cleared box means.
 func (s *server) handleSearch(w http.ResponseWriter, r *http.Request) {
-	ws, err := s.buildWorks()
+	ws, err := s.worksFor(r)
 	if err != nil {
 		hyper.WriteProblem(w, serverProblem(err))
 		return

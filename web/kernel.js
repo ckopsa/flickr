@@ -640,57 +640,79 @@
 
   // --- the profile gate --------------------------------------------------------
 
-  async function profileNames() {
+  // A profile is a row now — a name, the face the server gave it and whether
+  // it is a kid's — so the gate draws faces and the chip wears one. Profiles
+  // kept in this browser (a server too old to have any) are names on disk,
+  // and read back as rows with no face.
+  function localRows() {
+    return JSON.parse(localStorage.localProfiles || '[]')
+      .map(n => (typeof n === 'string' ? { name: n } : n)).filter(u => u && u.name);
+  }
+
+  async function profileRows() {
     const href = R.linkHref(rootDoc, 'profiles');
-    if (!href) return { names: JSON.parse(localStorage.localProfiles || '[]'), live: false };
+    if (!href) return { rows: localRows(), live: false };
     try {
       const users = await api(href);
-      return { names: (users || []).map(u => u.name).filter(Boolean), live: true };
+      return { rows: (users || []).filter(u => u && u.name), live: true };
     } catch (e) {
-      return { names: JSON.parse(localStorage.localProfiles || '[]'), live: false };
+      return { rows: localRows(), live: false };
     }
   }
+
+  // The face a profile is drawn with, and the one the chip falls back to
+  // when a profile was made before there were any.
+  function faceOf(u) { return (u && u.avatar) || '👤'; }
 
   async function openGate() {
     $('gate').hidden = false;
+    $('gate-kid-check').checked = false; // a fresh ask, not the last one's answer
     $('gate-profiles').innerHTML = '<span style="color:#9a9daa;font-size:13px">loading…</span>';
-    const { names, live } = await profileNames();
+    const { rows, live } = await profileRows();
     $('gate-note').textContent = live ? ''
       : 'Server has no profile support yet — profiles are stored in this browser only.';
-    $('gate-profiles').innerHTML = names.length
-      ? names.map(n => '<button data-profile="' + esc(n) + '">' + esc(n) + '</button>').join('')
+    $('gate-profiles').innerHTML = rows.length
+      ? rows.map(u => '<button data-profile="' + esc(u.name) + '" data-face="' + esc(faceOf(u)) + '">' +
+          '<span class="gate-face">' + esc(faceOf(u)) + '</span>' + esc(u.name) +
+          (u.kid ? '<span class="gate-kid">kids</span>' : '') + '</button>').join('')
       : '<span style="color:#9a9daa;font-size:13px">No profiles yet — create one below.</span>';
   }
 
-  async function createProfile(name) {
+  async function createProfile(name, kid) {
     name = String(name || '').trim();
     if (!name) return;
     const act = R.actionOf(rootDoc, 'create_profile');
-    let stored = false;
+    let made = null;
     if (act) {
       try {
-        await api(act.href, {
+        made = await api(act.href, {
           method: act.method || 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name }),
+          body: JSON.stringify({ name, kid: !!kid }),
         });
-        stored = true;
       } catch (e) {
-        if (e.status === 409 || /exist/i.test(e.message)) stored = true; // duplicate is fine
+        if (e.status === 409 || /exist/i.test(e.message)) made = { name }; // duplicate is fine
       }
     }
-    if (!stored) {
-      const l = JSON.parse(localStorage.localProfiles || '[]');
-      if (!l.includes(name)) l.push(name);
+    if (!made) {
+      const l = localRows();
+      if (!l.some(u => u.name === name)) l.push({ name, kid: !!kid });
       localStorage.localProfiles = JSON.stringify(l);
     }
-    selectProfile(name);
+    selectProfile(name, faceOf(made));
   }
 
-  async function selectProfile(name) {
+  // The chip is who is watching: their face and their name.
+  function paintChip() {
+    $('profile-chip').textContent =
+      (localStorage.profileFace || '👤') + ' ' + (profile || '');
+  }
+
+  async function selectProfile(name, face) {
     profile = name;
     localStorage.profileName = name;
+    localStorage.profileFace = face || '👤';
     setProfileCookie(name);
-    $('profile-chip').textContent = '👤 ' + name;
+    paintChip();
     $('gate').hidden = true;
     // Who is asking changes what the documents say: the root's resume link,
     // the work's progress, the item's place.
@@ -870,7 +892,7 @@
   function onClick(e) {
     const t = e.target;
     const gate = t.closest('[data-profile]');
-    if (gate) { selectProfile(gate.dataset.profile); return; }
+    if (gate) { selectProfile(gate.dataset.profile, gate.dataset.face); return; }
     const chip = t.closest('[data-genre]');
     if (chip) { libState.genre = chip.dataset.genre || null; paintLibrary(); return; }
     // The three buttons that end a sitting rather than following a relation:
@@ -1024,8 +1046,9 @@
     window.addEventListener('hashchange', applyRoute);
     window.addEventListener('beforeunload', () => root.Player.close());
     $('profile-chip').onclick = openGate;
-    $('gate-create').onclick = () => createProfile($('gate-name').value);
-    $('gate-name').onkeydown = e => { if (e.key === 'Enter') createProfile($('gate-name').value); };
+    const newProfile = () => createProfile($('gate-name').value, $('gate-kid-check').checked);
+    $('gate-create').onclick = newProfile;
+    $('gate-name').onkeydown = e => { if (e.key === 'Enter') newProfile(); };
     $('scan').onclick = scan;
     $('search').oninput = onSearchInput;
     $('search').onkeydown = onSearchKey;
@@ -1055,7 +1078,7 @@
       });
     }
 
-    if (profile) { $('profile-chip').textContent = '👤 ' + profile; setProfileCookie(profile); }
+    if (profile) { paintChip(); setProfileCookie(profile); }
     if (!location.hash) history.replaceState(null, '', '#/');
 
     root.Player.init(kernel);
