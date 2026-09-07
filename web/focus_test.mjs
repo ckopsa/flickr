@@ -45,10 +45,47 @@ test('down and up stay in the column', () => {
 });
 
 test('the edge of the grid points at nothing', () => {
-  assert.equal(pick(grid[at(0, 5)], grid, 'right'), -1);
-  assert.equal(pick(grid[at(0, 0)], grid, 'left'), -1);
   assert.equal(pick(grid[at(0, 2)], grid, 'up'), -1);
   assert.equal(pick(grid[at(1, 2)], grid, 'down'), -1);
+  // The four corners of the whole grid: nothing above the top row and
+  // nothing below the last, so the wrap has nowhere to go either.
+  assert.equal(pick(grid[at(0, 0)], grid, 'left'), -1);
+  assert.equal(pick(grid[at(1, 5)], grid, 'right'), -1);
+});
+
+// The end of a row is a line break, not a wall: Right off the end lands on
+// the first tile of the row under it, Left off the start on the last tile of
+// the row over it. One table, both arrows, every row of the grid.
+test('right and left wrap at the ends of a row', () => {
+  const cases = [
+    ['right off the end of row 0', grid[at(0, 5)], 'right', at(1, 0)],
+    ['left off the start of row 1', grid[at(1, 0)], 'left', at(0, 5)],
+    ['right off the end of the last row', grid[at(1, 5)], 'right', -1],
+    ['left off the start of the first row', grid[at(0, 0)], 'left', -1],
+  ];
+  for (const [name, from, dir, want] of cases) {
+    assert.equal(pick(from, grid, dir), want, name);
+  }
+});
+
+// A wrap is the LAST resort: as long as the row has something further along
+// it, that is where the arrow goes.
+test('a row with somewhere to go does not wrap', () => {
+  for (let col = 0; col < 5; col++) {
+    assert.equal(pick(grid[at(0, col)], grid, 'right'), at(0, col + 1));
+    assert.equal(pick(grid[at(1, col + 1)], grid, 'left'), at(1, col));
+  }
+});
+
+// Rows are bands of the screen, not containers: two separate bands, each a
+// scrolling row of its own, wrap into each other the same way two rows of one
+// grid do.
+test('the wrap crosses from one band into the next', () => {
+  const bandA = [r(40, 100, 180, 270), r(248, 100, 180, 270)];
+  const bandB = [r(40, 430, 180, 270), r(248, 430, 180, 270)];
+  const all = bandA.concat(bandB);
+  assert.equal(pick(bandA[1], all, 'right'), 2, 'the first card of the band below');
+  assert.equal(pick(bandB[0], all, 'left'), 1, 'the last card of the band above');
 });
 
 test('an element never picks itself, however it is asked', () => {

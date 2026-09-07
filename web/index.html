@@ -42,6 +42,11 @@
   .gate-kid { font-size: 10px; letter-spacing: .06em; text-transform: uppercase; color: var(--accent); }
   #gate-new { display: flex; gap: 8px; justify-content: center; }
   #gate-new input { flex: 1; }
+  /* the faces on offer for the profile being made: one is picked, or none is
+     and the server gives it the face it would have anyway */
+  #gate-faces { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; margin-top: 10px; }
+  #gate-faces button { font-size: 19px; line-height: 1; padding: 5px 7px; border-radius: 8px; }
+  #gate-faces button.picked { background: #2a4a8a; border-color: #5b8def; }
   #gate-kid { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); margin-top: 10px; cursor: pointer; }
   #gate-kid input { accent-color: var(--accent); }
   #gate-note { font-size: 11px; color: var(--muted); margin-top: 12px; }
@@ -93,8 +98,11 @@
   .poster-wrap img { width: 100%; height: 100%; object-fit: cover; display: block; }
   /* a frame with no picture in it yet shimmers rather than sitting empty: the
      kernel's one delegated load listener adds .loaded when the picture lands,
-     and the picture fades up into the frame it was already holding */
-  .poster-wrap:not(.text-tile):not(.loaded), #detail-poster:not(.loaded) {
+     and the picture fades up into the frame it was already holding. A picture
+     with no frame around it — the detail poster, an episode still, the Next
+     up art — wears the shimmer itself and the picture lands on it. */
+  .poster-wrap:not(.text-tile):not(.loaded), #detail-poster:not(.loaded),
+  .item.enriched img.still:not(.loaded), #next-up .nu-art img:not(.loaded) {
     background-image: linear-gradient(100deg, #1e2026 35%, #2b2e38 50%, #1e2026 65%);
     background-size: 300% 100%; animation: shimmer 1.4s ease-in-out infinite; }
   /* the tile's picture fades up out of its own frame; the detail poster IS
@@ -107,6 +115,12 @@
   .text-tile .tile-sub { font-size: 11px; color: var(--muted); }
   .card .c-title { font-size: 13px; margin-top: 8px; font-weight: 600; line-height: 1.3; }
   .card .c-sub { font-size: 11px; color: var(--muted); margin-top: 2px; }
+  /* what the search box is filtering the shelf by, over the shelf, with the
+     way out of it on the chip itself */
+  #lib-filter { padding: 12px 0 0; }
+  #lib-filter button { border-radius: 14px; font-size: 12px; padding: 5px 14px;
+    background: #2a4a8a; border-color: #3a5da8; color: #dbe6fa; }
+  #lib-filter button:hover { background: #33579e; }
   #empty { padding: 40px; color: var(--muted); font-size: 14px; }
   #view-loading { padding: 40px; color: var(--muted); font-size: 14px; }
 
@@ -648,7 +662,7 @@
   /* asked for less motion: no shimmer, no fade, no transition. The kernel
      skips startViewTransition outright; this is the rest of the same answer. */
   @media (prefers-reduced-motion: reduce) {
-    .poster-wrap, #detail-poster { animation: none; }
+    .poster-wrap, #detail-poster, .item.enriched img.still, #next-up .nu-art img { animation: none; }
     .poster-wrap img { transition: none; }
     /* the ten-foot ring is still a lift — it just arrives rather than grows */
     body[data-ten-foot] .card, body[data-ten-foot] .cw-card, body[data-ten-foot] #hero {
@@ -717,6 +731,10 @@
       <input type="text" id="gate-name" placeholder="New profile name" maxlength="40">
       <button id="gate-create">Create</button>
     </div>
+    <!-- the faces a new profile may wear: the root document's `avatars`,
+         drawn by kernel.js. Picking none is allowed — then the server gives
+         the name the face it always did. -->
+    <div id="gate-faces" hidden></div>
     <label id="gate-kid"><input type="checkbox" id="gate-kid-check"> Kids profile</label>
     <div id="gate-note"></div>
   </div>

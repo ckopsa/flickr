@@ -6,8 +6,9 @@ package main
 // It carries two more facts now: an AVATAR, so the gate is a row of faces
 // rather than a row of words, and KID, which is not decoration. A kid
 // profile's library, search, resume shelf and routes are the same documents
-// with the titles it may not see left out, and a play addressed straight at
-// one of them is refused with a problem that names the way back.
+// with the titles it may not see left out, and an address aimed straight at
+// one of them — a play, an item, a work, a read — is refused with a problem
+// that names the way back.
 //
 // The rating read is the certification the TMDB enrichment carries
 // (flickr-duw.7). Nothing new is fetched or stored for the filter: what the
@@ -105,11 +106,13 @@ func playProfile(r *http.Request, clientID string) string {
 	return profileOf(r)
 }
 
-// refusePlay is the other half of the filter: the shelves leave the title
-// out, and a play addressed straight at it — a stale tab, a pasted link, a
-// cast device replaying an old session — is told why, and where to go.
-// nil when this profile may play it, which is every profile but a kid's.
-func (s *server) refusePlay(profile string, it store.Item) *hyper.Problem {
+// refuseItem is the other half of the filter: the shelves leave the title
+// out, and an address aimed straight at it — a stale tab, a pasted link, a
+// cast device replaying an old session — is told why, and where to go. The
+// play, the item document and the read all ask it, so a kid who types an
+// address is turned away in the same words wherever they type it.
+// nil when this profile may have it, which is every profile but a kid's.
+func (s *server) refuseItem(profile string, it store.Item) *hyper.Problem {
 	if !s.kidProfile(profile) {
 		return nil
 	}
@@ -126,6 +129,24 @@ func (s *server) refusePlay(profile string, it store.Item) *hyper.Problem {
 			}
 		}
 	}
+	return notForThisProfile(profile, itemTitle(it), cert)
+}
+
+// refuseWork is the same refusal for a whole title: the work document is a
+// shelf of its own, and one the grid left out is not opened by typing its
+// key. A work is rated by its representative member, the way the grid's
+// filter rates it.
+func (s *server) refuseWork(profile string, wk *works.Work) *hyper.Problem {
+	if !s.kidProfile(profile) {
+		return nil
+	}
+	return notForThisProfile(profile, wk.Title, workCertification(wk))
+}
+
+// notForThisProfile is the refusal itself, and nil when the rating passes:
+// what was asked for, how it is rated (or that nobody rated it, which is the
+// same answer), and the gate as the way on.
+func notForThisProfile(profile, title, cert string) *hyper.Problem {
 	if fitForKids(cert) {
 		return nil
 	}
@@ -135,7 +156,7 @@ func (s *server) refusePlay(profile string, it store.Item) *hyper.Problem {
 	}
 	p := hyper.Refuse(http.StatusForbidden, "not-for-this-profile",
 		"Not for this profile",
-		fmt.Sprintf("%q is a kids profile, and %s: %s", profile, itemTitle(it), rated)).
+		fmt.Sprintf("%q is a kids profile, and %s: %s", profile, title, rated)).
 		WithRemedy("switch to another profile — the chip at the top of the page opens the gate",
 			&hyper.Link{Href: "/api/users", Title: "Profiles"})
 	return &p

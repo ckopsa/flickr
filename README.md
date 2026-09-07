@@ -76,8 +76,8 @@ a handful of architectural decisions (see design notes below):
    profile name as `client_id` to the unchanged progress API. A kid profile
    is not a second library: the library, search, continue and route documents
    leave out every work whose `certification` is above PG / TV-PG (and every
-   work nobody has rated), and a play addressed straight at one is refused
-   with `not-for-this-profile`. `POST /api/telemetry` appends any JSON object
+   work nobody has rated), and an address aimed straight at one — a play, an
+   item, a work, a read — is refused with `not-for-this-profile`. `POST /api/telemetry` appends any JSON object
    to `data/telemetry.jsonl` for client-side error forensics.
 12. **Self-description feed** — the library can describe itself as WORKS
    rather than files: `internal/works` purely derives one work per movie and
@@ -357,7 +357,7 @@ rewrites them.
 
 | Document | Address | Carries | Actions | Refuses with |
 |---|---|---|---|---|
-| **root** | `GET /api/` | `profile` — who is asking, from the `client_id` query parameter or the cookie of that name — and the links `library`, `continue`, `artists`, `works`, `items`, `scan`, `system`, `profiles` | `scan`, `create_profile`, and `route`: the address that turns a hash into a document. It is named here because `/api/` is the only address a client knows by heart, so the resolver has to be reachable from it | — |
+| **root** | `GET /api/` | `profile` — who is asking, from the `client_id` query parameter or the cookie of that name — `avatars`, the faces the gate offers a new profile to pick from (the same list the server assigns from when a create names none), and the links `library`, `continue`, `artists`, `works`, `items`, `scan`, `system`, `profiles` | `scan`, `create_profile`, and `route`: the address that turns a hash into a document. It is named here because `/api/` is the only address a client knows by heart, so the resolver has to be reachable from it | — |
 | **library** | `GET /api/library` | `count`, `items` — one tile per thing in the order the grid draws them (see *Library layout*) — `facets.genre` for the chip row, and `recently_added` — the newest twelve works by their members' `added_at`, as the same tiles; links `root`, `continue`, `artists`. A tile is a small envelope: `self` and `links.self` (the work or the artist document), `kind` (`work`/`artist`), `title`, `subtitle` ("1 season · 2 episodes · 1 extra", "Frank Herbert · 1965 · 2 parts", "3 albums"), `tech`, `medium`, `work_kind`, `year`, `genres`, `item_id` (the member a tap opens), `search` (what the search box matches), `links.artwork` — the poster or the file's own cover, chosen here rather than in the browser — and `links.backdrop`, the wide picture, where the enrichment fetched one | — | — |
 | **work** | `GET /api/works/{key}` | `work_kind` and everything `works.Build` derives, `members` in order as item envelopes, `places` — the passage grammar's tokens with the label a chip shows (`S03E22 0:00` · "S03E22 · Beach Games", `1:19:00` · "Let It Go", `ch. 7` · "The Cellar") — the asking `profile` and their `progress` (`status`, `fraction`, `text`, and `next`, where they would pick up), and what TMDB knows about the title — `runtime_minutes`, `certification`, `cast` — said once here rather than repeated down `members`; links `items`, `poster` or `cover`, and `backdrop` | `play` (the representative, or the first member this profile has not finished — the label says which) or `read` for a book, and `passage`, which mints a link from two of the `places` | `no-such-work` 404 |
 | **item** | `GET /api/items/{id}` | `medium`, `label`, `tech` (what the file IS), `overview` (the episode's own synopsis, or the work's), `year`, `extra: true` for bonus material, `runtime_minutes`, `certification` and `cast` on the item's own page, `identity`, `enrichment`, `media_info` (chapters, sections, page count, audio tracks), `subtitles` with their `.vtt` addresses, `probe_error`, and `resume` — where the asking profile left off, so nothing has to ask a progress route for it; links `work`, `prev`, `next` (the work's own order, bonus material aside), `poster`/`backdrop`/`still`/`cover`/`trickplay`/`book` | `play` or `read`, `progress`, and on the item's own page `identity`, `reprobe`, `enrich` | `bad-item-id` 400, `no-such-item` 404 |
@@ -550,7 +550,7 @@ view has one, and every link minted so far keeps working.
 | `#/show/<title>` | a show's episode list (`<title>` is `encodeURIComponent`'d, matched case-insensitively against both the show's own title and the one its files spell) |
 | `#/artist/<name>` | an artist's shelf: albums with covers, in year order (`<name>` is `encodeURIComponent`'d, matched case-insensitively) |
 | `#/item/<id>` | one item's detail pane; for an audiobook part or a track, the record pane with the work's parts beside it |
-| `#/search/<q>` | what one substring finds across the whole library, in groups: titles, episodes, tracks, parts, books (`<q>` is `encodeURIComponent`'d, matched case-insensitively) |
+| `#/search/<q>` | what one substring finds across the whole library, in groups: titles, artists, episodes, tracks, parts, books (`<q>` is `encodeURIComponent`'d, matched case-insensitively) |
 
 A **passage** is a start and an end within a work — a scene, or a run of
 episodes, or two chapters of a book — and other systems mint links to them,

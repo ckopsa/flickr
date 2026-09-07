@@ -7,12 +7,13 @@ package main
 // the audiobook and the books are rated by nobody at all. So one table over
 // the three kinds of profile — nobody, an adult, a kid — is the whole of the
 // rule, and the rest of the file is the same rule seen from search, the
-// resume shelf, a route and a play.
+// resume shelf, a route, an item, a work, a read and a play.
 
 import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"flickr/internal/store"
@@ -153,6 +154,66 @@ func TestRouteIsFilteredForAKid(t *testing.T) {
 				t.Fatalf("route %s = %d, want %d: %s", tc.hash, w.Code, tc.status, w.Body)
 			}
 		})
+	}
+}
+
+// The routes a kid could still type: an item, a work and a read answered
+// whatever the shelves had left out, which made the filter a decoration on
+// anything a child could paste into the address bar. All three refuse it now
+// in the play's own words. A book is refused too — nobody rated one, and an
+// unrated title is exactly what the shelves leave out.
+func TestItemWorkAndReadAreRefusedForAKid(t *testing.T) {
+	_, h := profiled(t)
+	office := "/api/works/tmdb%3A2316"   // TV-14
+	frozen := "/api/works/tmdb%3A109445" // PG
+	for _, tc := range []struct {
+		name, method, target string
+		status               int
+	}{
+		{"an episode of the show it may not see", "GET",
+			fmt.Sprintf("/api/items/%d", idBeach), http.StatusForbidden},
+		{"the show itself", "GET", office, http.StatusForbidden},
+		{"a book, which nobody rated", "GET",
+			fmt.Sprintf("/api/items/%d", idHillHouse), http.StatusForbidden},
+		{"and reading one", "POST",
+			fmt.Sprintf("/api/items/%d/read", idHillHouse), http.StatusForbidden},
+		{"the film is still there", "GET",
+			fmt.Sprintf("/api/items/%d", idFrozen), http.StatusOK},
+		{"and so is its work", "GET", frozen, http.StatusOK},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var w *httptest.ResponseRecorder
+			if tc.method == "POST" {
+				w = post(t, h, tc.target, map[string]any{"client_id": "pip"})
+			} else {
+				w = get(t, h, tc.target+"?client_id=pip")
+			}
+			if w.Code != tc.status {
+				t.Fatalf("%s %s = %d, want %d: %s", tc.method, tc.target, w.Code, tc.status, w.Body)
+			}
+			if tc.status != http.StatusForbidden {
+				return
+			}
+			if ct := w.Header().Get("Content-Type"); ct != "application/problem+json" {
+				t.Errorf("content-type = %q", ct)
+			}
+			p := decode(t, w)
+			if p["type"] != "not-for-this-profile" {
+				t.Errorf("type = %v", p["type"])
+			}
+			remedy, _ := p["remedy"].(map[string]any)
+			link, _ := remedy["link"].(map[string]any)
+			if link == nil || link["title"] != "Profiles" {
+				t.Errorf("the refusal does not name the profile switch: %v", p)
+			}
+		})
+	}
+
+	// An adult reads the same book, so the refusal is the profile's and not
+	// the route's.
+	if w := post(t, h, fmt.Sprintf("/api/items/%d/read", idHillHouse),
+		map[string]any{"client_id": "chris"}); w.Code != http.StatusOK {
+		t.Errorf("adult read = %d: %s", w.Code, w.Body)
 	}
 }
 

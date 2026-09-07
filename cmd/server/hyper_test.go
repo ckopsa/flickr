@@ -365,7 +365,9 @@ func TestHyperGolden(t *testing.T) {
 		{"work-album", "/api/works/album%3Aradiohead-ok-computer-1997?client_id=chris"},
 		{"work-book", "/api/works/book%3Ashirley-jackson-the-haunting-of-hill-house-1959?client_id=chris"},
 		{"library", "/api/library?client_id=chris"},
-		{"search", "/api/search?q=the&client_id=chris"},
+		// "he" rather than "the": the one query this library answers in every
+		// row the search has, the artist's shelf among them.
+		{"search", "/api/search?q=he&client_id=chris"},
 		{"artist", "/api/artists/Radiohead?client_id=chris"},
 		{"continue", "/api/continue?client_id=chris"},
 	} {

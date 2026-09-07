@@ -15,6 +15,11 @@
 // MISS each other across it. The penalty is the whole trick: it keeps Down
 // inside its column and Right inside its row, while still letting either reach
 // the next band once the column runs out.
+//
+// AND ONE EXCEPTION: when nothing lies that way at all, Right and Left WRAP —
+// off the end of a row to the start of the next, off the start of one to the
+// end of the row above — because on a remote the end of a row is a line
+// break, not a dead end.
 (function (root) {
   'use strict';
 
@@ -52,6 +57,36 @@
     return along + CROSS * across;
   }
 
+  // Two rectangles are on the same ROW when their vertical spans touch: a
+  // row is a band of the screen, not a container, so a tall poster and the
+  // short button beside it are on one.
+  function sameRow(a, b) { return gap(a.top, a.bottom, b.top, b.bottom) === 0; }
+
+  // Right off the end of a row, or Left off the start of one: reading order
+  // says where that goes — the first thing on the next row down, the last
+  // thing on the row above. Without it the last tile of a row is a dead end,
+  // and a remote has no other way past it.
+  function wrap(from, rects, dir) {
+    if (dir !== 'left' && dir !== 'right') return -1;
+    const down = dir === 'right';
+    // The nearest row on that side of ours, named by any one of its members.
+    let row = -1;
+    for (let i = 0; i < rects.length; i++) {
+      const r = rects[i];
+      if (sameRow(from, r)) continue;
+      if (down ? centreY(r) <= centreY(from) : centreY(r) >= centreY(from)) continue;
+      if (row < 0 || (down ? centreY(r) < centreY(rects[row]) : centreY(r) > centreY(rects[row]))) row = i;
+    }
+    if (row < 0) return -1;
+    // …and the end of it the arrow arrives at.
+    let best = row;
+    for (let i = 0; i < rects.length; i++) {
+      if (!sameRow(rects[row], rects[i])) continue;
+      if (down ? centreX(rects[i]) < centreX(rects[best]) : centreX(rects[i]) > centreX(rects[best])) best = i;
+    }
+    return best;
+  }
+
   // Which of `rects` the arrow points at from `from`, as an index into the
   // list, or -1 for nothing that way. `from` null is the first press with
   // nothing focused: the first candidate is where the ring starts.
@@ -67,6 +102,7 @@
       best = i;
       bestCost = c;
     }
+    if (best < 0) return wrap(from, rects, dir);
     return best;
   }
 

@@ -169,6 +169,23 @@ test('a bar with no picture is still a bar, and a book gets none at all', () => 
   assert.equal(R.miniPlayer(null, {}), '');
 });
 
+// The bar's own controls are the device's — play/pause, +-30s — but ending
+// the sitting is the DOCUMENT's, so it is drawn from the session's stop action
+// and the kernel's delegate follows it exactly as the full chrome's Stop does.
+test('the bar can end the sitting without being opened back up', () => {
+  const doc = golden('session-play');
+  const html = R.miniPlayer(doc, {});
+  const stop = doc.actions.stop;
+  assert.ok(html.includes('data-act="stop"'), 'the bar draws the session\'s stop');
+  assert.ok(html.includes('data-href="' + stop.href + '"'), 'at the action\'s own address');
+  assert.ok(html.includes('data-method="' + stop.method + '"'), 'with the action\'s own method');
+  assert.ok(html.includes('>' + R.esc(stop.label) + '<'), 'labelled in the document\'s words');
+  // A session that does not afford stopping gets no button for it.
+  const held = JSON.parse(JSON.stringify(doc));
+  delete held.actions.stop;
+  assert.ok(!R.miniPlayer(held, {}).includes('data-act="stop"'));
+});
+
 test('a reading session has no player chrome at all', () => {
   assert.equal(R.session(golden('session-read'), {}), '');
   assert.equal(R.session(golden('session-read-pdf'), {}), '');
@@ -276,8 +293,9 @@ test('the results are the groups the search answered, in its order', () => {
   assert.ok(html.includes('data-nav="#/"'));
 });
 
-// A hit opens the thing it names: a show by its title, a member by its id —
-// both spelled by the same function a library tile is.
+// A hit opens the thing it names: a show by its title, an artist by their
+// name, a member by its id — all three spelled by the same function a library
+// tile is, because an artist hit IS the tile the library draws.
 test('a result opens the route its kind spells', () => {
   const doc = golden('search');
   const byTitle = {};
@@ -285,6 +303,11 @@ test('a result opens the route its kind spells', () => {
   assert.equal(byTitle['The Office'], '#/show/The%20Office');
   assert.equal(byTitle['Beach Games'], '#/item/8');
   assert.equal(byTitle['The Bends'], '#/item/11');
+  assert.equal(byTitle['Radiohead'], '#/artist/Radiohead');
+  const artists = doc.groups.find(g => g.key === 'artists');
+  const section = R.search(doc).split('data-group="artists"')[1].split('</section>')[0];
+  assert.deepEqual(cardTitles(section), artists.items.map(en => unesc(R.esc(en.title))));
+  assert.ok(section.includes('data-nav="#/artist/Radiohead"'), 'the shelf is not opened');
 });
 
 test('a search that matches nothing says so, and is still a page', () => {
@@ -294,6 +317,22 @@ test('a search that matches nothing says so, and is still a page', () => {
   assert.ok(html.includes('id="empty"'));
   assert.ok(!html.includes('class="band"'), 'no heading stands over nothing');
   assert.ok(html.includes('data-nav="#/"'), 'the way back is still there');
+});
+
+// The box keeps its words on the way back from a results page, so the shelf
+// says which words are hiding half of it — and the chip is the way out.
+test('the library says what is filtering it, and offers the way out', () => {
+  const doc = golden('library');
+  const html = R.library(doc, { q: 'dune' });
+  assert.ok(html.includes('id="lib-filter"'), 'no chip over a filtered shelf');
+  assert.ok(html.includes('dune'), 'the chip does not say what it is filtering by');
+  assert.ok(html.includes('data-clear-q'), 'the chip does not clear the filter');
+  // The chip stands over the tiles it is hiding, not under them.
+  assert.ok(html.indexOf('id="lib-filter"') < html.indexOf('data-band='));
+  // A shelf the filter empties still wears it: it is the only way back.
+  assert.ok(R.library(doc, { q: 'nothing at all' }).includes('data-clear-q'));
+  // An unfiltered shelf says nothing at all.
+  assert.ok(!R.library(doc, {}).includes('id="lib-filter"'));
 });
 
 test('the genre chip and the search box only filter', () => {

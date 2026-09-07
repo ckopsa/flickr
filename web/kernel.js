@@ -150,7 +150,10 @@
   }
 
   // A picture is there or it is on its way; .loaded says which, and the frame
-  // shimmers until it does (index.html carries the placeholder).
+  // shimmers until it does (index.html carries the placeholder). The frame is
+  // the tile's wrapper where the picture has one and the PICTURE ITSELF where
+  // it has none — an episode still, the Next up art, the detail poster — so
+  // every image on the page settles by the same mark.
   function markLoaded(img) {
     (img.closest('.poster-wrap') || img).classList.add('loaded');
   }
@@ -167,7 +170,11 @@
       for (const img of $('view').querySelectorAll('img')) {
         if (img.complete && img.naturalWidth) markLoaded(img);
       }
-    });
+    // A television has no pointer to leave anywhere: the ring has to land on
+    // the fresh view itself, or the first press of an arrow is spent finding
+    // out where it was. It lands once the swap has settled, which is what
+    // this promise says.
+    }).then(() => focusFirst());
   }
 
   function showStage(on) {
@@ -294,6 +301,15 @@
     searchTimer = setTimeout(runSearch, searchSettleMs);
   }
 
+  // Emptying the box by pressing the chip the shelf wears, which is the same
+  // as emptying it by hand: the box IS the filter, so nothing else is told.
+  function clearSearch() {
+    if (searchTimer) clearTimeout(searchTimer);
+    searchTimer = null;
+    $('search').value = '';
+    filterLibrary();
+  }
+
   function onSearchKey(e) {
     if (e.key !== 'Enter') return;
     if (searchTimer) clearTimeout(searchTimer);
@@ -328,6 +344,7 @@
     // the shelf lands on its own errand — or empties.
     const slot = $('hero-slot');
     if (slot) slot.innerHTML = R.hero(libraryDoc, continueDoc);
+    focusFirst(true); // the hero the ring was on went with that repaint
   }
 
   // The resume shelf is its own document, followed from the root (or the
@@ -397,8 +414,13 @@
     if (seq !== routeSeq) return;
     currentRoute = r;
     // The search box filters the library's tiles and searches the whole
-    // shelf, so it is up on those two views and nowhere else.
-    $('search').hidden = r.view !== 'library' && r.view !== 'search';
+    // shelf, so it is up on those two views and nowhere else. Leaving both of
+    // them EMPTIES it: the box outlives the view it belongs to, and a home
+    // drawn through a query nobody can see any more is a library with titles
+    // missing from it.
+    const searching = r.view === 'library' || r.view === 'search';
+    $('search').hidden = !searching;
+    if (!searching) { $('search').value = ''; libState.q = ''; }
 
     if (r.problem) {
       // A refusal is an answer: its sentence goes on the library view, which
@@ -669,9 +691,26 @@
   // when a profile was made before there were any.
   function faceOf(u) { return (u && u.avatar) || '👤'; }
 
+  // The faces a new profile may wear are the SERVER's — `avatars` on the root
+  // — so this file holds no emoji of its own beyond the one it falls back to
+  // for a profile made before there were any. Picking none is allowed: the
+  // create leaves `avatar` out and the server assigns the face it always did.
+  let gateFace = '';
+  function paintFaces() {
+    const row = $('gate-faces');
+    if (!row) return;
+    const faces = (rootDoc && rootDoc.avatars) || [];
+    if (faces.indexOf(gateFace) < 0) gateFace = '';
+    row.hidden = !faces.length;
+    row.innerHTML = faces.map(f => '<button data-face-pick="' + esc(f) + '"' +
+      (f === gateFace ? ' class="picked"' : '') + '>' + esc(f) + '</button>').join('');
+  }
+
   async function openGate() {
     $('gate').hidden = false;
     $('gate-kid-check').checked = false; // a fresh ask, not the last one's answer
+    gateFace = '';
+    paintFaces();
     $('gate-profiles').innerHTML = '<span style="color:#9a9daa;font-size:13px">loading…</span>';
     const { rows, live } = await profileRows();
     $('gate-note').textContent = live ? ''
@@ -692,7 +731,7 @@
       try {
         made = await api(act.href, {
           method: act.method || 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name, kid: !!kid }),
+          body: JSON.stringify({ name, kid: !!kid, ...(gateFace ? { avatar: gateFace } : {}) }),
         });
       } catch (e) {
         if (e.status === 409 || /exist/i.test(e.message)) made = { name }; // duplicate is fine
@@ -700,10 +739,12 @@
     }
     if (!made) {
       const l = localRows();
-      if (!l.some(u => u.name === name)) l.push({ name, kid: !!kid });
+      if (!l.some(u => u.name === name)) l.push({ name, kid: !!kid, avatar: gateFace });
       localStorage.localProfiles = JSON.stringify(l);
     }
-    selectProfile(name, faceOf(made));
+    // The face the server gave it, or — where there was no server to give one
+    // — the face picked at the gate, or the one nobody picked.
+    selectProfile(name, (made && made.avatar) || gateFace || faceOf(null));
   }
 
   // The chip is who is watching: their face and their name.
@@ -799,6 +840,28 @@
       out.push({ el: el, box: box });
     }
     return out;
+  }
+
+  // Where the ring goes when a whole view is swapped under it: the first
+  // thing in the fresh view that has a box. Only on a television — at a desk
+  // there is a pointer, and a page that grabs the focus on every navigation
+  // is a page that fights the person using it.
+  //
+  // `lost` is the second call: the resume shelf lands on its own errand and
+  // redraws the hero, which is the very element the ring was put on, so the
+  // ring is put back — but only if it fell on the floor.
+  function focusFirst(lost) {
+    if (!tenFoot) return;
+    if (!$('gate').hidden || !$('settings').hidden) return; // a panel owns the arrows
+    if (!$('stage').hidden) return;                         // and so does a device
+    const a = document.activeElement;
+    if (lost && a && a !== document.body) return;
+    for (const el of $('view').querySelectorAll(FOCUSABLE)) {
+      const box = el.getBoundingClientRect();
+      if (box.width <= 0 || box.height <= 0) continue;
+      el.focus();
+      return;
+    }
   }
 
   const ARROWS = { ArrowLeft: 'left', ArrowRight: 'right', ArrowUp: 'up', ArrowDown: 'down' };
@@ -898,8 +961,19 @@
     const t = e.target;
     const gate = t.closest('[data-profile]');
     if (gate) { selectProfile(gate.dataset.profile, gate.dataset.face); return; }
+    // A face picked for the profile being made: the pick is remembered until
+    // Create sends it, and picking the one already picked drops it again.
+    const face = t.closest('[data-face-pick]');
+    if (face) {
+      gateFace = gateFace === face.dataset.facePick ? '' : face.dataset.facePick;
+      paintFaces();
+      return;
+    }
     const chip = t.closest('[data-genre]');
     if (chip) { libState.genre = chip.dataset.genre || null; paintLibrary(); return; }
+    // The chip over the shelf says which words are filtering it; pressing it
+    // is the box going empty.
+    if (t.closest('[data-clear-q]')) { clearSearch(); return; }
     // The three buttons that end a sitting rather than following a relation:
     // Back out of the player, Back out of a passage, and Cancel on up next.
     if (t.closest('#upnext-cancel')) { e.stopPropagation(); root.Player.cancelUpNext(); return; }
