@@ -362,6 +362,9 @@
 <!-- passage grammar + end detection: pure functions, shared with the node
      tests (web/passage_test.mjs) -->
 <script src="passage.js"></script>
+<!-- the cast bridge: the session document read into a load, shared with the
+     custom receiver (web/receiver.html) and tested by web/cast_test.mjs -->
+<script src="cast.js"></script>
 <!-- the audio pane: audiobooks and albums through the same player -->
 <script src="audio.js"></script>
 <!-- the reader pane for text items: epub.js + JSZip vendored (LAN-only, no
@@ -641,12 +644,19 @@ function onCastConnectionChanged() {
   }
 }
 
-async function castLoad(url, isHls, title, resumeForDirect, segFormat, item) {
+// The receiver is handed the SESSION DOCUMENT, not a pile of fields this
+// page composed for it: castMediaSpec (web/cast.js) reads the url, the media
+// type, the segment format the decision negotiated, where to start and what
+// to show off the one object the play answered. The document's own address
+// rides along in customData, so a custom receiver (web/receiver.html) can
+// fetch it and read the passage's end bound and the run's next for itself.
+// The subtitle tracks stay here: they are the ITEM document's, by ordinal.
+async function castLoad(session, item) {
   castEndSuppressed = true; // loading interrupts the old media session: not a natural end
-  const abs = url.startsWith('/') ? baseUrl + url : url;
-  const media = new chrome.cast.media.MediaInfo(abs, isHls ? 'application/x-mpegurl' : 'video/mp4');
-  if (isHls) {
-    const fmp4 = segFormat === 'fmp4';
+  const spec = castMediaSpec(session, item, { baseUrl });
+  const media = new chrome.cast.media.MediaInfo(spec.url, spec.contentType);
+  if (spec.isHls) {
+    const fmp4 = spec.segmentFormat === 'fmp4';
     media.hlsSegmentFormat = fmp4 ? chrome.cast.media.HlsSegmentFormat.FMP4
                                   : chrome.cast.media.HlsSegmentFormat.TS;
     media.hlsVideoSegmentFormat = fmp4 ? chrome.cast.media.HlsVideoSegmentFormat.FMP4
@@ -654,7 +664,10 @@ async function castLoad(url, isHls, title, resumeForDirect, segFormat, item) {
     media.streamType = chrome.cast.media.StreamType.BUFFERED;
   }
   media.metadata = new chrome.cast.media.GenericMediaMetadata();
-  media.metadata.title = title;
+  media.metadata.title = spec.title;
+  if (spec.subtitle) media.metadata.subtitle = spec.subtitle;
+  if (spec.images.length) media.metadata.images = spec.images.map(u => new chrome.cast.Image(u));
+  if (spec.customData) media.customData = spec.customData;
 
   // Task D (cast): expose supported subtitle tracks; trackId = ordinal + 1.
   const subs = supportedSubs(item);
@@ -674,12 +687,14 @@ async function castLoad(url, isHls, title, resumeForDirect, segFormat, item) {
     req.activeTrackIds = (selectedSubOrdinal != null && subs.some(s => s.ordinal === selectedSubOrdinal))
       ? [selectedSubOrdinal + 1] : [];
   }
-  // HLS sessions are already positioned server-side; pin to 0 so the
-  // receiver doesn't jump to the live edge of the growing playlist. Either
-  // way a passage's start (`t`) arrives here as the seek, so the receiver
-  // starts where the passage starts.
-  req.currentTime = isHls ? 0 : (resumeForDirect > 0 ? resumeForDirect : 0);
+  // Where to begin is the document's answer too (castStartTime): an HLS
+  // session is already positioned server-side and is pinned to 0 so the
+  // receiver does not jump to the live edge of a growing playlist, and a
+  // direct play starts at the passage's `t` — the same number the server
+  // seeded the seek from.
+  req.currentTime = spec.startTime;
   req.autoplay = true;
+  if (spec.customData) req.customData = spec.customData;
   await cast.framework.CastContext.getInstance().getCurrentSession().loadMedia(req);
 }
 
@@ -1724,8 +1739,10 @@ function setPassage(p) {
 // the clock-side predicate stands in for a passage the player holds without
 // a session — the reader's, and a route applied before play answers.
 function passageEndNow() {
-  const p = session?.passage;
-  return p ? (p.ends_at ?? null) : passageEndAt(passage, currentItem?.id);
+  // One reading of the bound, shared with the cast bridge and, through
+  // cast.js, with the receiver: sessionEndBound is the document's answer.
+  if (session?.passage) return sessionEndBound(session);
+  return passageEndAt(passage, currentItem?.id);
 }
 function resetPassageEnd() {
   passageEndFired = false;
@@ -1770,13 +1787,20 @@ function passageReadout(pos) {
 // position() already includes the HLS seek offset and, when casting, reads
 // the receiver's current time.
 function checkPassageEnd() {
-  if (!passage || !currentItem || passageEndFired || !isPlaying()) return;
+  if (!passage || !currentItem || passageEndFired) return;
+  // A receiver PAUSED counts too while casting: a custom receiver reads the
+  // same bound off the session document and may have stopped there first,
+  // and the panel still belongs on screen when it has. Only PAUSED — an
+  // IDLE receiver is a stream that ended, which is the natural-end path.
+  if (!isPlaying() && !(casting() && remotePlayer.playerState === 'PAUSED')) return;
   const endAt = passageEndNow();
   if (!passageEnded(position(), endAt)) return;
   if (casting()) {
-    // Sender-side stop: the default receiver knows nothing about passages,
-    // so the page watches remotePlayer.currentTime and pauses from here (a
-    // second or so late at worst — the receiver is not changed in this bead).
+    // Sender-side stop, from `session.passage.ends_at` — the sender holds
+    // the clock. The DEFAULT receiver knows nothing about passages, so this
+    // is the only thing that stops it (a second or so late at worst); a
+    // custom receiver pauses at the same bound for itself, and whichever
+    // gets there first the other finds it already paused.
     if (remotePlayer.playerState === 'PLAYING') remoteController.playOrPause();
   } else {
     video.pause();
@@ -2048,8 +2072,7 @@ async function startPlayback(item, seekSeconds) {
 
   if (casting()) {
     try {
-      await castLoad(resp.url, isHls, itemTitle(item), seekSeconds,
-                     resp.decision.target?.segment_format, item);
+      await castLoad(session, item); // the document says what to play and how it looks
     } catch (e) {
       $('status').textContent = 'Cast error: ' + (e.description || e.message || e);
     }

@@ -478,8 +478,10 @@ passage on the session, and progress is accepted from then on. The client
 drops the passage from the route too, so a reload is normal viewing.
 Pressing play while paused at the end is the same choice. **Back** closes
 the player and leaves the bare item route behind. Casting honours all of
-this from the sender side: the page watches the receiver's time and pauses
-it at `end`.
+this: the sender watches the receiver's time and pauses it at
+`passage.ends_at`, the panel it then shows is the same one the local player
+shows, and the custom receiver reads that bound off the session document and
+stops there for itself as well (see **Casting**).
 
 ### Making a passage
 
@@ -525,7 +527,8 @@ action lands (`docs/hypermedia.md`, step 5).
 `web/passage.js` holds the grammar (`parsePassage`, `passageQuery`, and for
 text `parseLocator`, `sectionFromCFI`, `locatorSection`) and both end
 predicates (`passageEnded`, `textPassageEnded`) as pure functions; `node
---test web/passage_test.mjs` runs their tests without a build step. The
+--test web/passage_test.mjs` runs their tests without a build step, as
+`node --test web/cast_test.mjs` does for `web/cast.js`. The
 marking logic left it for the server (`cmd/server/passage.go`, tested in
 `cmd/server/session_test.go`): one implementation, and the rules hold for
 every client rather than for the one that remembers them.
@@ -535,11 +538,56 @@ against the open PDF.
 ## Casting
 
 The web UI is a Google Cast sender: the cast icon in the control row streams
-to a Chromecast running the default media receiver, and the page becomes the
-remote (play/pause, ±seek, volume, stop, scrub bar, chapter jumps). While a
-cast session is active the client sends the *Chromecast Ultra's* capability
-manifest — the decision engine negotiates for the device that actually plays,
-not the browser.
+to a Chromecast, and the page becomes the remote (play/pause, ±seek, volume,
+stop, scrub bar, chapter jumps). While a cast session is active the client
+sends the *Chromecast Ultra's* capability manifest — the decision engine
+negotiates for the device that actually plays, not the browser.
+
+### What is cast is the session document
+
+The sender composes nothing. A play answers a session document
+(`GET /api/sessions/{id}`, see **Passages are session state**) and the bridge
+reads the load straight off it — `url` and `content_type` say what to play,
+`method` says whether that is an HLS playlist or a file, the decision's
+target says which segment format this device negotiated, `seek_seconds` says
+where the bytes begin, `passage.ends_at` says where to stop, and `title`,
+`links.work` and `links.artwork` are what the TV shows while it plays. The
+one URL the sender builds is the absolute form of an address the document
+already gave it, against the LAN base `GET /api/system` advertises. The
+subtitle tracks are the item document's, by ordinal, and are the one thing
+added here. `web/cast.js` holds all of it as pure functions
+(`castMediaSpec`, `sessionEndBound`, `castReceiverBound`, `castStartTime`),
+tested by `node --test web/cast_test.mjs`.
+
+Up next while casting is not a cast feature: the natural end of a stream is
+a cast `IDLE`/`FINISHED` where locally it is `ended`, and from there both
+paths run the same code — `links.next` names the next member, the same
+countdown runs, and the advance re-plays through the same route.
+
+### The receiver
+
+`web/receiver.html` is a custom CAF receiver, and it reads the session
+document too. The sender puts the document's own address in the load's
+`customData`; the receiver fetches it and takes two things from it: the end
+bound in its own clock (`castReceiverBound` — a transcode's stream starts at
+the seek the server cut it at, so the item's absolute `ends_at` has that
+offset taken off), and `links.next`, what follows in the work. It pauses at
+the bound itself, once per load. That matters when the sender is a phone
+that has locked or left the room: the passage still ends where it says it
+ends, instead of running on to the end of the episode. Advancing stays the
+sender's — it owns the route, the countdown and the panel — and so does the
+clock in the ordinary case: the sender pauses at the same bound from its own
+tick, and whichever gets there first the other finds it already paused.
+Resuming plays on, which is exactly "keep watching".
+
+Using it needs a Cast developer console registration (a Custom Receiver
+whose URL is this server's `/receiver.html`) and the resulting app id in
+`localStorage.castAppId`; unset, the sender falls back to the **default
+media receiver**, which knows nothing about passages. Everything above still
+works there — the default receiver takes the session's `url` and the sender
+keeps the clock, pausing it at `passage.ends_at` from its 250 ms tick, a
+second or so late at worst. What the custom receiver adds is that the device
+holds the bound too, and can say so in its telemetry.
 
 Plumbing that makes it work:
 - HLS segment format is **negotiated** via `hls_segment_formats` in the
@@ -575,5 +623,7 @@ pin the FFmpeg argv contract (filter order, seek-before-input, copy paths).
 The works tests table the fraction law for every shape, books included
 (`ch. 7 · 34%`, `p. 213 / 400`); the scanner tests build EPUBs and PDFs in
 memory (classic xref tables, xref and object streams, lying offsets, no
-trailer at all); the store tests migrate a pre-locator `state.db`; and
-`node --test web/passage_test.mjs` covers the passage and locator grammar.
+trailer at all); the store tests migrate a pre-locator `state.db`;
+`node --test web/passage_test.mjs` covers the passage and locator grammar;
+and `node --test web/cast_test.mjs` covers the cast bridge's reading of the
+session document.
