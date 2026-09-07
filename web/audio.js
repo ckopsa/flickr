@@ -14,7 +14,7 @@
 // rather than one per album. index.html calls in at a handful of hooks:
 //
 //   isAudioItem(it)            medium test (buildLibrary, episodeSiblings, …)
-//   artworkUrl(id)             /cover for audio items, /poster otherwise
+//   artworkUrl(id)             /cover for audio and text items, /poster otherwise
 //   renderAudioCards(grid, items, q)   one tile per audiobook / artist
 //   renderAudioDetail(item)    the detail pane's author line and parts list
 //   audioMode(item | null)     entering / leaving audio playback
@@ -42,7 +42,8 @@
   // video tiles keep asking for the poster directly.
   function artworkUrl(id) {
     const it = allItems.find(i => i.id === id);
-    return `/api/items/${id}/${isAudioItem(it) ? 'cover' : 'poster'}`;
+    const own = isAudioItem(it) || (it?.media_info?.medium && it.media_info.medium !== 'video');
+    return `/api/items/${id}/${own ? 'cover' : 'poster'}`;
   }
 
   // Zero (and the omitted zero the server sends as undefined) = unnumbered.

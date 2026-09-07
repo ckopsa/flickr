@@ -112,6 +112,30 @@
   #now-playing { font-size: 15px; font-weight: 600; margin: 14px 0 10px; }
 
   #player-pane { margin-top: 6px; }
+  /* reader pane (reader.js): a paper page in the dark UI, TOC alongside */
+  #reader-pane { margin-top: 6px; display: flex; flex-direction: column; height: calc(100vh - 150px); min-height: 420px; }
+  .rd-bar, .rd-nav { display: flex; gap: 10px; align-items: center; }
+  .rd-bar { margin: 0 0 8px; }
+  .rd-title { font-size: 15px; font-weight: 600; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .rd-readout { font-size: 12px; color: #9a9daa; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .rd-body { position: relative; flex: 1; min-height: 0; display: flex; }
+  .rd-view { flex: 1; min-width: 0; background: #f4f1ea; border-radius: 8px; overflow: hidden; }
+  .rd-fail { padding: 24px; color: #7a1f1f; font-size: 14px; }
+  .rd-toc { width: 260px; max-width: 45vw; margin-right: 10px; overflow-y: auto; border: 1px solid #2a2c33; border-radius: 8px; padding: 6px; display: flex; flex-direction: column; gap: 2px; }
+  .rd-toc button { text-align: left; font-size: 13px; padding: 6px 10px; border: 0; background: transparent; border-radius: 6px; }
+  .rd-toc button:hover { background: #2c2f38; }
+  .rd-toc button.current { background: #2a4a8a; color: #dbe6fa; }
+  .rd-toc-empty { font-size: 12px; color: #9a9daa; padding: 8px; }
+  .rd-nav { margin-top: 8px; justify-content: space-between; }
+  .rd-nav button:disabled { opacity: .45; cursor: default; }
+  .rd-msg { font-size: 13px; color: #f0b45c; flex: 1; text-align: center; }
+  .rd-end { position: fixed; right: 24px; bottom: 24px; z-index: 60; background: #1b1d24; border: 1px solid #f0b45c;
+    border-radius: 10px; padding: 14px 18px; max-width: 340px; box-shadow: 0 8px 30px rgba(0,0,0,0.6); }
+  .rd-end-title { font-size: 14px; font-weight: 600; }
+  .rd-end-sub { font-size: 12px; color: #9a9daa; margin-top: 4px; }
+  .rd-end button { margin-top: 10px; margin-right: 8px; }
+  .rd-keep { background: #2a4a8a; border-color: #3a5da8; }
+  .rd-keep:hover { background: #33579e; }
   video { width: 100%; max-height: 58vh; background: #000; border-radius: 8px; }
   body.casting video { opacity: 0.25; }
   #cast-overlay { display: none; font-size: 14px; color: #8db4f0; margin: 6px 0; }
@@ -300,6 +324,8 @@
       <div id="chapters"></div>
       <div id="trace"></div>
     </div>
+    <!-- reader pane (text items): built and driven by reader.js -->
+    <div id="reader-pane" hidden></div>
   </div>
 </main>
 
@@ -325,6 +351,11 @@
 <script src="passage.js"></script>
 <!-- the audio pane: audiobooks and albums through the same player -->
 <script src="audio.js"></script>
+<!-- the reader pane for text items: epub.js + JSZip vendored (LAN-only, no
+     CDN at read time), then reader.js; index.html hooks in via openReader() -->
+<script src="vendor/jszip.min.js"></script>
+<script src="vendor/epub.min.js"></script>
+<script src="reader.js"></script>
 <script>
 // ---------------------------------------------------------------------------
 // identity: clientId IS the profile name (progress API is keyed by it)
@@ -424,9 +455,10 @@ async function api(path, opts) {
   return body;
 }
 
-function fmtSize(n) { return (n / 1e9).toFixed(2) + ' GB'; }
+function fmtSize(n) { return n < 1e9 ? (n / 1e6).toFixed(0) + ' MB' : (n / 1e9).toFixed(2) + ' GB'; }
 function fmtRes(mi) {
   if (mi?.medium === 'audio') return `${mi.audio_codec}${mi.audio_channels ? ' ' + mi.audio_channels + 'ch' : ''}`; // no picture to size
+  if (mi && mi.medium && mi.medium !== 'video') return mi.medium; // text: no picture to size either
   return mi ? `${mi.width}x${mi.height} ${mi.video_codec}/${mi.audio_codec}${mi.hdr ? ' ' + mi.hdr.toUpperCase() : ''}` : 'probe failed';
 }
 function fmtTime(s) {
@@ -778,9 +810,10 @@ $('audio').onchange = () => {
 // shows: title -> { eps, extras }; movies: one entry per non-episode title,
 // with its bonus material in movieExtras (item id -> extras). Bonus material
 // (kind "extra") never becomes a tile of its own — that is the whole point.
-// Text items stay out of the grid until the reader (bead flickr-9au) exists;
-// audio items are grouped into their works by web/audio.js.
-const NON_VIDEO_KINDS = new Set(['book']);
+// Every medium has a home now: audio items are grouped into their works by
+// web/audio.js, a book is a tile the reader opens. The set stays as the
+// place a kind goes when it must be kept off the grid.
+const NON_VIDEO_KINDS = new Set([]);
 function buildLibrary(items) {
   const movies = [], shows = new Map(), pending = [], audio = [];
   const group = name => {
@@ -789,8 +822,8 @@ function buildLibrary(items) {
   };
   for (const it of items) {
     const kind = it.identity?.kind, title = it.identity?.title;
-    // A book is not a tile here (the catch-all below would file it as a
-    // movie); an audiobook part or a track is one of its work's members.
+    // An audiobook part or a track is one of its work's members (audio.js);
+    // a book IS a tile (the catch-all), read in the reader pane.
     if (NON_VIDEO_KINDS.has(kind)) continue;
     if (isAudioItem(it)) { audio.push(it); continue; }
     if (kind === 'episode' && title) group(title).eps.push(it);
@@ -848,8 +881,8 @@ function makeCard({ posterId, title, sub, tech, onClick }) {
   const img = document.createElement('img');
   img.loading = 'lazy';
   img.alt = '';
-  img.src = artworkUrl(posterId); // poster, or an audio item's cover
-  img.onerror = () => { // no poster: styled text tile with title/resolution
+  img.src = artworkUrl(posterId); // poster, or an audio item's or a book's own cover
+  img.onerror = () => { // no artwork at all: styled text tile with title/resolution
     img.remove();
     wrap.classList.add('text-tile');
     wrap.innerHTML = `<div class="tile-title">${esc(title)}</div><div class="tile-sub">${esc(tech)}</div>`;
@@ -987,6 +1020,7 @@ function renderCwCards(entries) {
     img.alt = '';
     img.src = artworkUrl(en.id);
     img.onerror = () => {
+      if (!img.dataset.cover) { img.dataset.cover = '1'; img.src = `/api/items/${en.id}/cover`; return; }
       img.remove();
       wrap.classList.add('text-tile');
       wrap.innerHTML = `<div class="tile-title">${esc(en.title)}</div>` +
@@ -1016,7 +1050,8 @@ async function renderContinueWatching() {
         id: e.item_id,
         title: e.title || '',
         label: e.label && e.label !== e.title ? e.label : '', // movies: label duplicates title
-        pct: e.duration_seconds > 0 ? Math.min(100, e.position_seconds / e.duration_seconds * 100) : 0,
+        pct: e.duration_seconds > 0 ? Math.min(100, e.position_seconds / e.duration_seconds * 100)
+                                    : Math.min(100, (e.fraction || 0) * 100), // text: the book's own fraction
       })));
       return;
     } catch (e) {
@@ -1049,9 +1084,12 @@ async function renderContinueWatching() {
 //   #/show/<title>     episode list (title encodeURIComponent'd)
 //   #/artist/<name>    an artist's albums, year order (name encodeURIComponent'd; web/audio.js)
 //   #/item/<id>        detail pane (back target: its show for episodes, else grid)
-//   #/item/<id>?t=<s>&end=<s>[&until=<item_id>][&from=<loc>&to=<loc>]
+//   #/item/<id>?t=<s>&end=<s>[&until=<item_id>]
 //                      a PASSAGE of that item (grammar in passage.js): plays on
 //                      arrival from t, stops at end, writes no progress
+//   #/item/<id>?from=<loc>&to=<loc>
+//                      a text passage: the reader opens at from, stops at to,
+//                      writes no progress (loc = cfi:…, ch:<n>, pct:<0..1>)
 //   #/show/<title>?ep=S02E05&t=<s>&end=<s>[&until=S02E07]
 //                      the same passage addressed by episode code, for a minter
 //                      that knows no item ids; resolved against the show's
@@ -1121,8 +1159,17 @@ async function applyRoute() {
   } else if (r.view === 'item') {
     const it = allItems.find(i => i.id === r.id);
     if (!it) { pendingAutoplay = null; pendingPlay = null; location.replace('#/'); return; }
-    // from/to alone (text locators) ride in the route but do not put the
-    // video player into passage mode
+    if (isText(it)) {
+      // A book: the reader takes the route (openReader). A from/to passage
+      // opens it on arrival; "Keep reading" re-routes the open book bare.
+      const tp = isTextPassage(r.passage) ? r.passage : null;
+      if (Reader.isOpen(it.id) && passageQuery(Reader.passage()) === passageQuery(tp)) showView('view-detail');
+      else { renderDetail(it); if (tp || pendingAutoplay === it.id) openReader(it, tp); }
+      pendingAutoplay = null; pendingPlay = null;
+      return;
+    }
+    // from/to (text locators) belong to the reader; only a timed passage
+    // puts the video player into passage mode
     const rp = isTimedPassage(r.passage) ? r.passage : null;
     const samePlaying = currentItem && currentItem.id === it.id && !$('player-pane').hidden;
     if (samePlaying && passageQuery(rp) === passageQuery(passage)) {
@@ -1267,9 +1314,10 @@ function renderDetail(item) {
     mi?.bitrate_bps ? (mi.bitrate_bps / 1e6).toFixed(1) + ' Mbps' : null,
     mi?.audio_channels ? mi.audio_channels + 'ch' : null,
   ].filter(Boolean).join(' · ');
+  $('detail-play').textContent = isText(item) ? '📖 Read' : '▶ Play';
   const chBox = $('detail-chapters');
   chBox.innerHTML = '';
-  for (const ch of mi?.chapters || []) {
+  for (const ch of isText(item) ? [] : mi?.chapters || []) { // a book's contents live in the reader
     const b = document.createElement('button');
     b.textContent = `${ch.title} · ${fmtTime(ch.start_seconds)}`;
     b.onclick = () => playItem(item, ch.start_seconds);
@@ -1314,6 +1362,7 @@ $('detail-play').onclick = () => playItem(detailItem, null);
 // by applyRoute when browser back/forward navigates away from a playing item)
 function closePlayer() {
   hideUpNext();
+  Reader.close(); // a book shares this exit (no-op when none is open)
   setPassage(null); // the next normal play is normal
   clearMarks();     // a half-made passage does not outlive the player
   if (casting()) { castEndSuppressed = true; remoteController.stop(); }
@@ -1334,6 +1383,7 @@ $('detail-back').onclick = () => {
 // Play with resume: fetch saved progress (keyed by profile name) unless an
 // explicit start time (e.g. a chapter) was requested.
 async function playItem(item, startAt) {
+  if (isText(item)) { openReader(item, null); return; } // a book is read, not played
   hideUpNext();
   currentItem = item;
   seekOffset = 0;
@@ -1500,16 +1550,43 @@ video.addEventListener('ended', onPlaybackEnded); // covers direct play AND hls.
 // a scene replayed for a talk is not where the person is in the film, and a
 // two-episode run for the day's plan is not a binge — the saved place belongs
 // to normal viewing. (There is no pause/unload write today; if one is added
-// it goes through here.)
-function saveProgress(positionSeconds) {
+// it goes through here.) The reader reports through here too, with `place`
+// = { locator, fraction, section } instead of a clock position.
+function saveProgress(positionSeconds, place) {
   if (passage || !currentItem) return;
   fetch('/api/progress', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       item_id: currentItem.id, client_id: clientId || 'anonymous',
-      position_seconds: positionSeconds,
+      position_seconds: positionSeconds, ...(place || {}),
     }),
   });
+}
+
+// ---------------------------------------------------------------------------
+// text: the reader pane (reader.js). A book is read, not played, but it keeps
+// the player's contract: currentItem marks the pane open so a route change
+// closes it (closePlayer → Reader.close), `passage` gates saveProgress exactly
+// as for video, and the place is reported through saveProgress with a
+// locator instead of seconds. routePassage is the route's from/to (or null).
+// ---------------------------------------------------------------------------
+function isText(it) { return it?.media_info?.medium === 'text'; }
+function openReader(item, routePassage) {
+  hideUpNext();
+  const tp = isTextPassage(routePassage) ? routePassage : null;
+  currentItem = item;
+  setPassage(tp);
+  $('detail-info').hidden = true;
+  $('player-pane').hidden = true;
+  Reader.open(item, {
+    container: $('reader-pane'),
+    passage: tp,
+    clientId: clientId || 'anonymous',
+    onPlace: place => saveProgress(0, place), // gated: a passage writes nothing
+    onKeep: () => { setPassage(null); if (parseRoute().passage) location.replace(itemHash(item.id, null)); },
+    onBack: () => { closePlayer(); if (parseRoute().passage) location.replace(itemHash(item.id, null)); },
+  });
+  if (!tp) recordRecentlyPlayed(item.id); // feeds the continue row's fallback path
 }
 
 // ---------------------------------------------------------------------------

@@ -81,3 +81,64 @@ func TestClockWindow(t *testing.T) {
 		t.Errorf("untilOpen from 06:00 = %v, want 19h", d)
 	}
 }
+
+// A progress write is a clock position unless it carries a text field; then
+// it is a place, its section read off the CFI when the client sent none, and
+// out-of-range fractions are refused before they reach the store.
+func TestPlaceOf(t *testing.T) {
+	f := func(v float64) *float64 { return &v }
+	for _, tc := range []struct {
+		name string
+		in   progressInput
+		want *model.Locator
+		bad  bool
+	}{
+		{"clock position", progressInput{Position: 42}, nil, false},
+		{"cfi + fraction + section", progressInput{Locator: "epubcfi(/6/14!/4/2)", Fraction: f(0.34), Section: 7},
+			&model.Locator{CFI: "epubcfi(/6/14!/4/2)", Section: 7, Fraction: 0.34}, false},
+		{"section derived from the cfi", progressInput{Locator: "epubcfi(/6/14[ch07]!/4/2/1:0)", Fraction: f(0.34)},
+			&model.Locator{CFI: "epubcfi(/6/14[ch07]!/4/2/1:0)", Section: 7, Fraction: 0.34}, false},
+		{"explicit section wins", progressInput{Locator: "epubcfi(/6/14!/4/2)", Section: 3},
+			&model.Locator{CFI: "epubcfi(/6/14!/4/2)", Section: 3}, false},
+		{"fraction alone", progressInput{Fraction: f(0)}, &model.Locator{}, false},
+		{"not a cfi: stored, no section", progressInput{Locator: "page 12", Fraction: f(0.5)},
+			&model.Locator{CFI: "page 12", Fraction: 0.5}, false},
+		{"fraction above one", progressInput{Locator: "x", Fraction: f(1.2)}, nil, true},
+		{"fraction below zero", progressInput{Locator: "x", Fraction: f(-0.1)}, nil, true},
+		{"negative section", progressInput{Locator: "x", Section: -1}, nil, true},
+	} {
+		got, err := placeOf(tc.in)
+		if tc.bad {
+			if err == nil {
+				t.Errorf("%s: want an error, got %+v", tc.name, got)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("%s: %v", tc.name, err)
+			continue
+		}
+		if (got == nil) != (tc.want == nil) || (got != nil && *got != *tc.want) {
+			t.Errorf("%s: got %+v, want %+v", tc.name, got, tc.want)
+		}
+	}
+}
+
+func TestSectionFromCFI(t *testing.T) {
+	for cfi, want := range map[string]int{
+		"epubcfi(/6/14!/4/2/1:0)":       7,
+		"epubcfi(/6/14[ch07]!/4/2/1:0)": 7,
+		"epubcfi(/6/2!/4/2)":            1,
+		" epubcfi(/6/40!/4) ":           20,
+		"epubcfi(/6/13!/4)":             0, // odd: not an element step
+		"epubcfi(/6)":                   0,
+		"epubcfi(/6/)":                  0,
+		"/6/14!/4":                      0,
+		"":                              0,
+		"page 12":                       0,
+	} {
+		if got := model.SectionFromCFI(cfi); got != want {
+			t.Errorf("SectionFromCFI(%q) = %d, want %d", cfi, got, want)
+		}
+	}
+}

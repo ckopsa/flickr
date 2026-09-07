@@ -4,8 +4,10 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -158,6 +160,7 @@ func main() {
 	mux.HandleFunc("GET /api/items/{id}/poster", srv.handlePoster)
 	mux.HandleFunc("GET /api/items/{id}/cover", srv.handleCover)
 	mux.HandleFunc("GET /api/items/{id}/still", srv.handleStill)
+	mux.HandleFunc("GET /api/items/{id}/book", srv.handleBook)
 	mux.HandleFunc("GET /api/items/{id}/trickplay.json", srv.handleTrickplayIndex)
 	mux.HandleFunc("GET /api/items/{id}/trickplay/{file}", srv.handleTrickplaySheet)
 	mux.HandleFunc("POST /api/items/{id}/trickplay", srv.handleGenerateTrickplay)
@@ -767,17 +770,66 @@ func (s *server) handleStopSession(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]string{"status": "stopped"})
 }
 
-func (s *server) handleSetProgress(w http.ResponseWriter, r *http.Request) {
-	var in struct {
-		ItemID   int64   `json:"item_id"`
-		ClientID string  `json:"client_id"`
-		Position float64 `json:"position_seconds"`
+// progressInput is a POST /api/progress body. Video and audio send seconds;
+// the reader sends the text fields — the CFI of the page it shows, the
+// book's own percentage, and the 1-based spine section (derived from the CFI
+// when omitted) — and the row keeps whichever unit was sent last.
+type progressInput struct {
+	ItemID   int64    `json:"item_id"`
+	ClientID string   `json:"client_id"`
+	Position float64  `json:"position_seconds"`
+	Locator  string   `json:"locator"`
+	Fraction *float64 `json:"fraction"`
+	Section  int      `json:"section"`
+}
+
+// progressOutput is GET /api/progress: the seconds always, the text fields
+// only when the row holds a locator (fraction is then present even at 0).
+type progressOutput struct {
+	PositionSeconds float64  `json:"position_seconds"`
+	Locator         string   `json:"locator,omitempty"`
+	Fraction        *float64 `json:"fraction,omitempty"`
+	Section         int      `json:"section,omitempty"`
+}
+
+// placeOf turns the text fields of a progress write into a Locator — nil
+// when none was sent, so the write is a plain clock position. A fraction
+// outside [0,1] or a negative section is a client error; a locator string
+// that is not a CFI is stored as sent (the reader owns that grammar), just
+// without a derived section.
+func placeOf(in progressInput) (*model.Locator, error) {
+	if in.Locator == "" && in.Fraction == nil && in.Section == 0 {
+		return nil, nil
 	}
+	loc := &model.Locator{CFI: in.Locator, Section: in.Section}
+	if in.Fraction != nil {
+		f := *in.Fraction
+		if !(f >= 0 && f <= 1) { // also rejects NaN
+			return nil, fmt.Errorf("fraction %v out of range (want 0..1)", f)
+		}
+		loc.Fraction = f
+	}
+	if loc.Section < 0 {
+		return nil, fmt.Errorf("section %d out of range (want a 1-based spine index)", loc.Section)
+	}
+	if loc.Section == 0 {
+		loc.Section = model.SectionFromCFI(loc.CFI)
+	}
+	return loc, nil
+}
+
+func (s *server) handleSetProgress(w http.ResponseWriter, r *http.Request) {
+	var in progressInput
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 		httpErr(w, 400, err)
 		return
 	}
-	if err := s.state.SetPosition(in.ItemID, in.ClientID, in.Position); err != nil {
+	loc, err := placeOf(in)
+	if err != nil {
+		httpErr(w, 400, err)
+		return
+	}
+	if err := s.state.SetPlace(in.ItemID, in.ClientID, in.Position, loc); err != nil {
 		httpErr(w, 500, err)
 		return
 	}
@@ -787,12 +839,51 @@ func (s *server) handleSetProgress(w http.ResponseWriter, r *http.Request) {
 func (s *server) handleGetProgress(w http.ResponseWriter, r *http.Request) {
 	itemID, _ := strconv.ParseInt(r.URL.Query().Get("item_id"), 10, 64)
 	clientID := r.URL.Query().Get("client_id")
-	pos, err := s.state.GetPosition(itemID, clientID)
+	p, err := s.state.GetPosition(itemID, clientID)
 	if err != nil {
 		httpErr(w, 500, err)
 		return
 	}
-	writeJSON(w, map[string]float64{"position_seconds": pos})
+	out := progressOutput{PositionSeconds: p.PositionSeconds}
+	if p.Locator != nil {
+		f := p.Locator.Fraction
+		out.Locator, out.Fraction, out.Section = p.Locator.CFI, &f, p.Locator.Section
+	}
+	writeJSON(w, out)
+}
+
+// handleBook streams a text item's bytes to the reader. The MinIO object is
+// a seekable reader, so http.ServeContent answers Range requests (and
+// If-Modified-Since) itself and only the bytes asked for leave the bucket.
+// 415 for anything that is not text — a film is not a book to open.
+func (s *server) handleBook(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		httpErr(w, 400, fmt.Errorf("bad id"))
+		return
+	}
+	item, err := s.library.GetItem(id)
+	if err != nil || item == nil {
+		httpErr(w, 404, fmt.Errorf("no such item"))
+		return
+	}
+	if item.MediaInfo.MediumOrVideo() != model.MediumText {
+		httpErr(w, 415, fmt.Errorf("item %d is not a text item", id))
+		return
+	}
+	obj, err := s.s3.GetObject(r.Context(), s.bucket, item.ObjectKey, minio.GetObjectOptions{})
+	if err != nil {
+		httpErr(w, 502, err)
+		return
+	}
+	defer obj.Close()
+	st, err := obj.Stat()
+	if err != nil {
+		httpErr(w, 502, fmt.Errorf("object %s: %w", item.ObjectKey, err))
+		return
+	}
+	w.Header().Set("Content-Type", "application/epub+zip")
+	http.ServeContent(w, r, path.Base(item.ObjectKey), st.LastModified, obj)
 }
 
 // handleSubtitle serves one subtitle track as WebVTT, extracting it with
@@ -977,12 +1068,14 @@ func (s *server) handlePoster(w http.ResponseWriter, r *http.Request) {
 	s.serveItemImage(w, r, "data/posters", "no poster")
 }
 
-// handleCover serves an audio item's embedded cover art, extracted with
-// ffmpeg on first request and cached under data/covers/ thereafter — the
-// same on-demand discipline as subtitles and trickplay. An item with no
-// attached picture (recorded once, as <id>.none) and every non-audio item
-// fall back to the TMDB poster route, so a tile can ask for /cover without
-// knowing the item's medium and still get whatever artwork there is.
+// handleCover serves an item's OWN cover art — an audio item's attached
+// picture, extracted with ffmpeg; a book's OPF cover, read out of the epub
+// — on first request and cached under data/covers/ thereafter, the same
+// on-demand discipline as subtitles and trickplay. An item with no cover
+// of its own (recorded once, as <id>.none) and every video item fall back
+// to the TMDB poster route, so a tile can ask for /cover without knowing
+// the item's medium and still get whatever artwork there is. The cache
+// file is named .jpg as a key, not a promise: the bytes are sniffed.
 func (s *server) handleCover(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
@@ -990,8 +1083,21 @@ func (s *server) handleCover(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if s.ensureCover(r.Context(), id) {
-		w.Header().Set("Content-Type", "image/jpeg")
-		http.ServeFile(w, r, coverPath(id))
+		f, err := os.Open(coverPath(id))
+		if err != nil {
+			httpErr(w, 500, err)
+			return
+		}
+		defer f.Close()
+		head := make([]byte, 512)
+		n, _ := f.Read(head)
+		w.Header().Set("Content-Type", http.DetectContentType(head[:n]))
+		st, err := f.Stat()
+		if err != nil {
+			httpErr(w, 500, err)
+			return
+		}
+		http.ServeContent(w, r, "cover", st.ModTime(), f)
 		return
 	}
 	s.serveItemImage(w, r, "data/posters", "no cover")
@@ -1002,7 +1108,9 @@ func coverPath(id int64) string {
 }
 
 // ensureCover reports whether a cover image exists for the item, extracting
-// it if the item is audio and has not been asked before.
+// it by medium if the item has not been asked before: ffmpeg for an audio
+// item's attached picture, the OPF's cover image for a book. Video has no
+// cover of its own (its artwork is the poster).
 func (s *server) ensureCover(ctx context.Context, id int64) bool {
 	if _, err := os.Stat(coverPath(id)); err == nil {
 		return true
@@ -1012,24 +1120,46 @@ func (s *server) ensureCover(ctx context.Context, id int64) bool {
 		return false
 	}
 	item, err := s.library.GetItem(id)
-	if err != nil || item == nil || item.MediaInfo.MediumOrVideo() != model.MediumAudio {
+	if err != nil || item == nil {
 		return false
 	}
-	u, err := s.s3.PresignedGetObject(ctx, s.bucket, item.ObjectKey, time.Hour, url.Values{})
-	if err != nil {
-		log.Printf("cover: item %d: presign: %v", id, err)
-		return false
-	}
-	if err := pipeline.ExtractCover(ctx, u.String(), coverPath(id)); err != nil {
+	remember := func(why error) bool {
 		// No picture (or a broken one): remember, so the next tile render
-		// does not run ffmpeg again for the same answer.
-		log.Printf("cover: item %d (%s): none: %v", id, item.ObjectKey, err)
+		// does not download the file again for the same answer.
+		log.Printf("cover: item %d (%s): none: %v", id, item.ObjectKey, why)
 		if mkErr := os.MkdirAll(coversDir, 0o755); mkErr == nil {
 			os.WriteFile(none, nil, 0o644)
 		}
 		return false
 	}
-	return true
+	switch item.MediaInfo.MediumOrVideo() {
+	case model.MediumAudio:
+		u, err := s.s3.PresignedGetObject(ctx, s.bucket, item.ObjectKey, time.Hour, url.Values{})
+		if err != nil {
+			log.Printf("cover: item %d: presign: %v", id, err)
+			return false
+		}
+		if err := pipeline.ExtractCover(ctx, u.String(), coverPath(id)); err != nil {
+			return remember(err)
+		}
+		return true
+	case model.MediumText:
+		data, _, err := s.scanner.ReadEpubCover(ctx, item.ObjectKey)
+		if errors.Is(err, scanner.ErrNoCover) {
+			return remember(err)
+		}
+		if err != nil {
+			log.Printf("cover: item %d (%s): %v", id, item.ObjectKey, err)
+			return false
+		}
+		if err := writeFileAtomic(coverPath(id), bytes.NewReader(data)); err != nil {
+			log.Printf("cover: item %d: write: %v", id, err)
+			return false
+		}
+		return true
+	default:
+		return false
+	}
 }
 
 // handleStill serves the cached TMDB episode still (jpeg or 404) written by

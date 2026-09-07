@@ -1,16 +1,22 @@
 // flickr PWA service worker — app-shell cache only.
 // HARD RULE: /api and /streams are NEVER cached (staleness would be poison);
-// cross-origin (CDN hls.js / cast_sender) is never touched either.
+// cross-origin (CDN hls.js / cast_sender) is never touched either; the
+// reader's libraries are vendored under /vendor and precached with the shell.
 // Bump on EVERY index.html change: the shell is served cache-first, so an
 // unbumped cache keeps running old JS against new API data — which is not a
 // cosmetic staleness. v5's grouping reads identity kind "extra"; v4's code
 // treats those files as untitled movies and puts one tile on the grid per
 // featurette. v7 adds passage.js to the shell: index.html calls its
 // globals at parse time, so a v6 shell serving the new index without it
-// would throw before the router runs. v8 adds audio.js and audio.css the
-// same way: index.html's grid builder calls isAudioItem at render time.
-const CACHE = 'flickr-shell-v8';
-const SHELL = ['/', '/index.html', '/passage.js', '/audio.js', '/audio.css', '/manifest.json', '/icon-192.png', '/icon-512.png'];
+// would throw before the router runs. v8 added audio.js and audio.css the
+// same way (index.html's grid builder calls isAudioItem at render time);
+// v9 adds the reader (reader.js and the vendored epub.js + JSZip): same-
+// origin now, so the shell carries them and a book opens with nothing
+// fetched from the internet.
+const CACHE = 'flickr-shell-v9';
+const SHELL = ['/', '/index.html', '/passage.js', '/audio.js', '/audio.css', '/reader.js',
+               '/vendor/jszip.min.js', '/vendor/epub.min.js',
+               '/manifest.json', '/icon-192.png', '/icon-512.png'];
 
 self.addEventListener('install', (e) => {
   e.waitUntil(

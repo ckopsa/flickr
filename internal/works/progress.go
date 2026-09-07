@@ -41,9 +41,11 @@ type Progress struct {
 // parts' durations, every earlier part counting as heard in full — a book's
 // parts are one continuous reading, not episodes to tick off. A single-file
 // audiobook reads like a movie. Finished at ≥ 0.9.
-// Books: a position exists, but this generation has no locator to turn it
-// into a place in the text — fraction 0, text "", status "active". The
-// reader bead fills these in.
+// Books: the reader reports a locator — the page's CFI, its section and the
+// book's own percentage — and that fraction IS the progress ("ch. 7 · 34%",
+// 0.34; see bookProgress). A row without a locator (written before the
+// reader existed) is a position acknowledged but not placed: fraction 0,
+// text "", status "active".
 func WorkProgress(w *Work, positions map[int64]store.Position) (Progress, bool) {
 	var have []store.Position
 	var updated float64
@@ -60,7 +62,7 @@ func WorkProgress(w *Work, positions map[int64]store.Position) (Progress, bool) 
 	}
 
 	if w.Kind == "book" {
-		return Progress{Status: "active", UpdatedAt: updated}, true
+		return bookProgress(have, updated), true
 	}
 	if (w.Kind == "audiobook" || w.Kind == "album") && w.PartCount+w.TrackCount > 1 {
 		if pr, ok := partsProgress(w, positions, updated); ok {
@@ -137,6 +139,51 @@ func WorkProgress(w *Work, positions map[int64]store.Position) (Progress, bool) 
 		text = fmt.Sprintf("S%02dE%02d · %s", s, e, text)
 	}
 	return Progress{Status: status, Fraction: frac, ProgressText: text, UpdatedAt: updated}, true
+}
+
+// bookProgress is the text derivation. A book has no clock, so the most
+// recent row's locator carries the fraction directly — the book's own
+// percentage as the reader measured it — and the text names the section
+// (1-based spine order, "ch.") and the percentage: "ch. 7 · 34%", or "34%"
+// alone when the section is unknown. Finished at ≥ 0.9 like every other
+// work. Without a locator the position is acknowledged but not placed.
+func bookProgress(have []store.Position, updated float64) Progress {
+	best := have[0]
+	for _, p := range have[1:] {
+		if p.UpdatedAt > best.UpdatedAt {
+			best = p
+		}
+	}
+	if best.Locator == nil {
+		return Progress{Status: "active", UpdatedAt: updated}
+	}
+	frac := clamp01(best.Locator.Fraction)
+	status := "active"
+	if frac >= watchedAt {
+		status = "finished"
+	}
+	return Progress{Status: status, Fraction: frac, ProgressText: bookText(best.Locator), UpdatedAt: updated}
+}
+
+// bookText is "ch. <section> · <pct>%", or "<pct>%" when the section is
+// unknown; the percentage is rounded to the nearest whole number.
+func bookText(loc *model.Locator) string {
+	pct := fmt.Sprintf("%d%%", int(clamp01(loc.Fraction)*100+0.5))
+	if loc.Section > 0 {
+		return fmt.Sprintf("ch. %d · %s", loc.Section, pct)
+	}
+	return pct
+}
+
+// clamp01 pins a client-reported fraction to [0,1]; NaN reads 0.
+func clamp01(f float64) float64 {
+	if !(f > 0) {
+		return 0
+	}
+	if f > 1 {
+		return 1
+	}
+	return f
 }
 
 // partsProgress is the audiobook/album derivation. Members are already in
@@ -280,7 +327,11 @@ type ContinueEntry struct {
 	Label           string  `json:"label"` // "S02E05 · Episode Title", or the file basename
 	PositionSeconds float64 `json:"position_seconds"`
 	DurationSeconds float64 `json:"duration_seconds"`
-	UpdatedAt       float64 `json:"updated_at"`
+	// Fraction is a text entry's place as the book's own percentage — the
+	// seconds/duration pair says nothing about a book. 0 (omitted) for
+	// everything with a clock.
+	Fraction  float64 `json:"fraction,omitempty"`
+	UpdatedAt float64 `json:"updated_at"`
 }
 
 // ContinueList derives one profile's resume list: most-recent first, at most
@@ -290,7 +341,9 @@ type ContinueEntry struct {
 // the entry to that NEXT episode ("up next"): position 0 unless the profile
 // already has its own unfinished progress there, which wins. An audiobook's
 // parts and an album's tracks advance the same way. A finished finale (no
-// next member) and a finished movie are excluded as before.
+// next member) and a finished movie are excluded as before. A book is
+// resumable by its locator (see resumable) and finished at fraction ≥ 0.9;
+// its entry carries that fraction.
 func ContinueList(works []Work, positions []store.Position, max int) []ContinueEntry {
 	itemWork := map[int64]*Work{}
 	items := map[int64]*store.Item{}
@@ -308,8 +361,8 @@ func ContinueList(works []Work, positions []store.Position, max int) []ContinueE
 	latest := map[string]store.Position{} // work key → most recent position
 	byItem := map[int64]store.Position{}  // item id → most recent position
 	for _, p := range positions {
-		if p.PositionSeconds < minResumeSeconds {
-			continue // noise (a misclick, a codec probe)
+		if !resumable(p) {
+			continue // noise (a misclick, a codec probe, a glance at a cover)
 		}
 		w := itemWork[p.ItemID]
 		if w == nil {
@@ -328,6 +381,18 @@ func ContinueList(works []Work, positions []store.Position, max int) []ContinueE
 	for key, p := range latest {
 		w, it := itemWork[p.ItemID], items[p.ItemID]
 		dur := itemDuration(*it)
+		if p.Locator != nil {
+			// A text place: the fraction is the whole story. A finished book
+			// has nothing to advance to.
+			if p.Locator.Fraction >= watchedAt {
+				continue
+			}
+			out = append(out, ContinueEntry{
+				ItemID: it.ID, WorkKey: key, Title: w.Title, Label: itemLabel(*it),
+				DurationSeconds: dur, Fraction: clamp01(p.Locator.Fraction), UpdatedAt: p.UpdatedAt,
+			})
+			continue
+		}
 		if dur > 0 && p.PositionSeconds >= watchedAt*dur { // finished
 			if !multiPart(w) {
 				continue // finished movie/book/file: nothing to resume
@@ -365,6 +430,18 @@ func ContinueList(works []Work, positions []store.Position, max int) []ContinueE
 		out = out[:max]
 	}
 	return out
+}
+
+// resumable says whether a playback row is a place anyone wants back: a
+// clock position of at least minResumeSeconds, or a text locator past the
+// opening — any fraction at all, or any section after the first (the cover,
+// the title page). Opening a book and closing it on its cover is the text
+// version of a three-second misclick.
+func resumable(p store.Position) bool {
+	if p.Locator != nil {
+		return p.Locator.Fraction > 0 || p.Locator.Section > 1
+	}
+	return p.PositionSeconds >= minResumeSeconds
 }
 
 // nextMember is the next real member after itemID in the work's ordering —

@@ -3,8 +3,10 @@ package scanner
 import (
 	"archive/zip"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"path"
 	"strings"
 
@@ -34,6 +36,12 @@ type opfPackage struct {
 		Title    []string `xml:"title"`
 		Creator  []string `xml:"creator"`
 		Language []string `xml:"language"`
+		// Meta carries the EPUB 2 cover pointer: <meta name="cover"
+		// content="<manifest id>"/>. EPUB 3 marks the manifest item instead.
+		Meta []struct {
+			Name    string `xml:"name,attr"`
+			Content string `xml:"content,attr"`
+		} `xml:"meta"`
 	} `xml:"metadata"`
 	Manifest struct {
 		Items []struct {
@@ -73,27 +81,11 @@ type ncxNavPoint struct {
 // item; otherwise the spine idref stands in, so a section is never nameless.
 // A malformed or missing TOC costs only titles, never the probe.
 func ProbeEpub(r io.ReaderAt, size int64) (*model.MediaInfo, error) {
-	zr, err := zip.NewReader(r, size)
+	ep, err := openEpub(r, size)
 	if err != nil {
-		return nil, fmt.Errorf("epub: not a zip: %w", err)
+		return nil, err
 	}
-	files := map[string]*zip.File{}
-	for _, f := range zr.File {
-		files[f.Name] = f
-	}
-
-	var container containerXML
-	if err := readXML(files, "META-INF/container.xml", &container); err != nil {
-		return nil, fmt.Errorf("epub: %w", err)
-	}
-	if len(container.Rootfiles) == 0 || container.Rootfiles[0].FullPath == "" {
-		return nil, fmt.Errorf("epub: container.xml names no rootfile")
-	}
-	opfPath := container.Rootfiles[0].FullPath
-	var pkg opfPackage
-	if err := readXML(files, opfPath, &pkg); err != nil {
-		return nil, fmt.Errorf("epub: %w", err)
-	}
+	files, opfPath, pkg := ep.files, ep.opfPath, ep.pkg
 	if len(pkg.Spine.ItemRefs) == 0 {
 		return nil, fmt.Errorf("epub: %s has an empty spine", opfPath)
 	}
@@ -143,6 +135,104 @@ func ProbeEpub(r io.ReaderAt, size int64) (*model.MediaInfo, error) {
 		info.Document = doc
 	}
 	return info, nil
+}
+
+// epubPackage is an opened EPUB: its zip members by name and the package
+// document container.xml points at, parsed. Probing and cover extraction
+// both start here.
+type epubPackage struct {
+	files   map[string]*zip.File
+	opfPath string
+	pkg     opfPackage
+}
+
+func openEpub(r io.ReaderAt, size int64) (*epubPackage, error) {
+	zr, err := zip.NewReader(r, size)
+	if err != nil {
+		return nil, fmt.Errorf("epub: not a zip: %w", err)
+	}
+	files := map[string]*zip.File{}
+	for _, f := range zr.File {
+		files[f.Name] = f
+	}
+	var container containerXML
+	if err := readXML(files, "META-INF/container.xml", &container); err != nil {
+		return nil, fmt.Errorf("epub: %w", err)
+	}
+	if len(container.Rootfiles) == 0 || container.Rootfiles[0].FullPath == "" {
+		return nil, fmt.Errorf("epub: container.xml names no rootfile")
+	}
+	ep := &epubPackage{files: files, opfPath: container.Rootfiles[0].FullPath}
+	if err := readXML(files, ep.opfPath, &ep.pkg); err != nil {
+		return nil, fmt.Errorf("epub: %w", err)
+	}
+	return ep, nil
+}
+
+// ErrNoCover is EpubCover's answer for a book whose package names no cover
+// image (or names a member the zip does not carry) — not a broken book.
+var ErrNoCover = errors.New("epub: the package names no cover image")
+
+// maxCoverBytes bounds a cover read; anything larger is not a cover.
+const maxCoverBytes = 20 << 20
+
+// EpubCover returns the book's cover image and its media type. EPUB 3 marks
+// the manifest item with properties="cover-image"; EPUB 2 points at it with
+// <meta name="cover" content="…"/>, whose content is the manifest id — or,
+// in books that misread the spec, the item's href — so both are tried. The
+// media type is the manifest's, else guessed from the file extension.
+func EpubCover(r io.ReaderAt, size int64) ([]byte, string, error) {
+	ep, err := openEpub(r, size)
+	if err != nil {
+		return nil, "", err
+	}
+	items := ep.pkg.Manifest.Items
+	idx := -1
+	for i, it := range items {
+		if strings.Contains(" "+it.Properties+" ", " cover-image ") {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		var ref string
+		for _, m := range ep.pkg.Metadata.Meta {
+			if strings.EqualFold(m.Name, "cover") && m.Content != "" {
+				ref = m.Content
+				break
+			}
+		}
+		for i, it := range items {
+			if ref != "" && (it.ID == ref || it.Href == ref) {
+				idx = i
+				break
+			}
+		}
+	}
+	if idx < 0 {
+		return nil, "", ErrNoCover
+	}
+	f := ep.files[resolveHref(path.Dir(ep.opfPath), items[idx].Href)]
+	if f == nil {
+		return nil, "", ErrNoCover
+	}
+	rc, err := f.Open()
+	if err != nil {
+		return nil, "", fmt.Errorf("epub: cover %s: %w", items[idx].Href, err)
+	}
+	defer rc.Close()
+	data, err := io.ReadAll(io.LimitReader(rc, maxCoverBytes+1))
+	if err != nil {
+		return nil, "", fmt.Errorf("epub: cover %s: %w", items[idx].Href, err)
+	}
+	if len(data) > maxCoverBytes {
+		return nil, "", fmt.Errorf("epub: cover %s exceeds %d bytes", items[idx].Href, maxCoverBytes)
+	}
+	mt := items[idx].MediaType
+	if mt == "" {
+		mt = mime.TypeByExtension(path.Ext(items[idx].Href))
+	}
+	return data, mt, nil
 }
 
 // readXML decodes one zip member into v. Missing member = error; the caller

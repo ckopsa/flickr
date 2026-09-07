@@ -387,22 +387,48 @@ func (s *Scanner) probeStream(ctx context.Context, objectKey string) (*model.Med
 // sequential download into a ReaderAt and is gone before the function
 // returns.
 func (s *Scanner) probeText(ctx context.Context, objectKey string) (*model.MediaInfo, error) {
-	obj, err := s.Client.GetObject(ctx, s.Bucket, objectKey, minio.GetObjectOptions{})
-	if err != nil {
-		return nil, fmt.Errorf("get: %w", err)
-	}
-	defer obj.Close()
-	f, err := os.CreateTemp("", "flickr-epub-*")
+	f, size, err := s.fetchTemp(ctx, objectKey)
 	if err != nil {
 		return nil, err
 	}
 	defer os.Remove(f.Name())
 	defer f.Close()
+	return ProbeEpub(f, size)
+}
+
+// ReadEpubCover downloads a text object and returns its cover image and
+// media type, the way probing reads its package (a zip wants the whole
+// file). ErrNoCover when the book names none. The server caches the result
+// under data/covers/, so this runs once per book.
+func (s *Scanner) ReadEpubCover(ctx context.Context, objectKey string) ([]byte, string, error) {
+	f, size, err := s.fetchTemp(ctx, objectKey)
+	if err != nil {
+		return nil, "", err
+	}
+	defer os.Remove(f.Name())
+	defer f.Close()
+	return EpubCover(f, size)
+}
+
+// fetchTemp downloads one object into a temporary file and returns it open
+// with its size; the caller removes and closes it.
+func (s *Scanner) fetchTemp(ctx context.Context, objectKey string) (*os.File, int64, error) {
+	obj, err := s.Client.GetObject(ctx, s.Bucket, objectKey, minio.GetObjectOptions{})
+	if err != nil {
+		return nil, 0, fmt.Errorf("get: %w", err)
+	}
+	defer obj.Close()
+	f, err := os.CreateTemp("", "flickr-epub-*")
+	if err != nil {
+		return nil, 0, err
+	}
 	size, err := io.Copy(f, obj)
 	if err != nil {
-		return nil, fmt.Errorf("download: %w", err)
+		f.Close()
+		os.Remove(f.Name())
+		return nil, 0, fmt.Errorf("download: %w", err)
 	}
-	return ProbeEpub(f, size)
+	return f, size, nil
 }
 
 // --- ffprobe ---
