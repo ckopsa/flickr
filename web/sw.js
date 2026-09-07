@@ -52,7 +52,8 @@
 // none of those three files and would serve an index.html whose one inline
 // line, Kernel.boot(), names something that does not exist. This is the bump
 // the CI check in .github/workflows/tests.yml now insists on.
-const CACHE = 'flickr-shell-v18';
+// v19: the readers' dark page (reader.js, pdfreader.js, index.html CSS).
+const CACHE = 'flickr-shell-v19';
 const SHELL = ['/', '/index.html', '/passage.js', '/cast.js', '/audio.css',
                '/renderers.js', '/player.js', '/kernel.js',
                '/reader.js', '/pdfreader.js',
