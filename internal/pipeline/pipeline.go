@@ -84,6 +84,9 @@ func BuildArgs(j Job) []string {
 		args = append(args, "-ss", fmt.Sprintf("%.3f", seekOut))
 	}
 
+	if t.AudioOnly {
+		return appendAudioOnlyArgs(args, j)
+	}
 	if j.abr() {
 		return appendABRArgs(args, j)
 	}
@@ -158,21 +161,45 @@ func BuildArgs(j Job) []string {
 	}
 
 	args = append(args, "-map", audioMap)
-	if t.AudioCodec == "" {
-		args = append(args, "-c:a", "copy")
-	} else {
-		// async=1 keeps decoded audio glued to its timestamps (silence-fill
-		// small gaps, trim drift) so the HLS mux stays monotonic.
-		args = append(args, "-af", "aresample=async=1")
-		args = append(args, "-c:a", t.AudioCodec, "-ac", "2")
-		if t.AudioBitrateBps > 0 {
-			args = append(args, "-b:a", strconv.FormatInt(t.AudioBitrateBps, 10))
-		}
-	}
+	args = appendAudioCodecArgs(args, t)
+	return appendHLSOutputArgs(args, t, j.OutputDir)
+}
 
-	// Segment format is negotiated per client (see decision engine): TS is
-	// the compatibility floor (some cast receivers reject fMP4); fMP4 is
-	// used when the stream carries HEVC, which cannot ride in TS.
+// appendAudioOnlyArgs is the audio item's job: no video stream is mapped at
+// all (-vn — an audiobook's "video" stream is its cover art, and mapping it
+// would make ffmpeg encode a one-frame film), the selected audio stream is
+// copied or re-encoded exactly as in a video job, and the result is a plain
+// single-rendition HLS playlist. Seeks stay input-side (seekSplit): the
+// pre-roll trim exists for audio that must line up with decoded video, and
+// there is none.
+func appendAudioOnlyArgs(args []string, j Job) []string {
+	t := j.Target
+	args = append(args, "-vn", "-map", fmt.Sprintf("0:a:%d", t.AudioStreamOrdinal))
+	args = appendAudioCodecArgs(args, t)
+	return appendHLSOutputArgs(args, t, j.OutputDir)
+}
+
+// appendAudioCodecArgs is the audio half of a single-rendition job: copy, or
+// re-encode to the target codec as stereo at the target bitrate.
+func appendAudioCodecArgs(args []string, t model.TranscodeTarget) []string {
+	if t.AudioCodec == "" {
+		return append(args, "-c:a", "copy")
+	}
+	// async=1 keeps decoded audio glued to its timestamps (silence-fill
+	// small gaps, trim drift) so the HLS mux stays monotonic.
+	args = append(args, "-af", "aresample=async=1")
+	args = append(args, "-c:a", t.AudioCodec, "-ac", "2")
+	if t.AudioBitrateBps > 0 {
+		args = append(args, "-b:a", strconv.FormatInt(t.AudioBitrateBps, 10))
+	}
+	return args
+}
+
+// appendHLSOutputArgs is the single-rendition HLS muxer tail. Segment format
+// is negotiated per client (see decision engine): TS is the compatibility
+// floor (some cast receivers reject fMP4); fMP4 is used when the stream
+// carries HEVC, which cannot ride in TS.
+func appendHLSOutputArgs(args []string, t model.TranscodeTarget, outputDir string) []string {
 	args = append(args,
 		"-f", "hls",
 		"-hls_time", strconv.Itoa(SegmentSeconds),
@@ -182,15 +209,14 @@ func BuildArgs(j Job) []string {
 		args = append(args,
 			"-hls_segment_type", "fmp4",
 			"-hls_fmp4_init_filename", "init.mp4",
-			"-hls_segment_filename", filepath.Join(j.OutputDir, "seg%05d.m4s"),
+			"-hls_segment_filename", filepath.Join(outputDir, "seg%05d.m4s"),
 		)
 	} else {
 		args = append(args,
-			"-hls_segment_filename", filepath.Join(j.OutputDir, "seg%05d.ts"),
+			"-hls_segment_filename", filepath.Join(outputDir, "seg%05d.ts"),
 		)
 	}
-	args = append(args, filepath.Join(j.OutputDir, "index.m3u8"))
-	return args
+	return append(args, filepath.Join(outputDir, "index.m3u8"))
 }
 
 // appendABRArgs turns a multi-rendition job into a single-decode,

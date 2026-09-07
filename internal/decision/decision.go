@@ -43,11 +43,8 @@ func Decide(media model.MediaInfo, caps model.ClientCapabilities, policy model.S
 // track's codec/channels never mutates the caller's stored MediaInfo.
 func DecideWith(media model.MediaInfo, caps model.ClientCapabilities, policy model.ServerPolicy, opts Options) model.PlayDecision {
 	caps.Normalize()
-	var trace []model.TraceStep
-	check := func(name string, passed bool, detail string) bool {
-		trace = append(trace, model.TraceStep{Check: name, Passed: passed, Detail: detail})
-		return passed
-	}
+	tr := &tracer{}
+	check := tr.check
 
 	// Audio-track selection: substitute the chosen track's codec/channels
 	// into the (local copy of) media so every audio check below —
@@ -59,9 +56,15 @@ func DecideWith(media model.MediaInfo, caps model.ClientCapabilities, policy mod
 			media.AudioCodec = t.Codec
 			media.AudioChannels = t.Channels
 			selectedAudio = n
-			trace = append(trace, model.TraceStep{Check: "audio_track", Passed: true,
-				Detail: fmt.Sprintf("track %d selected: %s%s", n, t.Codec, describeAudioTrack(t))})
+			tr.note("audio_track", true,
+				fmt.Sprintf("track %d selected: %s%s", n, t.Codec, describeAudioTrack(t)))
 		}
+	}
+
+	// An audio item has no picture: its decision is the audio half of the
+	// video one, and its transcode is an audio-only HLS session.
+	if media.MediumOrVideo() == model.MediumAudio {
+		return decideAudio(media, caps, policy, selectedAudio, tr)
 	}
 
 	// Subtitle burn-in: an embedded (bitmap) track composited onto the
@@ -69,9 +72,9 @@ func DecideWith(media model.MediaInfo, caps model.ClientCapabilities, policy mod
 	// re-encode even when the video stream was otherwise compatible.
 	burn := findEmbeddedSubtitle(media, opts.BurnSubtitle)
 	if burn != nil {
-		trace = append(trace, model.TraceStep{Check: "subtitle_burn", Passed: false,
-			Detail: fmt.Sprintf("burning track %d (%s%s) — forces video re-encode",
-				burn.Ordinal, burn.Codec, langSuffix(burn.Language))})
+		tr.note("subtitle_burn", false,
+			fmt.Sprintf("burning track %d (%s%s) — forces video re-encode",
+				burn.Ordinal, burn.Codec, langSuffix(burn.Language)))
 	}
 
 	containerOK := check("container",
@@ -116,15 +119,15 @@ func DecideWith(media model.MediaInfo, caps model.ClientCapabilities, policy mod
 	// tracks natively, so a non-default AudioTrack alone never blocks it.
 	// A burn does: burned subtitles only exist in re-encoded frames.
 	if containerOK && videoOK && audioOK && resOK && bitrateOK && hdrOK && channelsOK && burn == nil {
-		trace = append(trace, model.TraceStep{Check: "verdict", Passed: true,
-			Detail: "all checks passed — direct play"})
-		return model.PlayDecision{Method: model.DirectPlay, Trace: trace}
+		tr.note("verdict", true,
+			"all checks passed — direct play")
+		return model.PlayDecision{Method: model.DirectPlay, Trace: tr.steps}
 	}
 
 	if !policy.AllowTranscode {
-		trace = append(trace, model.TraceStep{Check: "verdict", Passed: false,
-			Detail: "incompatible and server policy forbids transcoding"})
-		return model.PlayDecision{Method: model.Deny, Trace: trace}
+		tr.note("verdict", false,
+			"incompatible and server policy forbids transcoding")
+		return model.PlayDecision{Method: model.Deny, Trace: tr.steps}
 	}
 
 	// Build the minimal transcode: copy every stream that is already
@@ -138,9 +141,9 @@ func DecideWith(media model.MediaInfo, caps model.ClientCapabilities, policy mod
 	// streaming player to accept that codec in-stream — a separate question
 	// from whether the device can decode it at all.
 	if !needsAudio && !slices.Contains(caps.HLSAudioCodecs, media.AudioCodec) {
-		trace = append(trace, model.TraceStep{Check: "hls_audio", Passed: false,
-			Detail: fmt.Sprintf("client plays %s directly but not inside HLS (accepts %s in-stream) — re-encoding",
-				media.AudioCodec, strings.Join(caps.HLSAudioCodecs, ", "))})
+		tr.note("hls_audio", false,
+			fmt.Sprintf("client plays %s directly but not inside HLS (accepts %s in-stream) — re-encoding",
+				media.AudioCodec, strings.Join(caps.HLSAudioCodecs, ", ")))
 		needsAudio = true
 	}
 
@@ -148,9 +151,9 @@ func DecideWith(media model.MediaInfo, caps model.ClientCapabilities, policy mod
 	// very file's HEVC and its HLS player never starts on the same stream in
 	// fMP4 segments, so "can decode" is not "can stream".
 	if !needsVideo && !slices.Contains(caps.HLSVideoCodecs, media.VideoCodec) {
-		trace = append(trace, model.TraceStep{Check: "hls_video", Passed: false,
-			Detail: fmt.Sprintf("client plays %s directly but not inside HLS (accepts %s in-stream) — re-encoding",
-				media.VideoCodec, strings.Join(caps.HLSVideoCodecs, ", "))})
+		tr.note("hls_video", false,
+			fmt.Sprintf("client plays %s directly but not inside HLS (accepts %s in-stream) — re-encoding",
+				media.VideoCodec, strings.Join(caps.HLSVideoCodecs, ", ")))
 		needsVideo = true
 	}
 
@@ -171,8 +174,8 @@ func DecideWith(media model.MediaInfo, caps model.ClientCapabilities, policy mod
 			target.Detelecine = true
 			target.FPS = media.FPS * 4 / 5
 			parts = append(parts, "inverse telecine")
-			trace = append(trace, model.TraceStep{Check: "telecine", Passed: true,
-				Detail: fmt.Sprintf("soft telecine detected — inverse telecine to %.3f fps", target.FPS)})
+			tr.note("telecine", true,
+				fmt.Sprintf("soft telecine detected — inverse telecine to %.3f fps", target.FPS))
 		}
 		if media.HDR != "" && !hdrOK {
 			target.Tonemap = true
@@ -204,15 +207,15 @@ func DecideWith(media model.MediaInfo, caps model.ClientCapabilities, policy mod
 	if outputVideo == "hevc" {
 		if slices.Contains(caps.HLSSegmentFormats, "fmp4") {
 			target.SegmentFormat = "fmp4"
-			trace = append(trace, model.TraceStep{Check: "segment_format", Passed: true,
-				Detail: "hevc output needs fMP4 segments; client accepts fmp4"})
+			tr.note("segment_format", true,
+				"hevc output needs fMP4 segments; client accepts fmp4")
 		} else {
 			target.VideoCodec = policy.TranscodeVideoCodec
 			target.VideoBitrateBps = policy.TranscodeVideoBitrateBps
 			parts = append(parts, "re-encode hevc to "+policy.TranscodeVideoCodec)
-			trace = append(trace, model.TraceStep{Check: "segment_format", Passed: false,
-				Detail: "hevc cannot ride in TS and client rejects fMP4 — re-encoding video to " +
-					policy.TranscodeVideoCodec})
+			tr.note("segment_format", false,
+				"hevc cannot ride in TS and client rejects fMP4 — re-encoding video to "+
+					policy.TranscodeVideoCodec)
 		}
 	}
 
@@ -222,13 +225,92 @@ func DecideWith(media model.MediaInfo, caps model.ClientCapabilities, policy mod
 	// stay single-rendition.
 	if target.VideoCodec != "" {
 		target.Renditions = buildLadder(media, caps, *target)
-		trace = append(trace, model.TraceStep{Check: "abr_ladder", Passed: true,
-			Detail: "ladder: " + describeLadder(media, target.Renditions)})
+		tr.note("abr_ladder", true,
+			"ladder: "+describeLadder(media, target.Renditions))
 	}
 
-	trace = append(trace, model.TraceStep{Check: "verdict", Passed: true,
-		Detail: "transcode — " + strings.Join(parts, ", ")})
-	return model.PlayDecision{Method: model.Transcode, Target: target, Trace: trace}
+	tr.note("verdict", true,
+		"transcode — "+strings.Join(parts, ", "))
+	return model.PlayDecision{Method: model.Transcode, Target: target, Trace: tr.steps}
+}
+
+// tracer accumulates the "why did it do that?" answer.
+type tracer struct {
+	steps []model.TraceStep
+}
+
+// check records one pass/fail step and returns passed, so a verdict can be
+// built from the same expressions that were traced.
+func (t *tracer) check(name string, passed bool, detail string) bool {
+	t.steps = append(t.steps, model.TraceStep{Check: name, Passed: passed, Detail: detail})
+	return passed
+}
+
+// note is check for steps that inform rather than gate.
+func (t *tracer) note(name string, passed bool, detail string) {
+	t.check(name, passed, detail)
+}
+
+// decideAudio is the decision for an audio-only item (audiobook part, track).
+// It asks only the questions an audio file raises — container, codec,
+// channels, bitrate cap — and never the video ones: there is no picture to
+// scale, tone-map or copy. Direct play when the client takes the file as it
+// is; otherwise an audio-only HLS session that copies the stream when the
+// client's HLS player accepts the codec in-stream and re-encodes to the
+// policy's audio codec (AAC) when it does not. No ABR ladder: rungs exist to
+// spend a decode that is already being paid for, and there is none here.
+func decideAudio(media model.MediaInfo, caps model.ClientCapabilities, policy model.ServerPolicy, selectedAudio int, tr *tracer) model.PlayDecision {
+	containerOK := tr.check("container",
+		slices.Contains(caps.Containers, media.Container),
+		fmt.Sprintf("file is %s; client plays %s", media.Container, strings.Join(caps.Containers, ", ")))
+
+	audioOK := tr.check("audio_codec",
+		slices.Contains(caps.AudioCodecs, media.AudioCodec),
+		fmt.Sprintf("file is %s; client plays %s", media.AudioCodec, strings.Join(caps.AudioCodecs, ", ")))
+
+	bitrateOK := true
+	if caps.MaxBitrateBps > 0 {
+		bitrateOK = tr.check("bitrate",
+			media.BitrateBps <= caps.MaxBitrateBps,
+			fmt.Sprintf("file is %d kbps; client cap %d kbps", media.BitrateBps/1000, caps.MaxBitrateBps/1000))
+	}
+
+	channelsOK := tr.check("audio_channels",
+		media.AudioChannels <= caps.MaxAudioChannels,
+		fmt.Sprintf("file has %d channels; client max %d", media.AudioChannels, caps.MaxAudioChannels))
+
+	if containerOK && audioOK && bitrateOK && channelsOK {
+		tr.note("verdict", true, "all checks passed — direct play (audio)")
+		return model.PlayDecision{Method: model.DirectPlay, Trace: tr.steps}
+	}
+
+	if !policy.AllowTranscode {
+		tr.note("verdict", false, "incompatible and server policy forbids transcoding")
+		return model.PlayDecision{Method: model.Deny, Trace: tr.steps}
+	}
+
+	// A container the client cannot open still holds a stream it may be able
+	// to play: remux it into HLS and copy the audio unless codec, channels or
+	// the bitrate cap say otherwise.
+	needsAudio := !(audioOK && channelsOK && bitrateOK)
+	if !needsAudio && !slices.Contains(caps.HLSAudioCodecs, media.AudioCodec) {
+		tr.note("hls_audio", false,
+			fmt.Sprintf("client plays %s directly but not inside HLS (accepts %s in-stream) — re-encoding",
+				media.AudioCodec, strings.Join(caps.HLSAudioCodecs, ", ")))
+		needsAudio = true
+	}
+
+	target := &model.TranscodeTarget{AudioOnly: true, AudioStreamOrdinal: selectedAudio, SegmentFormat: "ts"}
+	verdict := "transcode — audio only, "
+	if needsAudio {
+		target.AudioCodec = policy.TranscodeAudioCodec
+		target.AudioBitrateBps = policy.TranscodeAudioBitrateBps
+		verdict += "re-encode audio to " + policy.TranscodeAudioCodec
+	} else {
+		verdict += "copy audio"
+	}
+	tr.note("verdict", true, verdict)
+	return model.PlayDecision{Method: model.Transcode, Target: target, Trace: tr.steps}
 }
 
 // findEmbeddedSubtitle resolves a burn ordinal to the matching EMBEDDED

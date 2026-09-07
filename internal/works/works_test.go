@@ -2,6 +2,7 @@ package works
 
 import (
 	"encoding/json"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -623,6 +624,39 @@ func TestWorkProgressAudiobook(t *testing.T) {
 	p, _ = WorkProgress(&single[0], map[int64]store.Position{9: pos(9, 250, 1)})
 	if p.Fraction != 0.25 || p.ProgressText != "4:10" {
 		t.Errorf("single file: %+v", p)
+	}
+
+	// A chaptered single file names the chapter the position falls in and
+	// puts the position over the whole: 1:19:22 into an 11:30:00 book whose
+	// seventh chapter starts at 1:00:00 and eighth at 1:20:00.
+	m4b := withDuration(part(11, "a/x/Long.m4b", "A", "Long", 0), 41400)
+	for i := 0; i < 12; i++ {
+		m4b.MediaInfo.Chapters = append(m4b.MediaInfo.Chapters, model.Chapter{StartSeconds: float64(i) * 600, Title: fmt.Sprintf("Chapter %d", i+1)})
+	}
+	m4b.MediaInfo.Chapters = append(m4b.MediaInfo.Chapters[:7], model.Chapter{StartSeconds: 4800, Title: "Chapter 8"})
+	chaptered := Build([]store.Item{m4b})
+	p, _ = WorkProgress(&chaptered[0], map[int64]store.Position{11: pos(11, 4762, 1)})
+	if p.ProgressText != "ch. 7 · 1:19:22 / 11:30:00" || p.Fraction != 4762.0/41400 {
+		t.Errorf("chaptered m4b: %+v", p)
+	}
+	// Ahead of every marker is still chapter 1; the last marker holds to the end.
+	if got := chapterAt(m4b.MediaInfo.Chapters, 0); got != 1 {
+		t.Errorf("chapterAt(0) = %d", got)
+	}
+	if got := chapterAt(m4b.MediaInfo.Chapters, 41000); got != 8 {
+		t.Errorf("chapterAt(end) = %d", got)
+	}
+	if got := chapterAt(nil, 100); got != 0 {
+		t.Errorf("chapterAt(no chapters) = %d", got)
+	}
+	// A chaptered PART of a multi-file set still reads by part: the set is
+	// the unit the listener moves through.
+	first := m4b
+	first.Identity = &model.Identity{Kind: "audiobook_part", Author: "A", Title: "Long", Part: 1}
+	set := Build([]store.Item{first, withDuration(part(12, "a/x/02.m4b", "A", "Long", 2), 600)})
+	p, _ = WorkProgress(&set[0], map[int64]store.Position{11: pos(11, 4762, 1)})
+	if p.ProgressText != "part 1 of 2 · 1:19:22" {
+		t.Errorf("chaptered part of a set: %+v", p)
 	}
 
 	// A book: a position is acknowledged, but this generation has no locator

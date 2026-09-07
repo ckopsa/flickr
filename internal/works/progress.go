@@ -5,6 +5,7 @@ import (
 	"path"
 	"sort"
 
+	"flickr/internal/model"
 	"flickr/internal/store"
 )
 
@@ -81,7 +82,11 @@ func WorkProgress(w *Work, positions map[int64]store.Position) (Progress, bool) 
 		if dur > 0 && best.PositionSeconds >= watchedAt*dur {
 			status = "finished"
 		}
-		return Progress{Status: status, Fraction: frac, ProgressText: clock(best.PositionSeconds), UpdatedAt: updated}, true
+		text := clock(best.PositionSeconds)
+		if w.Medium == model.MediumAudio {
+			text = audioClock(itemOf(w, best.ItemID), best.PositionSeconds, dur)
+		}
+		return Progress{Status: status, Fraction: frac, ProgressText: text, UpdatedAt: updated}, true
 	}
 
 	// Show: walk EPISODE members in (season, episode) order. Bonus material is
@@ -177,6 +182,50 @@ func partsProgress(w *Work, positions map[int64]store.Position, updated float64)
 	}
 	text := fmt.Sprintf("%s %d of %d · %s", noun, furthest+1, len(parts), clock(pos.PositionSeconds))
 	return Progress{Status: status, Fraction: frac, ProgressText: text, UpdatedAt: updated}, true
+}
+
+// audioClock is the place in a single-file audio work: for a chaptered file
+// (an m4b with its chapter atoms) "ch. 7 · 1:19:22 / 11:30:00" — the chapter
+// the position falls in, then the position over the whole; an unchaptered
+// file reads like a movie, a plain clock.
+func audioClock(it *store.Item, pos, dur float64) string {
+	text := clock(pos)
+	if it == nil || it.MediaInfo == nil {
+		return text
+	}
+	ch := chapterAt(it.MediaInfo.Chapters, pos)
+	if ch == 0 {
+		return text
+	}
+	if dur > 0 {
+		text += " / " + clock(dur)
+	}
+	return fmt.Sprintf("ch. %d · %s", ch, text)
+}
+
+// chapterAt is the 1-based chapter the position falls in — the last chapter
+// starting at or before pos; a position ahead of the first marker counts as
+// chapter 1. 0 when the file has no chapters.
+func chapterAt(chapters []model.Chapter, pos float64) int {
+	if len(chapters) == 0 {
+		return 0
+	}
+	n := 1
+	for i, c := range chapters {
+		if c.StartSeconds <= pos {
+			n = i + 1
+		}
+	}
+	return n
+}
+
+func itemOf(w *Work, itemID int64) *store.Item {
+	for i := range w.Items {
+		if w.Items[i].ID == itemID {
+			return &w.Items[i]
+		}
+	}
+	return nil
 }
 
 func itemDuration(it store.Item) float64 {

@@ -104,9 +104,31 @@ a handful of architectural decisions (see design notes below):
    spine, TOC) that yields one `chapter` per spine item and a `sections`
    count. Identification gained the `Audiobooks/`, `Music/` and `Books/`
    grammars (see *Library layout*), and works gained `medium`, `author`,
-   and the `audiobook`/`album`/`book` kinds. Nothing audio or text plays
-   yet: the play endpoints answer 415 for those media, the web grid hides
-   them, and trickplay skips them.
+   and the `audiobook`/`album`/`book` kinds. Text does not play: the play
+   endpoints answer 415 for it and the grid hides books until the reader
+   lands; trickplay skips audio and text alike (no frames to draw).
+14. **Audio plays through the same pipeline, minus the picture** — an audio
+   item takes its own branch of the pure `Decide`: the container, codec,
+   channel and bitrate questions are asked, the video ones (codec,
+   resolution, HDR, ladder) never are. Direct play when the client takes the
+   file as it is; otherwise an audio-only HLS session (`target.audio_only`:
+   `-vn`, the chosen stream copied when the client's HLS player accepts the
+   codec in-stream, re-encoded to AAC when it does not, never a ladder —
+   there is no decode to spend). Cover art is the file's attached picture,
+   extracted once on first request into `data/covers/<id>.jpg` and served by
+   `/api/items/{id}/cover`, which falls back to the poster route (and
+   remembers a file with no picture, so it is asked once). The web UI plays
+   audio through the very same player as a film — media element, hls.js,
+   scrub bar, chapter ticks, casting, the `saveProgress()` gate and the
+   passage predicates — with `web/audio.js` putting the cover where the
+   picture would be and the work's parts or tracks beside it: an
+   audiobook's parts and an album's tracks play in order, up-next walks
+   them the way it walks episodes, and a chapter tap seeks. Progress text
+   for a chaptered single-file book reads `ch. 7 · 1:19:22 / 11:30:00`
+   (the chapter from `media_info.chapters` by position), a set keeps
+   `part 3 of 12 · 41:10`, and continue-listening rides `/api/continue`
+   unchanged. Music is the same machinery with album works and track
+   ordinals; there is no artist page yet (bead flickr-yrb).
 
 ## Library layout
 
@@ -156,9 +178,10 @@ Vocabulary, from file to work:
 
 Progress follows the shape: an audiobook's fraction is time heard over the
 sum of its parts' durations (earlier parts count whole), its text reads
-`part 3 of 12 · 41:10`; a book reports a position but no fraction or text
-until the reader bead adds a locator. Audio and text items do not play yet
-— the audio player is bead flickr-q9v, the EPUB reader bead flickr-9au.
+`part 3 of 12 · 41:10`; a single chaptered file reads
+`ch. 7 · 1:19:22 / 11:30:00`; a book reports a position but no fraction or
+text until the reader bead adds a locator. Audio plays (design note 14);
+text does not yet — the EPUB reader is bead flickr-9au.
 
 ## Run
 
@@ -182,13 +205,14 @@ locally except HLS segments in `data/streams/`.
 | `GET /api/works/{key}/items` | one work's member items (episodes in season/episode order, parts and tracks in part order); 404 for unknown keys |
 | `GET /api/continue?client_id=NAME` | a profile's resume list: most-recent first, max 20, finished (≥90%) and <5 s positions excluded, one entry per work |
 | `GET /api/feed/media?since=CURSOR` | change feed: works changed since the cursor with per-audience progress; response carries the next cursor (`l<n>.s<n>`); no `since` = everything |
-| `POST /api/items/{id}/decision` | dry-run: decision + trace, no side effects (415 for audio/text items — they do not play yet) |
-| `POST /api/items/{id}/play` | decide and act: presigned URL (direct) or HLS session (transcode); 415 for audio/text |
+| `POST /api/items/{id}/decision` | dry-run: decision + trace, no side effects; audio items take the audio branch (415 for text — books are read, not streamed) |
+| `POST /api/items/{id}/play` | decide and act: presigned URL (direct) or HLS session (transcode, audio-only for audio items); 415 for text |
 | `POST /api/items/{id}/identity` | user identity override (persists across scans) |
 | `POST /api/items/{id}/reprobe` | re-probe one item on demand (also re-discovers subtitle sidecars in its directory) |
 | `POST /api/items/{id}/enrich` | TMDB-enrich one item on demand (503 if no API key) |
 | `GET /api/items/{id}/subtitles/{ordinal}.vtt` | subtitle track as WebVTT — embedded or external sidecar (415 for bitmap tracks, 404 for bad ordinal) |
 | `GET /api/items/{id}/poster` | cached TMDB poster (image/jpeg, 404 if absent) |
+| `GET /api/items/{id}/cover` | an audio item's embedded cover art, extracted with ffmpeg on first request and cached in `data/covers/`; falls back to the poster route, 404 when neither exists |
 | `GET /api/items/{id}/still` | cached TMDB episode still (image/jpeg, 404 if absent) |
 | `GET /api/items/{id}/trickplay.json` | scrub-preview sprite index (404 if not generated) |
 | `GET /api/items/{id}/trickplay/{n}.jpg` | sprite sheet n |
@@ -216,7 +240,7 @@ so every view has a stable address:
 |---|---|
 | `#/` | library grid |
 | `#/show/<title>` | a show's episode list (`<title>` is `encodeURIComponent`'d) |
-| `#/item/<id>` | one item's detail pane (its Play button resumes from the saved place) |
+| `#/item/<id>` | one item's detail pane (its Play button resumes from the saved place); for an audiobook part or a track, the audio pane with the work's parts and chapters |
 
 A **passage** is a start and an end within a work — a scene, or a run of
 episodes — and other systems (the household's day planner) mint links to
