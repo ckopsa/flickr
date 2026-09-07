@@ -25,7 +25,10 @@
 // from the server, had kept a weeks-old index.html "fresh" and fed it
 // straight into v7 through v11 (2026-09-07). The server now says
 // no-cache too; this is the belt to that suspenders.
-const CACHE = 'flickr-shell-v12';
+// v13: the router asks the server what a hash means (GET /api/-/route) and
+// passage.js lost the show-form resolution to internal/passage — a v12 shell
+// serving the new index.html would call functions that are no longer there.
+const CACHE = 'flickr-shell-v13';
 const SHELL = ['/', '/index.html', '/passage.js', '/audio.js', '/audio.css', '/reader.js', '/pdfreader.js',
                '/vendor/jszip.min.js', '/vendor/epub.min.js',
                '/vendor/pdf.min.mjs', '/vendor/pdf.worker.min.mjs',

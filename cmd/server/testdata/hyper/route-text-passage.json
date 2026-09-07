@@ -1,0 +1,140 @@
+{
+  "self": "/api/-/route?hash=%23%2Fitem%2F3%3Ffrom%3Dch%3A3%26to%3Dch%3A4",
+  "kind": "route",
+  "view": "item",
+  "document": {
+    "self": "/api/items/3",
+    "kind": "item",
+    "title": "The Haunting of Hill House",
+    "id": 3,
+    "object_key": "Books/Shirley Jackson/The Haunting of Hill House.epub",
+    "medium": "text",
+    "label": "The Haunting of Hill House.epub",
+    "identity": {
+      "kind": "book",
+      "title": "The Haunting of Hill House",
+      "author": "Shirley Jackson",
+      "year": 1959
+    },
+    "media_info": {
+      "medium": "text",
+      "container": "epub",
+      "video_codec": "",
+      "audio_codec": "",
+      "width": 0,
+      "height": 0,
+      "duration_seconds": 0,
+      "bitrate_bps": 0,
+      "audio_channels": 0,
+      "chapters": [
+        {
+          "start_seconds": 0,
+          "title": "Cover"
+        },
+        {
+          "start_seconds": 0,
+          "title": "Title Page"
+        },
+        {
+          "start_seconds": 0,
+          "title": "Chapter One"
+        },
+        {
+          "start_seconds": 0,
+          "title": "Chapter Two"
+        },
+        {
+          "start_seconds": 0,
+          "title": "The Hill"
+        },
+        {
+          "start_seconds": 0,
+          "title": "The Tower"
+        },
+        {
+          "start_seconds": 0,
+          "title": "The Cellar"
+        },
+        {
+          "start_seconds": 0,
+          "title": "Afterword"
+        }
+      ],
+      "sections": 8,
+      "document": {
+        "title": "The Haunting of Hill House",
+        "creator": "Shirley Jackson",
+        "language": "en"
+      }
+    },
+    "links": {
+      "book": {
+        "href": "/api/items/3/book"
+      },
+      "cover": {
+        "href": "/api/items/3/cover"
+      },
+      "work": {
+        "href": "/api/works/book%3Ashirley-jackson-the-haunting-of-hill-house-1959",
+        "title": "The Haunting of Hill House"
+      }
+    },
+    "actions": {
+      "identity": {
+        "method": "POST",
+        "href": "/api/items/3/identity",
+        "input": {
+          "author": "string?",
+          "episode": "number?",
+          "kind": "string",
+          "part": "number?",
+          "season": "number?",
+          "title": "string",
+          "track_title": "string?",
+          "year": "number?"
+        },
+        "label": "Fix the identity"
+      },
+      "progress": {
+        "method": "POST",
+        "href": "/api/progress",
+        "input": {
+          "client_id": "string",
+          "fraction": "number?",
+          "item_id": "3",
+          "locator": "string?",
+          "page": "number?",
+          "position_seconds": "number?",
+          "section": "number?"
+        },
+        "label": "Save the place"
+      },
+      "read": {
+        "method": "GET",
+        "href": "/api/items/3/book",
+        "label": "Read"
+      },
+      "reprobe": {
+        "method": "POST",
+        "href": "/api/items/3/reprobe",
+        "label": "Probe this file again"
+      }
+    },
+    "unavailable": {
+      "enrich": {
+        "reason": "TMDB enrichment is off (TMDB_API_KEY is not set)"
+      },
+      "play": {
+        "reason": "a book is read, not played"
+      }
+    }
+  },
+  "passage": {
+    "from": "ch:3",
+    "to": "ch:4",
+    "from_section": 3,
+    "to_section": 4
+  },
+  "autoplay": true
+}
+
