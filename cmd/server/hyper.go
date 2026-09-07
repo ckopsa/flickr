@@ -495,11 +495,24 @@ func artworkLinks(doc *hyper.Envelope, it store.Item, medium string) {
 	if medium == model.MediumText {
 		doc.Link("book", base+"/book", "")
 	}
-	if medium == model.MediumVideo && it.MediaInfo != nil &&
-		it.MediaInfo.DurationSeconds > trickplayMinSeconds {
-		doc.Link("trickplay", base+"/trickplay.json", "")
+	if hasTrickplay(medium, it.MediaInfo) {
+		doc.Link("trickplay", trickplayHref(it.ID), "")
 	}
 }
+
+// hasTrickplay is the one rule for the scrub-preview sheets: a video long
+// enough to have been given a set. The sheets themselves are made in the
+// background, so the link is an invitation to ask rather than a promise —
+// the index answers 404 until they are there — and the item document and
+// the library tile, which plays the same frames under a resting pointer,
+// offer it on identical terms.
+func hasTrickplay(medium string, mi *model.MediaInfo) bool {
+	return medium == model.MediumVideo && mi != nil &&
+		mi.DurationSeconds > trickplayMinSeconds
+}
+
+// trickplayHref is where one item's sprite-sheet index lives.
+func trickplayHref(id int64) string { return itemHref(id) + "/trickplay.json" }
 
 // itemTitle is what a screen calls this one file: the episode's own title
 // when TMDB knows it, a track's own name, the film's or the book's title —

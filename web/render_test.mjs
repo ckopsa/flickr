@@ -33,11 +33,13 @@ function golden(name) {
   return JSON.parse(fs.readFileSync(path.join(goldenDir, name + '.json'), 'utf8'));
 }
 
-// Every href="…" and data-href="…" the output carries.
+// Every href="…" and data-href="…" the output carries, and the sheet index a
+// tile hands the kernel to play under a resting pointer.
 function addresses(html) {
   const out = [];
   for (const m of html.matchAll(/(?:^|\s)(?:data-)?href="([^"]*)"/g)) out.push(unesc(m[1]));
   for (const m of html.matchAll(/\ssrc="([^"]*)"/g)) out.push(unesc(m[1]));
+  for (const m of html.matchAll(/\sdata-trickplay="([^"]*)"/g)) out.push(unesc(m[1]));
   return out;
 }
 function unesc(s) {
@@ -396,6 +398,22 @@ test('every tile is focusable and says what activating it does', () => {
     }
   }
   assert.ok(seen >= 3, 'no tiles were checked');
+});
+
+// The moving tile is the kernel's animation, but the sheets it plays are the
+// document's: a tile hands over the index the server put on it, and a tile the
+// server offered none for hands over nothing.
+test('a tile carries the sheets a resting pointer plays', () => {
+  const doc = golden('library');
+  const html = R.library(doc, {});
+  // Every tile the document listed, in whichever of its rows it was listed in.
+  const tiles = Object.values(doc).filter(Array.isArray).flat().filter(t => t && t.links);
+  const offered = tiles.filter(t => t.links.trickplay).map(t => t.links.trickplay.href);
+  assert.ok(offered.length && tiles.some(t => !t.links.trickplay),
+    'the golden library cannot tell a tile with sheets from one without');
+  const drawn = [...html.matchAll(/data-trickplay="([^"]*)"/g)].map(m => unesc(m[1]));
+  assert.deepEqual([...new Set(drawn)].sort(), [...new Set(offered)].sort(),
+    'the tiles that hover frames are not the tiles the server offered them for');
 });
 
 // The groups are the document's, so the rows are too: one per group it

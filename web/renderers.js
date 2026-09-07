@@ -207,8 +207,13 @@
         '</div><div class="tile-sub">' + esc(t.subtitle || t.tech || '') + '</div></div>';
     // A tile is a div, so the keyboard would walk straight past it: tabindex
     // puts it in the tab order and the role says what activating it does.
+    // The scrub sheets ride along where the document offered them: a pointer
+    // resting on the tile plays them, which is the kernel's affair, and the
+    // address is the document's own — copied, never composed.
+    const trick = href(t, 'trickplay');
     return '<div class="' + esc(cls || 'card') + '" tabindex="0" role="link"' +
-      ' data-nav="' + esc(hashFor(t)) + '">' +
+      ' data-nav="' + esc(hashFor(t)) + '"' +
+      (trick ? ' data-trickplay="' + esc(trick) + '"' : '') + '>' +
       wrap +
       '<div class="c-title">' + esc(title) + '</div>' +
       (t.subtitle ? '<div class="c-sub">' + esc(t.subtitle) + '</div>' : '') +

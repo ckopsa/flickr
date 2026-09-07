@@ -376,6 +376,7 @@
   }
 
   function navigate(hash) {
+    stopPreview();   // the tile being left is not still being hovered
     if (location.hash === hash) applyRoute();
     else location.hash = hash;
   }
@@ -1146,6 +1147,116 @@
     }
   }
 
+  // --- the moving tile ---------------------------------------------------------
+  //
+  // A pointer that RESTS on a tile — six hundred milliseconds, not a pass over
+  // it on the way somewhere else — sets the film going on the poster: the very
+  // sheets the scrub bar previews from, four frames a second, gone the moment
+  // the pointer leaves. It is a nicety and it behaves like one — never where
+  // the pointer is a finger, because nothing rests on a touchscreen and a
+  // sheet is a big picture to fetch for a tap, and never where less motion was
+  // asked for.
+  //
+  // Every address here came out of a document: the index is the tile's own
+  // `links.trickplay` (the renderer carried it into data-trickplay) and the
+  // sheets are addresses INSIDE the index it answers.
+  const PREVIEW_DELAY = 600;   // how long a pointer rests before the tile moves
+  const PREVIEW_MS = 250;      // four frames a second
+  const PREVIEW_FRAMES = 20;   // how many frames one loop plays
+  const sheetIndexes = new Map();  // trickplay href -> the index, or null for none
+  let preview = null;          // { card, timer, el, tick } while one is running
+
+  function previewWanted() {
+    try {
+      return !matchMedia('(pointer: coarse)').matches &&
+        !matchMedia('(prefers-reduced-motion: reduce)').matches;
+    } catch (e) { return false; }
+  }
+
+  function onPointerOver(e) {
+    const t = e.target;
+    const card = t && t.closest ? t.closest('[data-trickplay]') : null;
+    if (preview && preview.card === card) return;   // moving about inside the same tile
+    stopPreview();
+    if (!card || !previewWanted()) return;
+    preview = { card: card, el: null, tick: null, timer: setTimeout(() => startPreview(card), PREVIEW_DELAY) };
+  }
+
+  function onPointerOut(e) {
+    if (!preview) return;
+    if (e.relatedTarget && preview.card.contains(e.relatedTarget)) return;
+    stopPreview();
+  }
+
+  function stopPreview() {
+    if (!preview) return;
+    clearTimeout(preview.timer);
+    clearInterval(preview.tick);
+    if (preview.el) preview.el.remove();
+    preview = null;
+  }
+
+  async function sheetIndex(href) {
+    if (sheetIndexes.has(href)) return sheetIndexes.get(href);
+    let idx = null;
+    try { idx = await api(href); } catch (e) { /* none were ever made: no preview */ }
+    sheetIndexes.set(href, idx);
+    return idx;
+  }
+
+  async function startPreview(card) {
+    const wrap = card.querySelector('.poster-wrap');
+    if (!wrap) return;
+    const idx = await sheetIndex(card.dataset.trickplay);
+    if (!idx || !preview || preview.card !== card) return;
+    const list = idx.sheet_hrefs || [];
+    if (!list.length) return;
+    // ONE sheet, from the middle of the film: a hover lasts seconds, and a
+    // whole film at four frames a second would be a loop minutes long — and
+    // every sheet a fetch. The frames are taken spread across that sheet, so
+    // what plays is a passage of the film rather than half a minute of it.
+    const sheet = list[Math.floor(list.length / 2)];
+    const per = (idx.cols || 1) * (idx.rows || 1);
+    const step = Math.max(1, Math.floor(per / PREVIEW_FRAMES));
+    // The sheet is fetched before anything is shown: a preview that arrives
+    // blank and fills in reads as a broken picture.
+    const pic = new Image();
+    pic.onload = () => {
+      if (!preview || preview.card !== card || !wrap.isConnected) return;
+      const el = document.createElement('div');
+      el.className = 'tile-preview';
+      wrap.appendChild(el);
+      preview.el = el;
+      let n = 0;
+      const draw = () => {
+        // The view under it can be swapped away mid-loop; a tile that is no
+        // longer on the page is not being hovered.
+        if (!el.isConnected) { stopPreview(); return; }
+        frame(el, wrap, idx, sheet, (n++ * step) % per);
+      };
+      draw();
+      preview.tick = setInterval(draw, PREVIEW_MS);
+    };
+    pic.src = sheet;
+  }
+
+  // One frame of the sheet, drawn to COVER the poster the way the artwork
+  // does: the sheet is a grid of wide frames and a tile is a tall box, so the
+  // frame is scaled until it fills and what will not fit is cropped evenly.
+  function frame(el, wrap, idx, sheet, n) {
+    const cols = idx.cols || 1, rows = idx.rows || 1;
+    const box = wrap.getBoundingClientRect();
+    const tw = idx.tile_width || 1, th = idx.tile_height || 1;
+    const scale = Math.max(box.width / tw, box.height / th);
+    const w = tw * scale, h = th * scale;
+    const col = n % cols, row = Math.floor(n / cols);
+    el.style.backgroundImage = 'url("' + sheet + '")';
+    el.style.backgroundSize = (cols * w) + 'px ' + (rows * h) + 'px';
+    el.style.backgroundPosition =
+      (-(col * w) + (box.width - w) / 2) + 'px ' +
+      (-(row * h) + (box.height - h) / 2) + 'px';
+  }
+
   // A poster is fetched after its frame is drawn, so the frame shimmers until
   // the picture lands. `load` does not bubble, so the one listener for the
   // whole page catches it on the way down instead.
@@ -1272,6 +1383,8 @@
     document.addEventListener('load', onLoad, true); // capture: load does not bubble
     document.addEventListener('error', onImageError, true);
     document.addEventListener('submit', onSubmit);
+    document.addEventListener('pointerover', onPointerOver);
+    document.addEventListener('pointerout', onPointerOut);
     window.addEventListener('hashchange', applyRoute);
     window.addEventListener('beforeunload', () => root.Player.close());
     $('profile-chip').onclick = openGate;
