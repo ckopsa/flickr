@@ -517,7 +517,11 @@ func (s *server) sessionEnvelope(row playSession, item store.Item, next *store.I
 		// `passage: null` knows the answer, where a missing field only means
 		// it is reading an older server.
 		Field("passage", row.Passage).
-		Field("marks", row.Marks)
+		Field("marks", row.Marks).
+		// The stretches worth jumping over, read off the file's own chapter
+		// names (skipsIn): the client is TOLD where the titles and the
+		// credits are rather than taught how to find them.
+		Field("skips", skipsIn(item))
 
 	doc.Link("item", itemHref(item.ID), itemTitle(item))
 	// The picture this play is shown by — a Cast device draws it behind the
@@ -574,6 +578,73 @@ func (s *server) sessionEnvelope(row playSession, item store.Item, next *store.I
 		doc.Unavailable("link", "mark an in point first — a passage needs somewhere to start")
 	}
 	return doc
+}
+
+// ── the skips ───────────────────────────────────────────────────────────
+
+// sessionSkip is one stretch of the file worth jumping over: the opening
+// titles, or the closing credits. It is Netflix's button without the
+// detection — a great many rips carry the chapter names that say where
+// those stretches are, and a name is a fact rather than a guess.
+type sessionSkip struct {
+	Kind  string  `json:"kind"` // "intro" | "credits"
+	Start float64 `json:"start"`
+	End   float64 `json:"end"`
+	Label string  `json:"label"` // what the button says, in the server's words
+}
+
+// skipLabel is how a skip of each kind is offered.
+var skipLabel = map[string]string{"intro": "Skip intro", "credits": "Skip credits"}
+
+// skipKind reads one chapter name. The opening words are tried first: an
+// "Opening credits" chapter is the start of the film, not the end of it.
+func skipKind(title string) string {
+	t := strings.ToLower(title)
+	for _, w := range []string{"intro", "opening", "titles"} {
+		if strings.Contains(t, w) {
+			return "intro"
+		}
+	}
+	if strings.Contains(t, "credits") {
+		return "credits"
+	}
+	return ""
+}
+
+// skipsIn is the derivation, and it neither probes nor guesses: a chapter
+// whose NAME says what it is, running until the next chapter starts — or,
+// for the last chapter, until the file ends, which is exactly what closing
+// credits do.
+//
+// An opening is a stretch one jumps OVER, so it needs somewhere to land: an
+// intro-named chapter with nothing after it is a file's last marker rather
+// than an opening, and there is no skip in it.
+func skipsIn(it store.Item) []sessionSkip {
+	out := []sessionSkip{}
+	if it.MediaInfo == nil {
+		return out
+	}
+	chs := it.MediaInfo.Chapters
+	for i, ch := range chs {
+		kind := skipKind(ch.Title)
+		if kind == "" {
+			continue
+		}
+		last := i == len(chs)-1
+		if kind == "intro" && last {
+			continue
+		}
+		end := it.MediaInfo.DurationSeconds
+		if !last {
+			end = chs[i+1].StartSeconds
+		}
+		if end <= ch.StartSeconds {
+			continue
+		}
+		out = append(out, sessionSkip{
+			Kind: kind, Start: ch.StartSeconds, End: end, Label: skipLabel[kind]})
+	}
+	return out
 }
 
 // sessionArtwork is the picture that stands for this play: the item's own

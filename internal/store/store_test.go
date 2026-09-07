@@ -423,3 +423,86 @@ func TestStatePlace(t *testing.T) {
 		t.Errorf("clearing an absent row: %v", err)
 	}
 }
+
+// My List, as the store keeps it: a set per profile, read back newest first,
+// idempotent at both ends, and nobody else's.
+func TestSavedList(t *testing.T) {
+	s, err := OpenState(filepath.Join(t.TempDir(), "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys := func(rows []Saved) []string {
+		var out []string
+		for _, r := range rows {
+			out = append(out, r.WorkKey)
+		}
+		return out
+	}
+	if rows, err := s.SavedFor("chris"); err != nil || len(rows) != 0 {
+		t.Fatalf("an empty list: %v, %v", rows, err)
+	}
+	for _, k := range []string{"movie:frozen", "show:the-office", "book:1984"} {
+		if err := s.Save("chris", k); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.Save("kid", "movie:frozen"); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := s.SavedFor("chris")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Newest first; the millisecond clock may tie all three, and then the key
+	// orders them — either way the answer is the same twice.
+	got := keys(rows)
+	if len(got) != 3 {
+		t.Fatalf("list = %v, want three entries", got)
+	}
+	if rows[0].SavedAt == 0 {
+		t.Errorf("an entry with no time on it: %+v", rows[0])
+	}
+	again, err := s.SavedFor("chris")
+	if err != nil || len(again) != 3 || keys(again)[0] != got[0] {
+		t.Errorf("the list read twice: %v then %v (%v)", got, keys(again), err)
+	}
+	// Saving what is already there is not a second entry, and leaves the time
+	// it was first put by alone.
+	first := rows[len(rows)-1]
+	if err := s.Save("chris", first.WorkKey); err != nil {
+		t.Fatal(err)
+	}
+	rows = mustSaved(t, s, "chris")
+	if len(rows) != 3 {
+		t.Fatalf("after re-saving: %v", keys(rows))
+	}
+	for _, r := range rows {
+		if r.WorkKey == first.WorkKey && r.SavedAt != first.SavedAt {
+			t.Errorf("re-saving moved the entry: %+v, was %+v", r, first)
+		}
+	}
+	// Taking one off takes one off, and only for the profile that asked.
+	if err := s.Unsave("chris", "movie:frozen"); err != nil {
+		t.Fatal(err)
+	}
+	if got := keys(mustSaved(t, s, "chris")); len(got) != 2 {
+		t.Errorf("after unsaving: %v", got)
+	}
+	if got := keys(mustSaved(t, s, "kid")); len(got) != 1 || got[0] != "movie:frozen" {
+		t.Errorf("another profile's list went with it: %v", got)
+	}
+	// Unsaving what is not there is not an error: it is off the list either
+	// way, which is what the caller asked for.
+	if err := s.Unsave("chris", "movie:frozen"); err != nil {
+		t.Errorf("unsaving an absent entry: %v", err)
+	}
+}
+
+func mustSaved(t *testing.T, s *State, profile string) []Saved {
+	t.Helper()
+	rows, err := s.SavedFor(profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return rows
+}

@@ -52,7 +52,7 @@
       "season": 3,
       "episode": 22,
       "duration_seconds": 2640,
-      "tech": "1280x720 h264/aac · 2.40 GB · 2 ch",
+      "tech": "1280x720 h264/aac · 2.40 GB · 4 ch",
       "overview": "Michael takes the office to the beach.",
       "chapters": [
         {
@@ -62,6 +62,14 @@
         {
           "start_seconds": 142,
           "title": "Titles"
+        },
+        {
+          "start_seconds": 173,
+          "title": "Act one"
+        },
+        {
+          "start_seconds": 2580,
+          "title": "End credits"
         }
       ],
       "resume": {
@@ -275,6 +283,11 @@
         "seek_seconds": "number?"
       },
       "label": "▶ Resume"
+    },
+    "save": {
+      "method": "POST",
+      "href": "/api/list/tmdb%3A2316",
+      "label": "Add to My List"
     }
   },
   "unavailable": {

@@ -82,6 +82,10 @@ func (s *server) handleRootDoc(w http.ResponseWriter, r *http.Request) {
 		// `?q=`, and the client reaches it by the hash its box spells.
 		Link("search", "/api/search", "Search").
 		Link("continue", cont, "Continue watching").
+		// What this profile put by for later — the one shelf nobody can
+		// derive from the library, so the root names it beside the resume
+		// list it sits under.
+		Link("list", listHref(profile), "My List").
 		// Who is playing what, right now — the household's, not this
 		// profile's, so it carries nobody's name (activity.go).
 		Link("activity", "/api/activity", "Activity").
@@ -491,11 +495,24 @@ func artworkLinks(doc *hyper.Envelope, it store.Item, medium string) {
 	if medium == model.MediumText {
 		doc.Link("book", base+"/book", "")
 	}
-	if medium == model.MediumVideo && it.MediaInfo != nil &&
-		it.MediaInfo.DurationSeconds > trickplayMinSeconds {
-		doc.Link("trickplay", base+"/trickplay.json", "")
+	if hasTrickplay(medium, it.MediaInfo) {
+		doc.Link("trickplay", trickplayHref(it.ID), "")
 	}
 }
+
+// hasTrickplay is the one rule for the scrub-preview sheets: a video long
+// enough to have been given a set. The sheets themselves are made in the
+// background, so the link is an invitation to ask rather than a promise —
+// the index answers 404 until they are there — and the item document and
+// the library tile, which plays the same frames under a resting pointer,
+// offer it on identical terms.
+func hasTrickplay(medium string, mi *model.MediaInfo) bool {
+	return medium == model.MediumVideo && mi != nil &&
+		mi.DurationSeconds > trickplayMinSeconds
+}
+
+// trickplayHref is where one item's sprite-sheet index lives.
+func trickplayHref(id int64) string { return itemHref(id) + "/trickplay.json" }
 
 // itemTitle is what a screen calls this one file: the episode's own title
 // when TMDB knows it, a track's own name, the film's or the book's title —
@@ -735,7 +752,12 @@ func (s *server) handleWorkDoc(w http.ResponseWriter, r *http.Request) {
 		hyper.WriteProblem(w, serverProblem(err))
 		return
 	}
-	hyper.WriteDoc(w, http.StatusOK, s.workEnvelope(wk, ws, profile, positions))
+	saved, err := s.savedSet(profile)
+	if err != nil {
+		hyper.WriteProblem(w, serverProblem(err))
+		return
+	}
+	hyper.WriteDoc(w, http.StatusOK, s.workEnvelope(wk, ws, profile, positions, saved))
 }
 
 // workEnvelope is that document, apart from the request that asked for it:
@@ -744,8 +766,9 @@ func (s *server) handleWorkDoc(w http.ResponseWriter, r *http.Request) {
 //
 // `ws` is the library the work sits in, which the document needs for one
 // field only: `similar`, the titles like this one (library.go). A work knows
-// nothing about its neighbours by itself.
-func (s *server) workEnvelope(wk *works.Work, ws []works.Work, profile string, positions map[int64]store.Position) *hyper.Envelope {
+// nothing about its neighbours by itself. `saved` is the asking profile's My
+// List, for the one bit of it this work cares about: whether it is on it.
+func (s *server) workEnvelope(wk *works.Work, ws []works.Work, profile string, positions map[int64]store.Position, saved map[string]bool) *hyper.Envelope {
 	doc := hyper.Doc(workHref(wk.Key), "work", wk.Title)
 	// The work's own kind ("show", "album", "book") is not the DOCUMENT's
 	// kind, which is always "work". The envelope's name wins, so the work's
@@ -852,6 +875,14 @@ func (s *server) workEnvelope(wk *works.Work, ws []works.Work, profile string, p
 		Input:  map[string]string{"from": "place?", "to": "place?"},
 		Label:  "Copy a passage link",
 	})
+	// The bookmark: whichever of `save` and `unsave` this profile may press
+	// now (list.go). A caller who named nobody is told why there is none
+	// rather than shown a button that would refuse — a list belongs to a
+	// profile.
+	listAction(doc, wk.Key, profile, saved[wk.Key])
+	if profile == "" {
+		doc.Unavailable("save", "a list belongs to a profile, and this request named none")
+	}
 
 	return doc
 }

@@ -33,11 +33,13 @@ function golden(name) {
   return JSON.parse(fs.readFileSync(path.join(goldenDir, name + '.json'), 'utf8'));
 }
 
-// Every href="…" and data-href="…" the output carries.
+// Every href="…" and data-href="…" the output carries, and the sheet index a
+// tile hands the kernel to play under a resting pointer.
 function addresses(html) {
   const out = [];
   for (const m of html.matchAll(/(?:^|\s)(?:data-)?href="([^"]*)"/g)) out.push(unesc(m[1]));
   for (const m of html.matchAll(/\ssrc="([^"]*)"/g)) out.push(unesc(m[1]));
+  for (const m of html.matchAll(/\sdata-trickplay="([^"]*)"/g)) out.push(unesc(m[1]));
   return out;
 }
 function unesc(s) {
@@ -129,6 +131,40 @@ test('the session chrome hands the device a slot, never a player', () => {
     'element is moved into it, so the buffer survives a document swap');
 });
 
+// Skip intro / Skip credits: the stretches are the SESSION's, said in the
+// server's own words, and the button seeks to where each one ends.
+test('every skip the session names becomes a button in the server\'s words', () => {
+  const doc = golden('session-play');
+  const html = R.session(doc, {});
+  assert.ok(doc.skips.length, 'the golden must carry the skips this asserts on');
+  for (const s of doc.skips) {
+    assert.ok(html.includes('>' + R.esc(s.label) + '<'), 'no button labelled ' + s.label);
+    assert.ok(html.includes('data-skip-start="' + s.start + '"'), 'the button says where the stretch starts');
+    assert.ok(html.includes('data-seek="' + s.end + '"'), 'and seeks to where it ends');
+  }
+  // Drawn hidden: the player shows the one the position is inside.
+  assert.equal((html.match(/class="skip"[^>]*hidden/g) || []).length, doc.skips.length);
+  // A file whose chapters say nothing gets no box at all.
+  const bare = JSON.parse(JSON.stringify(doc));
+  bare.skips = [];
+  assert.ok(!R.session(bare, {}).includes('id="skips"'));
+  delete bare.skips;
+  assert.ok(!R.session(bare, {}).includes('id="skips"'));
+});
+
+// The loop is the DEVICE's doing, so the panel offers it without an action:
+// it is on the panel a passage's end puts up, and nowhere else.
+test('the end-of-passage panel offers the loop', () => {
+  const doc = golden('session-play');
+  const html = R.session(doc, {});
+  assert.match(html, /id="passage-loop"[^>]*aria-pressed="false"/);
+  assert.ok(!/id="passage-loop"[^>]*data-act/.test(html), 'the loop is no action of the document\'s');
+  // No passage, no panel — and so no loop to press.
+  const over = JSON.parse(JSON.stringify(doc));
+  delete over.actions.keep_watching;
+  assert.ok(!R.session(over, {}).includes('id="passage-loop"'));
+});
+
 // --- the mini player ---------------------------------------------------------
 
 // The other shape the chrome comes in: the same session document, collapsed
@@ -213,7 +249,7 @@ test('the library draws a headed section per band, in the document order', () =>
   const html = R.library(doc, {});
 
   const headings = [...html.matchAll(/<section class="band"[^>]*>\s*<h3>([^<]*)</g)].map(m => unesc(m[1]));
-  assert.deepEqual(headings, ['Recently added'].concat(doc.bands.map(b => b.title)));
+  assert.deepEqual(headings, ['My List', 'Recently added'].concat(doc.bands.map(b => b.title)));
 
   // Every tile is drawn once per section it belongs to, and the bands
   // together draw the document's items in the document's own order.
@@ -240,6 +276,61 @@ test('recently added is the first row, above the bands', () => {
   // A document with nothing new in it draws no row at all.
   const bare = Object.assign({}, doc, { recently_added: [] });
   assert.ok(!R.library(bare, {}).includes('id="recent-row"'));
+});
+
+// My List leads the rows: the one shelf the person wrote, carried on the
+// library document itself so the home draws it without a second fetch.
+test('my list is the row above what arrived lately', () => {
+  const doc = golden('library');
+  const html = R.library(doc, {});
+
+  assert.ok(html.indexOf('id="list-row"') < html.indexOf('id="recent-row"'));
+  const row = html.split('id="list-row"')[1].split('</section>')[0];
+  assert.match(row, /<h3>My List<\/h3>/);
+  assert.deepEqual(cardTitles(row), doc.list.map(t => unesc(R.esc(t.title))));
+
+  // Nothing put by is no row and no heading.
+  assert.ok(!R.library(Object.assign({}, doc, { list: [] }), {}).includes('id="list-row"'));
+});
+
+// The bookmark, on every tile: whichever of the two the document offers, and
+// nothing at all when it offers neither.
+test('every tile carries the bookmark its document offers', () => {
+  const doc = golden('library');
+  const html = R.library(doc, {});
+  for (const t of doc.items) {
+    const act = (t.actions || {}).save || (t.actions || {}).unsave;
+    if (!act) continue;
+    assert.ok(html.includes('data-href="' + R.esc(act.href) + '"'), t.title + ': no bookmark href');
+    assert.ok(html.includes('data-method="' + act.method + '"'), t.title + ': no bookmark method');
+    assert.ok(html.includes('title="' + R.esc(act.label) + '"'), t.title + ': no bookmark label');
+  }
+  // A saved title says so with a tick, an unsaved one offers a +, and which
+  // way the press goes was the server's to say.
+  const saved = doc.list[0];
+  const card = R.card(saved);
+  assert.match(card, /data-act="unsave"/);
+  assert.ok(card.includes('>✓<'));
+  const bare = JSON.parse(JSON.stringify(saved));
+  delete bare.actions;
+  assert.ok(!R.card(bare).includes('tile-save'));
+
+  // The bookmark is a control INSIDE the control the tile is, and it is drawn
+  // before the picture so a tap on it never lands on the tile underneath.
+  assert.ok(card.indexOf('data-act="unsave"') < card.indexOf('<img'));
+});
+
+// The work's own page carries the same bookmark, in the server's own words.
+test('the work pane carries the bookmark beside Play', () => {
+  const doc = golden('work-show');
+  const act = doc.actions.save || doc.actions.unsave;
+  assert.ok(act, 'the work document offers no bookmark to draw');
+  const html = R.work(doc);
+  const actions = html.split('id="work-actions"')[1].split('</div>')[0];
+  assert.ok(actions.includes('data-href="' + R.esc(act.href) + '"'), 'the bookmark is not beside Play');
+  assert.ok(actions.includes(R.esc(act.label)), 'the bookmark does not say what it does');
+  // It is drawn once: restControls must not draw it a second time.
+  assert.equal(html.split('data-href="' + R.esc(act.href) + '"').length - 1, 1);
 });
 
 // What just landed comes next, and the count rides the tile: the fixture
@@ -341,6 +432,22 @@ test('every tile is focusable and says what activating it does', () => {
     }
   }
   assert.ok(seen >= 3, 'no tiles were checked');
+});
+
+// The moving tile is the kernel's animation, but the sheets it plays are the
+// document's: a tile hands over the index the server put on it, and a tile the
+// server offered none for hands over nothing.
+test('a tile carries the sheets a resting pointer plays', () => {
+  const doc = golden('library');
+  const html = R.library(doc, {});
+  // Every tile the document listed, in whichever of its rows it was listed in.
+  const tiles = Object.values(doc).filter(Array.isArray).flat().filter(t => t && t.links);
+  const offered = tiles.filter(t => t.links.trickplay).map(t => t.links.trickplay.href);
+  assert.ok(offered.length && tiles.some(t => !t.links.trickplay),
+    'the golden library cannot tell a tile with sheets from one without');
+  const drawn = [...html.matchAll(/data-trickplay="([^"]*)"/g)].map(m => unesc(m[1]));
+  assert.deepEqual([...new Set(drawn)].sort(), [...new Set(offered)].sort(),
+    'the tiles that hover frames are not the tiles the server offered them for');
 });
 
 // The groups are the document's, so the rows are too: one per group it
@@ -738,4 +845,54 @@ test('a runtime is said the way a person says it', () => {
   assert.equal(R.fmtRuntime(45), '45m');
   assert.equal(R.fmtRuntime(120), '2h');
   assert.equal(R.fmtRuntime(0), '');
+});
+
+// The chapters, with a frame beside each one. The sheets are the ITEM's own
+// trickplay index, handed in as ctx by the kernel — the renderer works out
+// which tile, never where it lives.
+const INDEX = {
+  interval_seconds: 10, tile_width: 320, tile_height: 180, cols: 10, rows: 10,
+  sheet_hrefs: ['/api/items/4/trickplay/0.jpg', '/api/items/4/trickplay/1.jpg'],
+};
+
+test('the chapter list names each chapter, its time, and the frame it starts on', () => {
+  const doc = golden('item-film');
+  const chapters = doc.media_info.chapters;
+  assert.ok(chapters.length, 'the golden must carry the chapters this asserts on');
+  const html = R.item(doc, { trickplay: INDEX });
+  for (const ch of chapters) {
+    assert.ok(html.includes('data-seek="' + ch.start_seconds + '"'), 'a tap plays from there');
+    assert.ok(html.includes('>' + R.esc(ch.title) + '<'), 'the chapter says its name');
+    assert.ok(html.includes('>' + R.fmtTime(ch.start_seconds) + '<'), 'and when it starts');
+  }
+  assert.equal((html.match(/class="ch-thumb"/g) || []).length, chapters.length);
+  // Every sheet drawn from is one the index named.
+  for (const m of html.matchAll(/background-image:url\(([^)]*)\)/g)) {
+    assert.ok(INDEX.sheet_hrefs.includes(unesc(m[1])), m[1] + ' is not a sheet the index gave');
+  }
+  // Without the index the list is the list of names it always was.
+  const plain = R.item(doc, {});
+  assert.ok(plain.includes('id="detail-chapters"') && !plain.includes('ch-thumb'));
+  // And a file with no chapter marks gets no list at all.
+  const bare = JSON.parse(JSON.stringify(doc));
+  delete bare.media_info.chapters;
+  assert.ok(!R.item(bare, { trickplay: INDEX }).includes('id="detail-chapters"'));
+});
+
+test('a tile is the frame that moment falls on, in the sheet that holds it', () => {
+  // One frame every 10s, ten by ten to a sheet: 0s is the first tile of the
+  // first sheet, and 1100s — frame 110 — the first of the second row of the
+  // second sheet.
+  assert.deepEqual(R.tileAt(INDEX, 0),
+    { href: INDEX.sheet_hrefs[0], w: 320, h: 180, x: -0, y: -0, sheetW: 3200, sheetH: 1800 });
+  const late = R.tileAt(INDEX, 1100);
+  assert.equal(late.href, INDEX.sheet_hrefs[1]);
+  assert.equal(late.x, -0);
+  assert.equal(late.y, -180);
+  // Past the last frame there is, and before the first: the ends hold.
+  assert.equal(R.tileAt(INDEX, 99999).href, INDEX.sheet_hrefs[1]);
+  assert.equal(R.tileAt(INDEX, -5).href, INDEX.sheet_hrefs[0]);
+  // No index, no sheets, no arithmetic to do.
+  assert.equal(R.tileAt(null, 10), null);
+  assert.equal(R.tileAt({ ...INDEX, sheet_hrefs: [] }, 10), null);
 });

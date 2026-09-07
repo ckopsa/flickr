@@ -43,6 +43,7 @@
   let selectedSubOrdinal = null, burnSubOrdinal = null, selectedAudioOrdinal = null;
   let trickplay = null, trickplayItemId = null;
   let upNextTimer = null, upNextTarget = null;
+  let creditsCued = false;       // this stretch of credits has started the up next
   let autoplayNext = localStorage.autoplayNext !== 'off';
   let scrubbing = false;         // a finger (or a mouse) is dragging the bar
   let tapTimer = null, lastTapAt = 0, rippleTimer = null;
@@ -50,6 +51,8 @@
   let clipOpen = false;          // the clip bar is up over the scrubber
   let clipDrag = null;           // { kind, seconds } while a handle is held
   let clipMinted = null;         // the last link the server minted for it
+  let looping = false;           // A-B repeat, on the passage or the clip
+  let loopSeekAt = 0;            // when the loop last asked to go back to A
   const DOUBLE_TAP_MS = 300;     // how long a single tap waits for its twin
   const IDLE_MS = 3000;          // how long a still pointer waits before the chrome goes
   const CLIP_SECONDS = 30;       // how long a clip is before anything is dragged
@@ -176,11 +179,15 @@
               ' role="slider" tabindex="0" aria-valuemin="0" aria-valuenow="0" hidden></div>' +
             '<div class="clip-handle" id="clip-out" aria-label="Clip end"' +
               ' role="slider" tabindex="0" aria-valuemin="0" aria-valuenow="0" hidden></div></div>' +
-          '<div id="thumb" hidden><div id="thumb-img"></div><div id="thumb-time"></div></div></div>' +
+          '<div id="thumb" hidden><div id="thumb-img"></div>' +
+            '<div id="thumb-chapter" hidden></div><div id="thumb-time"></div></div></div>' +
         '<div id="timebar"><span id="t-now">0:00</span><span id="t-total">0:00</span></div>' +
         // What the clip says, in the server's own words, and the one button
         // that hands it on.
         '<div id="clipbar" hidden><span id="clip-sentence"></span>' +
+          // A-B repeat on the two marks: the clip played over and over while
+          // its ends are dragged into place.
+          '<button id="btn-loop" title="Loop this passage" aria-pressed="false">↻ Loop</button>' +
           '<button id="btn-clip-share">Share</button>' +
           '<button id="btn-clip-done">Done</button></div>' +
         '<div id="controls">' +
@@ -233,6 +240,15 @@
       if (old) old.remove();
       element.prepend(title);
     }
+    // The skip buttons ride inside the device for the same reason: they
+    // overlay the picture's lower right, and a picture gone fullscreen must
+    // keep them.
+    const skipBox = chrome.querySelector('#skips');
+    if (skipBox) {
+      const old = element.querySelector('#skips');
+      if (old) old.remove();
+      element.append(skipBox);
+    }
     // The immersive layout belongs to the PICTURE: a record has none to fill,
     // and neither does the remote — while the television has the picture this
     // page is a card of controls, which the theatre bars would sit on top of.
@@ -246,6 +262,13 @@
     syncMuteButton();
     syncFullscreenButton();
     syncRateControl();
+    paintSkips();
+    // The loop toggle on the end-of-passage panel is the DEVICE's control on
+    // the document's panel: the panel is re-rendered with the chrome, so the
+    // listener goes on the button this render drew.
+    const loop = chrome.querySelector('#passage-loop');
+    if (loop) loop.addEventListener('click', toggleLoop);
+    syncLoopButtons();
     hostSleepMenu(chrome);
     syncSleepButton();
     setAutoplay(autoplayNext);
@@ -348,6 +371,9 @@
       tr.srclang = s.language || '';
       tr.label = subLabel(s);
       tr.dataset.ordinal = s.ordinal;
+      // A cue exists only once its track has been fetched and parsed, so the
+      // height the settings panel asked for is put on it then.
+      tr.addEventListener('load', () => setCueLine(cueLine));
       video.appendChild(tr);
     }
     applyLocalSubSelection();
@@ -356,6 +382,20 @@
     for (const tr of video.querySelectorAll('track')) {
       tr.track.mode = (selectedSubOrdinal != null && Number(tr.dataset.ordinal) === selectedSubOrdinal)
         ? 'showing' : 'disabled';
+    }
+  }
+
+  // How high the subtitles sit. The size and the ground are a ::cue rule the
+  // kernel writes, which needs no device at all; the LINE is a property of
+  // each cue, so it can only be set here, on whatever has been loaded — and
+  // remembered, because the next track to load wants the same answer.
+  let cueLine = 'auto';
+  function setCueLine(line) {
+    cueLine = line == null ? 'auto' : line;
+    if (!video) return;
+    for (let i = 0; i < video.textTracks.length; i++) {
+      const cues = video.textTracks[i].cues;
+      for (let j = 0; cues && j < cues.length; j++) cues[j].line = cueLine;
     }
   }
   function audioTracks() {
@@ -464,6 +504,8 @@
       return;
     }
     hideUpNext();
+    creditsCued = false; // another file, another set of credits
+    setLooping(false);   // and a loop is the sitting's, not the library's
     closeClip(); // the marks belonged to the sitting that is ending
     // The chapter bound was THIS item's; a timer is a wall clock and carries
     // on into the next episode, which is what somebody falling asleep meant.
@@ -628,6 +670,7 @@
 
   function setPassage(p) {
     passage = p || null;
+    setLooping(false); // a loop belongs to the passage it was turned on in
     resetPassageEnd();
     renderMarksOnScrub();
   }
@@ -647,11 +690,15 @@
   }
   function passageReadout(pos) {
     const endAt = passageEndNow();
-    if (endAt == null) return `${fmtTime(pos)} · in passage`;
+    const on = looping ? ' · looping' : '';
+    if (endAt == null) return `${fmtTime(pos)} · in passage${on}`;
     const start = passage && passage.t != null ? passage.t : 0;
-    return `${fmtTime(pos - start)} / ${fmtTime(endAt - start)} in passage`;
+    return `${fmtTime(pos - start)} / ${fmtTime(endAt - start)} in passage${on}`;
   }
   function checkPassageEnd() {
+    // A passage on a loop has no end to reach: checkLoop takes it back to the
+    // start instead, and nothing is paused and no panel comes up.
+    if (looping && loopBounds()) return;
     if (!passage || !item || passageEndFired) return;
     if (!isPlaying() && !(casting() && remotePlayer.playerState === 'PAUSED')) return;
     const endAt = passageEndNow();
@@ -689,6 +736,70 @@
     if (id != null && route && route.passage) K.replaceHash(K.itemHash(id, null));
     if (wasNaturalEnd) { endFired = false; onPlaybackEnded(); return; }
     if (!isPlaying()) { casting() ? remoteController.playOrPause() : video.play().catch(() => {}); }
+  }
+
+  // --- the loop ----------------------------------------------------------------
+  //
+  // YouTube's A-B repeat, on the two points the app already has: the passage
+  // being watched, or the clip being marked, which are the same A and B said
+  // at different moments. While it is on, reaching B goes back to A and keeps
+  // playing — the passage never "ends", so nothing pauses and no panel comes
+  // up — and the readout under the picture says so.
+  //
+  // It is off to begin with, and off again the moment the passage is left
+  // (Keep watching) or the sitting ends: a loop is a thing somebody asked for
+  // once, not a setting to be surprised by tomorrow.
+  function loopBounds() {
+    const to = passageEndNow();
+    if (to != null) {
+      const p = (session && session.passage) || passage;
+      const from = p && typeof p.t === 'number' ? p.t : markSecondsHere('in') || 0;
+      return to > from ? { from, to } : null;
+    }
+    // No passage on: the marks being made are the two ends, which is what the
+    // loop in the clip bar is for.
+    const from = markSecondsHere('in'), out = markSecondsHere('out');
+    return from != null && out != null && out > from ? { from, to: out } : null;
+  }
+  // One end of the passage being made, if it was set in the item playing now.
+  function markSecondsHere(kind) {
+    const m = session && session.marks && session.marks[kind];
+    return m && m.item_id === (item && item.id) && typeof m.seconds === 'number' ? m.seconds : null;
+  }
+  function checkLoop() {
+    if (!looping || !isPlaying()) return;
+    const b = loopBounds();
+    if (!b || position() < b.to) return;
+    // A seek takes a moment to land — on the television, several — and the
+    // tick would otherwise ask for it again before the clock had moved.
+    if (Date.now() - loopSeekAt < 1000) return;
+    loopSeekAt = Date.now();
+    seekTo(b.from);
+  }
+  function setLooping(on) {
+    looping = !!on;
+    loopSeekAt = 0;
+    syncLoopButtons();
+  }
+  // Turning it on where the passage has already stopped is the same choice as
+  // "play it again": the panel goes, the clock goes back to A, and the picture
+  // starts. The panel is cleared FIRST, so pressing play is not read as the
+  // "keep watching" a play at the bound otherwise means.
+  function toggleLoop() {
+    setLooping(!looping);
+    if (!looping) return;
+    resetPassageEnd();
+    const b = loopBounds();
+    if (b && position() >= b.to - 0.25) seekTo(b.from);
+    if (!isPlaying()) { casting() ? remoteController.playOrPause() : video.play().catch(() => {}); }
+  }
+  function syncLoopButtons() {
+    for (const id of ['btn-loop', 'passage-loop']) {
+      const b = $(id);
+      if (!b) continue;
+      b.setAttribute('aria-pressed', looping ? 'true' : 'false');
+      b.textContent = looping ? '↻ Looping' : '↻ Loop';
+    }
   }
 
   // --- marks and the minted link -----------------------------------------------
@@ -887,6 +998,41 @@
         postMark(kind, at);
       });
     }
+  }
+
+  // --- the skips ---------------------------------------------------------------
+  //
+  // Netflix's button with no detection behind it: the SESSION DOCUMENT says
+  // where the opening titles and the closing credits are (`skips`, derived
+  // from the file's own chapter names in cmd/server/session.go) and this only
+  // shows the one the position is inside. The button was drawn by the session
+  // chrome, carries the server's own label and seeks to where the stretch
+  // ends; nothing here decides what a stretch is.
+  //
+  // The credits are the cue for what is next, too: in a run the up-next
+  // countdown starts when they begin rather than at the last frame, which is
+  // where a person actually gets up and leaves.
+  function skips() {
+    const s = session && session.item_id === (item && item.id) ? session.skips : null;
+    return Array.isArray(s) ? s : [];
+  }
+  // Half a second short of the end, so the button is never the thing that is
+  // pressed the instant it stops meaning anything.
+  function skipAt(pos) {
+    return skips().find(s => pos >= s.start && pos < s.end - 0.5) || null;
+  }
+  function paintSkips() {
+    const box = element && element.querySelector('#skips');
+    if (!box) return;
+    const here = skipAt(position()), list = skips();
+    box.querySelectorAll('.skip').forEach((b, i) => { b.hidden = !here || list[i] !== here; });
+    if (here && here.kind === 'credits') {
+      // Not during a passage: that sitting has an end of its own, and a panel
+      // to say so.
+      if (!creditsCued && !passage && nextId() != null) { creditsCued = true; showUpNext(); }
+      return;
+    }
+    creditsCued = false;
   }
 
   // --- the run: up next and the advance ----------------------------------------
@@ -1435,6 +1581,7 @@
       if (t.id === 'btn-sleep') { toggleSleepMenu(); return; }
       if (t.id === 'btn-autoplay') { setAutoplay(!autoplayNext); return; }
       if (t.id === 'btn-clip') { toggleClip(); return; }
+      if (t.id === 'btn-loop') { toggleLoop(); return; }
       if (t.id === 'btn-clip-share') { shareClip(); return; }
       if (t.id === 'btn-clip-done') { closeClip(); return; }
       if (t.id === 'btn-cast-stop') { stopCasting(); return; }
@@ -1551,27 +1698,44 @@
     restartFromCurrent();
   }
 
+  // The chapter a time falls in: the last one that starts at or before it.
+  // A file with no chapter marks has none, and the preview says nothing where
+  // there is nothing to say.
+  function chapterAt(t) {
+    let found = null;
+    for (const ch of chapters()) {
+      if (ch.start_seconds <= t) found = ch;
+    }
+    return found;
+  }
+
   function showThumb(clientX) {
     const dur = duration();
     if (!trickplay || !item || item.id !== trickplayItemId || dur <= 0) return;
-    const sheets = trickplay.sheet_hrefs || [];
-    if (!sheets.length) return;
     const rect = scrub.getBoundingClientRect();
     const frac = Math.min(1, Math.max(0, (clientX - rect.left) / (rect.width || 1)));
     const t = frac * dur;
-    const per = trickplay.cols * trickplay.rows;
-    const frame = Math.min(Math.floor(t / trickplay.interval_seconds), sheets.length * per - 1);
-    const sheet = Math.floor(frame / per), tile = frame % per;
-    const col = tile % trickplay.cols, row = Math.floor(tile / trickplay.cols);
-    const tw = trickplay.tile_width, th = trickplay.tile_height || 180;
+    // Which frame of which sheet: the same arithmetic the item page's chapter
+    // list does over the same index (R.tileAt), said once.
+    const tile = R.tileAt(trickplay, t);
+    if (!tile) return;
     const img = $('thumb-img');
-    img.style.width = tw + 'px';
-    img.style.height = th + 'px';
-    img.style.backgroundImage = `url(${sheets[sheet]})`;
-    img.style.backgroundPosition = `-${col * tw}px -${row * th}px`;
+    img.style.width = tile.w + 'px';
+    img.style.height = tile.h + 'px';
+    img.style.backgroundImage = `url(${tile.href})`;
+    img.style.backgroundPosition = `${tile.x}px ${tile.y}px`;
+    // What the frame IS, which is what somebody scrubbing is looking for: the
+    // chapter's name over the time, the way YouTube's preview says it.
+    const name = $('thumb-chapter');
+    if (name) {
+      const ch = chapterAt(t);
+      name.textContent = (ch && ch.title) || '';
+      name.hidden = !(ch && ch.title);
+    }
     $('thumb-time').textContent = fmtTime(t);
     const el = $('thumb');
-    el.style.left = Math.min(Math.max(clientX - rect.left, tw / 2), Math.max(rect.width - tw / 2, tw / 2)) + 'px';
+    el.style.left =
+      Math.min(Math.max(clientX - rect.left, tile.w / 2), Math.max(rect.width - tile.w / 2, tile.w / 2)) + 'px';
     el.hidden = false;
   }
 
@@ -1598,7 +1762,9 @@
     // stream that ran out — lights the room back up all the same.
     if (element.classList.contains('idle') && !isPlaying()) wake();
     paintMini();
+    paintSkips();
     checkSleep();
+    checkLoop();
     checkPassageEnd();
     if (passageEndFired && !passageNaturalEnd && isPlaying()) {
       const endAt = passageEndNow();
@@ -1877,6 +2043,9 @@
     // The setting is the device's; the settings panel hosts a second switch
     // for it, so it is read and set through here rather than duplicated.
     setAutoplay, autoplay: () => autoplayNext,
+    // Where the subtitles sit: the kernel's setting, applied to the cues the
+    // device has loaded, because a cue's line is nobody else's to set.
+    setCueLine,
     setBaseUrl: u => { baseUrl = u; },
     playingItem: () => (item ? item.id : null),
     // What the device is playing, for the one rule that turns on it: audio

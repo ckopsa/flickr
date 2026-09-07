@@ -63,6 +63,9 @@
   .set-row.end { justify-content: flex-end; margin-bottom: 0; }
   .set-row.col { display: block; }
   .set-label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+  /* the three subtitle selects, side by side while there is room for them */
+  .set-cues { display: flex; gap: 8px; flex-wrap: wrap; }
+  .set-cues select { flex: 1 1 120px; }
   /* the household dashboard: one line per live sitting, who on the left and
      where they have got to on the right */
   #settings-activity { font-size: 13px; }
@@ -123,12 +126,32 @@
   .poster-wrap.loaded img { opacity: 1; }
   @keyframes shimmer { from { background-position: 150% 0; } to { background-position: -150% 0; } }
   .poster-wrap.text-tile { display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 8px; padding: 12px; text-align: center; background: linear-gradient(160deg, #232633, #191b22); }
+  /* the moving tile: the trickplay frames playing over the poster while a
+     pointer rests on it (kernel.js decides when, and never on a touchscreen or
+     where less motion was asked for). It fades up so the first frame does not
+     snap in, and sits under the badge. */
+  .tile-preview { position: absolute; inset: 0; background-repeat: no-repeat;
+    opacity: 0; animation: preview-in 200ms ease forwards; }
+  @keyframes preview-in { to { opacity: 1; } }
   /* "3 new" in the corner of a show's poster: the count the document put on
      the tile, drawn over the picture rather than under the title, so a full
      grid still reads at a glance. */
   .new-badge { position: absolute; top: 6px; right: 6px; z-index: 1;
     background: #d1584a; color: #fff; font-size: 11px; font-weight: 700;
     padding: 2px 7px; border-radius: 999px; letter-spacing: .02em; }
+  /* the bookmark in the other corner of the poster: My List, from wherever
+     the title is seen. Quiet until the tile is under the pointer or the ring,
+     and always there where there is no pointer to hover with — the same
+     manners as the × on a resume row. */
+  .tile-save { position: absolute; top: 6px; left: 6px; z-index: 1; margin: 0;
+    min-width: 0; padding: 1px 8px 3px; font-size: 14px; line-height: 1.1; border-radius: 50%;
+    background: rgba(10,11,14,.78); color: #c5c8d4; opacity: 0; transition: opacity .12s ease; }
+  .card:hover .tile-save, .card:focus-within .tile-save { opacity: 1; }
+  .card .tile-save:hover { color: #dbe6fa; background: rgba(10,11,14,.92); }
+  @media (hover: none) { .card .tile-save { opacity: 1; } }
+  /* a title already on the list wears its tick without being hovered: that
+     one is a fact about the tile, not a control being offered */
+  .card .tile-save[data-act="unsave"] { opacity: 1; color: var(--ok); }
   .text-tile .tile-title { font-size: 14px; font-weight: 600; color: #c5c8d4; word-break: break-word; }
   .text-tile .tile-sub { font-size: 11px; color: var(--muted); }
   .card .c-title { font-size: 13px; margin-top: 8px; font-weight: 600; line-height: 1.3; }
@@ -261,8 +284,18 @@
   #detail-play:hover { background: #33579e; }
   /* the tick beside Play, with the server's own words on it */
   .watch-wide { font-size: 14px; padding: 9px 16px; }
-  #detail-chapters { margin-top: 16px; display: flex; flex-wrap: wrap; gap: 6px; }
-  #detail-chapters button { font-size: 12px; padding: 4px 10px; }
+  /* The chapters as a list one can look at: a frame from the trickplay
+     sheets, the name, and when it starts. Without the sheets there is no
+     .ch-thumb and the rows are the names they always were. */
+  #detail-chapters { margin-top: 16px; display: flex; flex-wrap: wrap; gap: 8px; }
+  #detail-chapters .chapter { display: flex; align-items: center; gap: 10px; text-align: left;
+    padding: 6px 14px 6px 6px; }
+  #detail-chapters .chapter:not(:has(.ch-thumb)) { padding: 4px 10px; }
+  .ch-thumb { display: block; flex: none; border-radius: 4px; background-color: #000;
+    background-repeat: no-repeat; }
+  .ch-what { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+  .ch-title { font-size: 13px; }
+  .ch-time { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
   #detail-epnav { margin-top: 14px; display: flex; flex-wrap: wrap; gap: 8px; }
   #detail-epnav a { background: #23252d; color: #c5c8d4; border: 1px solid #3a3d47;
     border-radius: 6px; padding: 6px 12px; font-size: 13px; text-decoration: none; }
@@ -368,6 +401,9 @@
   #thumb { position: absolute; bottom: 26px; transform: translateX(-50%); z-index: 5; pointer-events: none; text-align: center; }
   #thumb-img { background-color: #000; background-repeat: no-repeat; border: 1px solid #3a3d47; border-radius: 4px; box-shadow: 0 4px 14px rgba(0,0,0,0.5); }
   #thumb-time { display: inline-block; margin-top: 3px; font-size: 11px; padding: 1px 7px; border-radius: 8px; background: rgba(20,21,26,0.9); color: #c5c8d4; font-variant-numeric: tabular-nums; }
+  /* what the frame IS: the chapter the hovered time falls in, over the time */
+  #thumb-chapter { display: block; margin-top: 4px; font-size: 12px; font-weight: 600; color: var(--fg);
+    text-shadow: 0 1px 3px rgba(0,0,0,0.9); max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #timebar { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
   #controls { display: flex; gap: 8px; align-items: center; margin-top: 8px; flex-wrap: wrap; }
   #controls button { min-width: 42px; }
@@ -428,6 +464,15 @@
   #upnext-cancel { margin-top: 10px; }
   #upnext-play { margin-top: 10px; margin-right: 8px; background: #2a4a8a; border-color: #3a5da8; }
   #upnext-play:hover { background: #33579e; }
+  /* Skip intro / Skip credits: the session says where those stretches are,
+     and the button sits over the lower right of the picture while the
+     position is inside one — above the transport, so neither covers the
+     other, and inside #device so it goes fullscreen with the picture. */
+  #skips { position: absolute; right: 20px; bottom: 76px; z-index: 57; display: flex; gap: 8px; }
+  #skips .skip { font-size: 14px; font-weight: 600; padding: 9px 18px; border-radius: 8px;
+    background: rgba(20,21,26,0.88); border: 1px solid #6a6f80; color: var(--fg);
+    box-shadow: 0 6px 20px rgba(0,0,0,0.5); }
+  #skips .skip:hover { border-color: #5b8def; background: rgba(27,29,36,0.95); }
   /* end-of-passage panel: paused at the bound, two ways out */
   #device { position: relative; }
   /* Fullscreen belongs to the DEVICE wrapper, not to the media element: the
@@ -494,6 +539,12 @@
   #passage-keep { margin-top: 10px; margin-right: 8px; background: #2a4a8a; border-color: #3a5da8; }
   #passage-keep:hover { background: #33579e; }
   #passage-back { margin-top: 10px; }
+  /* A-B repeat: the same amber the marks and the clip bar wear, and pressed
+     in means it is running (player.js sets aria-pressed). */
+  #passage-loop { margin-top: 10px; margin-right: 8px; }
+  #passage-loop[aria-pressed="true"], #btn-loop[aria-pressed="true"] {
+    border-color: #a37a30; color: var(--warn); background: #2e2616; }
+  #passage-loop[aria-pressed="true"]:hover, #btn-loop[aria-pressed="true"]:hover { background: #3a3019; }
   .badge { display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 10px; margin-right: 6px; }
   .badge.direct { background: #14432a; color: var(--ok); }
   .badge.transcode { background: #4a3413; color: var(--warn); }
@@ -622,6 +673,10 @@
       max-width: none; margin-right: 0; background: #1b1d24; box-shadow: 0 10px 40px rgba(0,0,0,0.7); }
     /* the corner panels have no corner to sit in */
     #upnext, #passage-end, .rd-end { left: 12px; right: 12px; max-width: none; }
+    /* a phone keeps the transport UNDER the picture, so the foot of the
+       device is the foot of the controls: the skip goes to the top of the
+       picture instead, clear of the title bar over it */
+    #skips { right: 12px; bottom: auto; top: 56px; }
   }
 
   @media (pointer: coarse) {
@@ -722,6 +777,11 @@
       animation: none !important; }
   }
 </style>
+<!-- the subtitle rule, written by the kernel from the Subtitles section of the
+     settings panel: WebVTT rendering honours ::cue for the type and the ground,
+     so how big the words are and what they sit on is one rule the page carries.
+     Empty until the panel has been read, which is what the browser does anyway. -->
+<style id="cue-style"></style>
 </head>
 <body>
 <!-- the header is the name, the search box and who is watching. Typing
@@ -763,6 +823,30 @@
     </div>
     <div class="set-row">
       <span id="hw" title=""></span>
+    </div>
+    <!-- how the subtitles read: how big, what they sit on, and how far up the
+         picture. kernel.js writes the ::cue rule above from the first two and
+         remembers all three in this browser; the third is each cue's own
+         `line`, which only the device can set. -->
+    <div class="set-row col">
+      <span class="set-label">Subtitles</span>
+      <div class="set-cues">
+        <select id="cue-size" aria-label="Subtitle size">
+          <option value="small">Small</option>
+          <option value="medium">Medium</option>
+          <option value="large">Large</option>
+          <option value="huge">Huge</option>
+        </select>
+        <select id="cue-ground" aria-label="Subtitle background">
+          <option value="box">Box</option>
+          <option value="shadow">Shadow</option>
+          <option value="none">No background</option>
+        </select>
+        <select id="cue-position" aria-label="Subtitle position">
+          <option value="bottom">Bottom</option>
+          <option value="raised">Raised</option>
+        </select>
+      </div>
     </div>
     <!-- who is playing what, right now: the server's own list
          (root.links.activity), read while this panel is up. kernel.js fills

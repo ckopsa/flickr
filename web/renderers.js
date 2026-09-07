@@ -142,6 +142,22 @@
     });
   }
 
+  // The bookmark: My List, pressed from wherever the thing is seen. Which
+  // way the press goes is the server's — a work carries `save` or `unsave`,
+  // never both — so all that is decided here is the mark on the button: a +
+  // to put a title by, a ✓ once it is on the list. `wide` is a page's shape,
+  // which has room for the server's own words beside the mark; a tile has not.
+  function bookmarkControl(doc, cls, wide) {
+    const put = action(doc, 'save');
+    const act = put || action(doc, 'unsave');
+    if (!act) return '';
+    const mark = put ? '+' : '✓';
+    return control(put ? 'save' : 'unsave', act, {
+      cls: cls, title: act.label,
+      label: wide ? mark + ' ' + (act.label || '') : mark,
+    });
+  }
+
   // The controls a document offers that nothing above has drawn already.
   // `drawn` is the set of action names the renderer handled itself.
   function restControls(doc, drawn) {
@@ -179,14 +195,25 @@
     // here decides what "new" is — a tile without one wears no badge.
     const badge = t.new_episodes > 0
       ? '<span class="new-badge">' + esc(t.new_episodes + ' new') + '</span>' : '';
+    // The other corner: the tile's own save or unsave, drawn as a control
+    // INSIDE the control the tile is — the kernel reads the innermost
+    // [data-act], so pressing it puts the title by rather than opening it. It
+    // is quiet until the tile is under the pointer or the ring (index.html).
+    const mark = bookmarkControl(t, 'tile-save');
     const wrap = art
-      ? '<div class="poster-wrap"><img loading="lazy" alt="" src="' + esc(art) + '">' + badge + '</div>'
-      : '<div class="poster-wrap text-tile">' + badge + '<div class="tile-title">' + esc(title) +
+      ? '<div class="poster-wrap">' + mark +
+        '<img loading="lazy" alt="" src="' + esc(art) + '">' + badge + '</div>'
+      : '<div class="poster-wrap text-tile">' + mark + badge + '<div class="tile-title">' + esc(title) +
         '</div><div class="tile-sub">' + esc(t.subtitle || t.tech || '') + '</div></div>';
     // A tile is a div, so the keyboard would walk straight past it: tabindex
     // puts it in the tab order and the role says what activating it does.
+    // The scrub sheets ride along where the document offered them: a pointer
+    // resting on the tile plays them, which is the kernel's affair, and the
+    // address is the document's own — copied, never composed.
+    const trick = href(t, 'trickplay');
     return '<div class="' + esc(cls || 'card') + '" tabindex="0" role="link"' +
-      ' data-nav="' + esc(hashFor(t)) + '">' +
+      ' data-nav="' + esc(hashFor(t)) + '"' +
+      (trick ? ' data-trickplay="' + esc(trick) + '"' : '') + '>' +
       wrap +
       '<div class="c-title">' + esc(title) + '</div>' +
       (t.subtitle ? '<div class="c-sub">' + esc(t.subtitle) + '</div>' : '') +
@@ -239,7 +266,15 @@
     if (!kept.length) return { html: chip + '<div id="empty">Nothing matches your search.</div>', count: 0 };
 
     let html = chip;
-    // What arrived lately leads: the document's own selection of the same
+    // What this profile put by for later leads the rows — it is the one shelf
+    // they wrote themselves, and it sits under the resume shelf the kernel
+    // paints above the grid. The library document carries it, so the home
+    // draws it without a second fetch.
+    const mine = ((doc && doc.list) || []).filter(t => matches(t, state));
+    if (mine.length) {
+      html += bandSection('My List', mine, 'band-row', ' id="list-row"');
+    }
+    // Then what arrived lately: the document's own selection of the same
     // tiles, drawn as a row rather than a grid.
     const recent = ((doc && doc.recently_added) || []).filter(t => matches(t, state));
     if (recent.length) {
@@ -527,7 +562,7 @@
   // `extra` flag rather than by the browser reading an identity.
   function showPane(doc) {
     const eps = walked(doc), bonus = extras(doc);
-    const drawn = ['play', 'read', 'passage'];
+    const drawn = ['play', 'read', 'passage', 'save', 'unsave'];
     const lead = nextUp(doc);
     const nextID = lead ? idIn((doc.progress.next || {}).href) : '';
     return backTo('#/', 'Library') +
@@ -538,8 +573,10 @@
         ? '<div id="show-progress">' + esc(doc.progress.text) + '</div>' : '') +
       lead +
       // The primary rides the Next up card when there is one, so the work's
-      // play action is drawn once either way.
-      '<div id="work-actions">' + (lead ? '' : primary(doc)) + restControls(doc, drawn) +
+      // play action is drawn once either way. The bookmark stays here beside
+      // it: putting a show by is a thing done to the show, not to an episode.
+      '<div id="work-actions">' + (lead ? '' : primary(doc)) +
+        bookmarkControl(doc, 'watch-wide', true) + restControls(doc, drawn) +
         passagePicker(doc) + '</div>' +
       '<div id="episode-list"' + (eps.length ? '' : ' hidden') + '>' +
         seasonBlocks(eps, nextID) + '</div>' +
@@ -587,7 +624,7 @@
     const art = artwork(doc);
     const list = walked(doc);
     const many = list.length > 1;
-    const drawn = ['play', 'read', 'passage'];
+    const drawn = ['play', 'read', 'passage', 'save', 'unsave'];
     return backTo('#/', 'Library') +
       '<div id="audio-pane"><div id="audio-head">' +
         (art ? '<img id="audio-cover" alt="" src="' + esc(art) + '">' : '') +
@@ -595,7 +632,8 @@
           (doc.year ? ' (' + esc(doc.year) + ')' : '') + '</div>' +
           '<div id="audio-author">' + esc(doc.author || '') + '</div>' +
           '<div id="audio-part">' + esc((doc.progress && doc.progress.text) || '') + '</div>' +
-          '<div id="work-actions">' + primary(doc) + restControls(doc, drawn) +
+          '<div id="work-actions">' + primary(doc) +
+            bookmarkControl(doc, 'watch-wide', true) + restControls(doc, drawn) +
             passagePicker(doc) + '</div>' +
         '</div></div>' +
         '<div id="audio-list-head"' + (many ? '' : ' hidden') + '>' +
@@ -649,8 +687,6 @@
     const wk = c.work || null;
     const art = artwork(doc) || (wk ? artwork(wk) : '');
     const back = href(doc, 'backdrop');
-    const chapters = ((doc.media_info && doc.media_info.chapters) || [])
-      .filter(() => doc.medium !== 'text');
     // Play stands alone up here, with the tick beside it. The curatorial
     // actions are drawn too — but inside the Details disclosure, so `drawn`
     // names all of them as handled.
@@ -673,9 +709,7 @@
           '<p id="detail-overview"' + (doc.overview ? '' : ' hidden') + '>' + esc(doc.overview || '') + '</p>' +
           castLine(doc) +
           primary(doc) + watchedControl(doc, 'watch-wide', true) + restControls(doc, drawn) +
-          '<div id="detail-chapters">' + chapters.map(ch =>
-            '<button data-seek="' + esc(ch.start_seconds) + '">' +
-            esc((ch.title || '') + ' · ' + fmtTime(ch.start_seconds)) + '</button>').join('') + '</div>' +
+          chapterList(doc, c) +
           '<div id="detail-epnav"' + (prev || next ? '' : ' hidden') + '>' +
             (prev ? nav(itemHash(idIn(prev.href)), '⏮ Prev: ' + (prev.title || ''), '', '') : '') +
             (next ? nav(itemHash(idIn(next.href)), 'Next: ' + (next.title || '') + ' ⏭', '', '') : '') +
@@ -695,6 +729,60 @@
         : '') +
       details(doc) +
       similarRow(wk);
+  }
+
+  // The chapters, as a list one can look at rather than a row of times: the
+  // name, when it starts, and a frame of the film cut out of the trickplay
+  // sheets — the same pictures the scrub bar previews with. A tap plays from
+  // there, which is the seek it always was.
+  //
+  // The sheets come from `ctx.trickplay`, the item's own trickplay index, one
+  // relation the kernel followed. A file with no sheets — too short, or not
+  // generated yet — is the list of names it has always been.
+  const CHAPTER_THUMB_WIDTH = 160; // px; the sheets' own tiles are wider
+
+  function chapterList(doc, ctx) {
+    if (!doc || doc.medium === 'text') return '';
+    const chapters = (doc.media_info && doc.media_info.chapters) || [];
+    if (!chapters.length) return '';
+    const idx = (ctx && ctx.trickplay) || null;
+    return '<div id="detail-chapters">' + chapters.map(ch => {
+      const tile = tileAt(idx, ch.start_seconds);
+      return '<button class="chapter" data-seek="' + esc(ch.start_seconds) + '">' +
+        (tile ? '<span class="ch-thumb" style="' + esc(tileStyle(tile, CHAPTER_THUMB_WIDTH)) + '"></span>' : '') +
+        '<span class="ch-what">' +
+          '<span class="ch-title">' + esc(ch.title || 'Chapter') + '</span>' +
+          '<span class="ch-time">' + fmtTime(ch.start_seconds) + '</span>' +
+        '</span></button>';
+    }).join('') + '</div>';
+  }
+
+  // Which frame of which sheet stands for a moment, and where it sits in that
+  // sheet. The index is a document like any other — its `sheet_hrefs` are the
+  // server's addresses — and what happens here is arithmetic, not an address.
+  function tileAt(idx, seconds) {
+    const sheets = (idx && idx.sheet_hrefs) || [];
+    if (!sheets.length || !idx.cols || !idx.rows || !idx.interval_seconds || !idx.tile_width) return null;
+    const per = idx.cols * idx.rows;
+    const frame = Math.min(Math.max(0, Math.floor(seconds / idx.interval_seconds)), sheets.length * per - 1);
+    const tile = frame % per;
+    const w = idx.tile_width, h = idx.tile_height || 180;
+    return {
+      href: sheets[Math.floor(frame / per)], w, h,
+      x: -(tile % idx.cols) * w, y: -Math.floor(tile / idx.cols) * h,
+      sheetW: idx.cols * w, sheetH: idx.rows * h,
+    };
+  }
+
+  // One tile, drawn at the width the page has room for: the whole sheet is
+  // scaled by the same factor, so the frame lands where it does at full size.
+  function tileStyle(tile, width) {
+    const s = width / tile.w;
+    const px = n => Math.round(n * s) + 'px';
+    return 'width:' + px(tile.w) + ';height:' + px(tile.h) + ';' +
+      'background-image:url(' + tile.href + ');' +
+      'background-size:' + px(tile.sheetW) + ' ' + px(tile.sheetH) + ';' +
+      'background-position:' + px(tile.x) + ' ' + px(tile.y);
   }
 
   // The genres this title is filed under: the work's list when the kernel has
@@ -872,6 +960,7 @@
         '<div id="now-playing">' + esc(nowPlaying(doc, c)) + '</div>' +
       '</div>' +
       '<div id="device-slot"></div>' +
+      skipButtons(doc) +
       '<div id="doc-controls">' +
         prevNext(doc) +
         markChip('in', doc, marks.in, c) +
@@ -887,6 +976,24 @@
       '<div id="trace"></div>' +
       upNext(doc) +
       passageEndPanel(doc);
+  }
+
+  // The stretches the SESSION says are worth jumping over — the opening
+  // titles, the closing credits — each as the button the server labelled it
+  // with. Where it seeks to is where the stretch ends, carried the way a
+  // chapter carries its start (data-seek), so pressing one goes through the
+  // same seek every chapter button does.
+  //
+  // They are drawn hidden: player.js moves this box into the device, where it
+  // overlays the picture and goes fullscreen with it, and shows the one the
+  // position is actually inside.
+  function skipButtons(doc) {
+    const skips = (doc && doc.skips) || [];
+    if (!skips.length) return '';
+    return '<div id="skips">' + skips.map(s =>
+      '<button class="skip" data-seek="' + esc(s.end) + '"' +
+        ' data-skip-start="' + esc(s.start) + '" data-skip-end="' + esc(s.end) + '"' +
+        ' hidden>' + esc(s.label || '') + '</button>').join('') + '</div>';
   }
 
   // What is playing, said the way the medium says it: a record names the work
@@ -967,6 +1074,11 @@
       '<div id="passage-end-title">End of the passage</div>' +
       '<div id="passage-end-sub"></div>' +
       control(name, keep, { id: 'passage-keep' }) +
+      // The third way out is not to leave at all: A-B repeat, which is the
+      // device's own doing — the passage is played again from its start
+      // instead of stopping at its end — so it carries no action.
+      '<button id="passage-loop" aria-pressed="false" title="Play this passage again and again">' +
+        '↻ Loop</button>' +
       '<button id="passage-back"' + (back ? ' title="Back to ' + esc(back.title || '') + '"' : '') +
         '>Back</button>' +
       '</div>';
@@ -1062,9 +1174,12 @@
 
   const api = {
     library, libraryGrid, hero, work, artist, item, session, miniPlayer, continueShelf, search,
-    card, memberRow, control, watchedControl, restControls, trace, identityForm,
+    card, memberRow, control, watchedControl, bookmarkControl, restControls, trace, identityForm,
     esc, fmtTime, fmtRuntime, hashFor, itemHash, showHash, artistHash, searchHash,
     idIn,
+    // The sprite-sheet arithmetic, shared with the device: the scrub bar's
+    // hover preview cuts its frame out of the same sheets this list does.
+    tileAt,
     linkHref: href, actionOf: action, unavailableReason: why, artworkOf: artwork,
     SILENT_ACTIONS: SILENT,
   };

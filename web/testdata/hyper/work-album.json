@@ -163,6 +163,11 @@
         "seek_seconds": "number?"
       },
       "label": "▶ Play"
+    },
+    "save": {
+      "method": "POST",
+      "href": "/api/list/album%3Aradiohead-ok-computer-1997",
+      "label": "Add to My List"
     }
   },
   "unavailable": {

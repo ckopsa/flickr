@@ -95,6 +95,7 @@
   let libraryDoc = null, continueDoc = null;
   let currentRoute = null;       // the route document the current hash resolved to
   let currentWork = null;        // the work document the current view belongs to
+  let currentTrickplay = null;   // its sprite sheets, where the item has them
   let currentItem = null;        // the item document on screen
   let pendingAutoplay = null;    // item id to start once its route renders
   let pendingPlay = null;        // { id, mode: 'nav' | 'zero' } from a prev/next
@@ -376,6 +377,7 @@
   }
 
   function navigate(hash) {
+    stopPreview();   // the tile being left is not still being hovered
     if (location.hash === hash) applyRoute();
     else location.hash = hash;
   }
@@ -406,6 +408,21 @@
     if (!href) return null;
     try { return await doc(href); } catch (e) { return null; }
   }
+
+  // The item's trickplay index, which is what puts a frame beside each chapter
+  // on its page. It is a sidecar rather than a document — no `self`, so the
+  // cache above has no key for it — and sheetIndex below is the one that
+  // holds it, by address, shared with the tiles' hover previews. A file with
+  // no sheets answers that it has none, which is an answer: the chapters are
+  // the list of names they always were.
+  async function trickplayOf(itemDoc) {
+    const href = R.linkHref(itemDoc, 'trickplay');
+    return href ? await sheetIndex(href) : null;
+  }
+
+  // What a member needs said about it: the work it belongs to, and the sheets
+  // its chapters are pictured from.
+  function itemCtx() { return { work: currentWork, trickplay: currentTrickplay }; }
 
   async function applyRoute() {
     const seq = ++routeSeq;
@@ -501,7 +518,11 @@
       return;
     }
     currentItem = itemDoc;
-    currentWork = await workOf(itemDoc);
+    // Two relations, followed side by side: the page waits for one round trip
+    // rather than two.
+    const [wk, tp] = await Promise.all([workOf(itemDoc), trickplayOf(itemDoc)]);
+    currentWork = wk;
+    currentTrickplay = tp;
     if (seq !== routeSeq) return;
 
     if (itemDoc.medium === 'text') {
@@ -511,7 +532,7 @@
         showStage(true);
       } else {
         showStage(false);
-        mount(R.item(itemDoc, { work: currentWork }));
+        mount(R.item(itemDoc, itemCtx()));
         if (tp || pendingAutoplay === itemDoc.id) await openReader(itemDoc, tp);
       }
       pendingAutoplay = pendingPlay = null;
@@ -526,7 +547,7 @@
     if (collapsed && samePlaying) {
       if (!pendingExpand) {
         showStage(false);
-        mount(R.item(itemDoc, { work: currentWork }));
+        mount(R.item(itemDoc, itemCtx()));
         pendingAutoplay = pendingPlay = null;
         return;
       }
@@ -539,13 +560,13 @@
       // A passage route plays on arrival, from its own start — `t` wins over
       // the saved place, so never null here.
       showStage(false);
-      mount(R.item(itemDoc, { work: currentWork }));
+      mount(R.item(itemDoc, itemCtx()));
       await startPlay(itemDoc, { seek: rp.t == null ? 0 : rp.t, passage: rp });
     } else if (samePlaying) {
       showStage(true); // "Keep watching" dropped the passage: nothing to restart
     } else {
       showStage(false);
-      mount(R.item(itemDoc, { work: currentWork }));
+      mount(R.item(itemDoc, itemCtx()));
       if (pendingAutoplay === itemDoc.id) await startPlay(itemDoc, {});
       else if (pendingPlay && pendingPlay.id === itemDoc.id) {
         await startPlay(itemDoc, { seek: pendingPlay.mode === 'zero' ? 0 : undefined });
@@ -781,6 +802,7 @@
   function openSettings() {
     paintAutoplay();
     paintTenFoot();
+    paintCues();
     $('settings').hidden = false;
     watchActivity(true);
   }
@@ -788,6 +810,68 @@
   function closeSettings() {
     $('settings').hidden = true;
     watchActivity(false);
+  }
+
+  // --- subtitle appearance -----------------------------------------------------
+  //
+  // How the subtitles READ is a matter of eyesight and of the room, never of
+  // the file: no document has an opinion about how big a word should be. So
+  // the three settings are kept in this browser and applied the two ways
+  // WebVTT allows — the type and the ground through a ::cue rule written into
+  // #cue-style, which is what a browser honours for a cue's font and its
+  // background; the position through each cue's own `line`, which only the
+  // device can set, so the player is handed the number and puts it on the
+  // cues as each track loads.
+  const CUE_SIZES = { small: '70%', medium: '100%', large: '140%', huge: '200%' };
+  const CUE_GROUNDS = {
+    box: 'background: rgba(0,0,0,0.75);',
+    shadow: 'background: transparent; text-shadow: 0 1px 2px #000, 0 0 6px #000;',
+    none: 'background: transparent;',
+  };
+  // Raised is three lines up from the bottom, which clears a transport bar and
+  // most burned-in credits; bottom is wherever the cue itself asked to sit.
+  const CUE_LINES = { bottom: 'auto', raised: -4 };
+  const CUE_SELECTS = [['cue-size', 'size'], ['cue-ground', 'ground'], ['cue-position', 'position']];
+
+  // A remembered value counts only if it is still one of the offered ones:
+  // what is in storage was written by an older version of this file, or by
+  // nobody at all.
+  function offered(map, v, dflt) {
+    return Object.prototype.hasOwnProperty.call(map, v) ? v : dflt;
+  }
+
+  function cuePrefs() {
+    let s = {};
+    try { s = JSON.parse(localStorage.cueStyle || '{}') || {}; } catch (e) { /* no storage */ }
+    return {
+      size: offered(CUE_SIZES, s.size, 'medium'),
+      ground: offered(CUE_GROUNDS, s.ground, 'box'),
+      position: offered(CUE_LINES, s.position, 'bottom'),
+    };
+  }
+
+  function applyCues() {
+    const p = cuePrefs();
+    const style = $('cue-style');
+    if (style) {
+      style.textContent = '::cue { font-size: ' + CUE_SIZES[p.size] + '; ' + CUE_GROUNDS[p.ground] + ' }';
+    }
+    root.Player.setCueLine(CUE_LINES[p.position]);
+    paintCues(p);
+  }
+
+  function paintCues(p) {
+    p = p || cuePrefs();
+    for (const [id, key] of CUE_SELECTS) {
+      if ($(id)) $(id).value = p[key];
+    }
+  }
+
+  function setCue(key, value) {
+    const p = cuePrefs();
+    p[key] = value;
+    try { localStorage.cueStyle = JSON.stringify(p); } catch (e) { /* it lasts the sitting */ }
+    applyCues();
   }
 
   // --- household activity ------------------------------------------------------
@@ -1083,6 +1167,116 @@
     }
   }
 
+  // --- the moving tile ---------------------------------------------------------
+  //
+  // A pointer that RESTS on a tile — six hundred milliseconds, not a pass over
+  // it on the way somewhere else — sets the film going on the poster: the very
+  // sheets the scrub bar previews from, four frames a second, gone the moment
+  // the pointer leaves. It is a nicety and it behaves like one — never where
+  // the pointer is a finger, because nothing rests on a touchscreen and a
+  // sheet is a big picture to fetch for a tap, and never where less motion was
+  // asked for.
+  //
+  // Every address here came out of a document: the index is the tile's own
+  // `links.trickplay` (the renderer carried it into data-trickplay) and the
+  // sheets are addresses INSIDE the index it answers.
+  const PREVIEW_DELAY = 600;   // how long a pointer rests before the tile moves
+  const PREVIEW_MS = 250;      // four frames a second
+  const PREVIEW_FRAMES = 20;   // how many frames one loop plays
+  const sheetIndexes = new Map();  // trickplay href -> the index, or null for none
+  let preview = null;          // { card, timer, el, tick } while one is running
+
+  function previewWanted() {
+    try {
+      return !matchMedia('(pointer: coarse)').matches &&
+        !matchMedia('(prefers-reduced-motion: reduce)').matches;
+    } catch (e) { return false; }
+  }
+
+  function onPointerOver(e) {
+    const t = e.target;
+    const card = t && t.closest ? t.closest('[data-trickplay]') : null;
+    if (preview && preview.card === card) return;   // moving about inside the same tile
+    stopPreview();
+    if (!card || !previewWanted()) return;
+    preview = { card: card, el: null, tick: null, timer: setTimeout(() => startPreview(card), PREVIEW_DELAY) };
+  }
+
+  function onPointerOut(e) {
+    if (!preview) return;
+    if (e.relatedTarget && preview.card.contains(e.relatedTarget)) return;
+    stopPreview();
+  }
+
+  function stopPreview() {
+    if (!preview) return;
+    clearTimeout(preview.timer);
+    clearInterval(preview.tick);
+    if (preview.el) preview.el.remove();
+    preview = null;
+  }
+
+  async function sheetIndex(href) {
+    if (sheetIndexes.has(href)) return sheetIndexes.get(href);
+    let idx = null;
+    try { idx = await api(href); } catch (e) { /* none were ever made: no preview */ }
+    sheetIndexes.set(href, idx);
+    return idx;
+  }
+
+  async function startPreview(card) {
+    const wrap = card.querySelector('.poster-wrap');
+    if (!wrap) return;
+    const idx = await sheetIndex(card.dataset.trickplay);
+    if (!idx || !preview || preview.card !== card) return;
+    const list = idx.sheet_hrefs || [];
+    if (!list.length) return;
+    // ONE sheet, from the middle of the film: a hover lasts seconds, and a
+    // whole film at four frames a second would be a loop minutes long — and
+    // every sheet a fetch. The frames are taken spread across that sheet, so
+    // what plays is a passage of the film rather than half a minute of it.
+    const sheet = list[Math.floor(list.length / 2)];
+    const per = (idx.cols || 1) * (idx.rows || 1);
+    const step = Math.max(1, Math.floor(per / PREVIEW_FRAMES));
+    // The sheet is fetched before anything is shown: a preview that arrives
+    // blank and fills in reads as a broken picture.
+    const pic = new Image();
+    pic.onload = () => {
+      if (!preview || preview.card !== card || !wrap.isConnected) return;
+      const el = document.createElement('div');
+      el.className = 'tile-preview';
+      wrap.appendChild(el);
+      preview.el = el;
+      let n = 0;
+      const draw = () => {
+        // The view under it can be swapped away mid-loop; a tile that is no
+        // longer on the page is not being hovered.
+        if (!el.isConnected) { stopPreview(); return; }
+        frame(el, wrap, idx, sheet, (n++ * step) % per);
+      };
+      draw();
+      preview.tick = setInterval(draw, PREVIEW_MS);
+    };
+    pic.src = sheet;
+  }
+
+  // One frame of the sheet, drawn to COVER the poster the way the artwork
+  // does: the sheet is a grid of wide frames and a tile is a tall box, so the
+  // frame is scaled until it fills and what will not fit is cropped evenly.
+  function frame(el, wrap, idx, sheet, n) {
+    const cols = idx.cols || 1, rows = idx.rows || 1;
+    const box = wrap.getBoundingClientRect();
+    const tw = idx.tile_width || 1, th = idx.tile_height || 1;
+    const scale = Math.max(box.width / tw, box.height / th);
+    const w = tw * scale, h = th * scale;
+    const col = n % cols, row = Math.floor(n / cols);
+    el.style.backgroundImage = 'url("' + sheet + '")';
+    el.style.backgroundSize = (cols * w) + 'px ' + (rows * h) + 'px';
+    el.style.backgroundPosition =
+      (-(col * w) + (box.width - w) / 2) + 'px ' +
+      (-(row * h) + (box.height - h) / 2) + 'px';
+  }
+
   // A poster is fetched after its frame is drawn, so the frame shimmers until
   // the picture lands. `load` does not bubble, so the one listener for the
   // whole page catches it on the way down instead.
@@ -1130,7 +1324,11 @@
     // show's Next up are all drawn from. So the answer is followed by
     // forgetting every cached document and re-reading the view, rather than
     // by patching the screen where it stands.
-    if (name === 'watched' || name === 'forget') { await write(req); return; }
+    // Putting a title on My List, and taking it off again, move a shelf the
+    // same way: the row on the home and the bookmark on every tile are drawn
+    // from one answer, so the write is followed by the same forget-and-reread.
+    if (name === 'watched' || name === 'forget' ||
+        name === 'save' || name === 'unsave') { await write(req); return; }
     // `read` is the kernel's: a book's sitting is the reader pane, not the
     // device. Everything else is the device's, and it takes the action as it
     // was written on the button.
@@ -1205,6 +1403,8 @@
     document.addEventListener('load', onLoad, true); // capture: load does not bubble
     document.addEventListener('error', onImageError, true);
     document.addEventListener('submit', onSubmit);
+    document.addEventListener('pointerover', onPointerOver);
+    document.addEventListener('pointerout', onPointerOut);
     window.addEventListener('hashchange', applyRoute);
     window.addEventListener('beforeunload', () => root.Player.close());
     $('profile-chip').onclick = openGate;
@@ -1219,6 +1419,9 @@
     $('settings').onclick = e => { if (e.target.id === 'settings') closeSettings(); };
     $('settings-autoplay').onclick = () => { root.Player.setAutoplay(!root.Player.autoplay()); paintAutoplay(); };
     $('settings-tenfoot').onclick = () => setTenFoot(!tenFoot);
+    for (const [id, key] of CUE_SELECTS) {
+      $(id).onchange = e => setCue(key, e.target.value);
+    }
     // Remembered if it was ever chosen, guessed if it was not.
     let remembered = null;
     try { remembered = localStorage.tenFoot || null; } catch (e) { /* no storage */ }
@@ -1244,6 +1447,7 @@
     if (!location.hash) history.replaceState(null, '', '#/');
 
     root.Player.init(kernel);
+    applyCues();   // the device is made now, so the cue line has somewhere to land
 
     try { rootDoc = remember(await api(ROOT)); }
     catch (e) { $('view').innerHTML = '<div id="empty">' + esc(e.detail || e.message) + '</div>'; return; }
