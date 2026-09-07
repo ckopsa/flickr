@@ -277,8 +277,28 @@ is the same choice. **Back** closes the player and leaves the bare item
 route behind. Casting honours all of this from the sender side: the page
 watches the receiver's time and pauses it at `end`.
 
-`web/passage.js` holds the grammar (`parsePassage`, `passageQuery`) and the
-end predicate as pure functions; `node --test web/passage_test.mjs` runs
+### Making a passage
+
+The player mints these links too. While watching, **Mark in** and **Mark
+out** in the control row set the bounds at the current position (the cast
+receiver's position while casting); a mark within two seconds of a chapter
+start snaps to it, since the scrubber's chapter ticks are the natural cut
+points. Marking out before the in point swaps the two. A set chip shows its
+time (`In 1:19:00`), tapping it again re-marks at the current position, and
+its small × clears it; the amber flags appear on the scrub bar exactly as a
+played passage's do. Once an in point exists, **Copy passage link** writes
+the absolute `#/item/<id>?t=…&end=…` URL to the clipboard and always shows
+it as selectable text under the controls — a phone on plain `http://` has no
+clipboard API but can still long-press and copy. Marks survive an episode
+advance within the same show, so marking in on one episode and out after
+up-next has moved to a later one makes a run: the link carries
+`&until=<that episode's id>` with `end` inside it. Marks are dropped when the
+player closes or another work starts. Nothing is stored: a passage is its
+URL, and the household's day planner is where it is kept.
+
+`web/passage.js` holds the grammar (`parsePassage`, `passageQuery`), the end
+predicate and the marking logic (`snapToChapter`, `markBounds`,
+`passageLink`) as pure functions; `node --test web/passage_test.mjs` runs
 their tests without a build step.
 
 ## Casting

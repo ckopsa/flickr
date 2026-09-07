@@ -133,6 +133,20 @@
   #controls { display: flex; gap: 8px; align-items: center; margin-top: 8px; flex-wrap: wrap; }
   #controls button { min-width: 42px; }
   #controls input[type=range] { width: 110px; accent-color: #5b8def; }
+  /* making a passage: the in/out chips turn amber like the .bound flags once
+     set and grow a small × that clears the mark */
+  #controls .markchip { display: inline-flex; }
+  #controls .markchip button { font-variant-numeric: tabular-nums; }
+  #controls .markchip .mark-clear { min-width: 0; padding: 6px 8px; border-left: 0; border-radius: 0 6px 6px 0; color: #9a9daa; }
+  #controls .markchip .mark-clear:hover { color: #f08080; }
+  #controls .markchip.set button { border-color: #a37a30; color: #f0b45c; }
+  #controls .markchip.set button:first-child { border-radius: 6px 0 0 6px; background: #2e2616; }
+  #controls .markchip.set button:first-child:hover { background: #3a3019; }
+  /* the minted link, as text too (a phone with no clipboard API long-presses it) */
+  #passage-link { margin-top: 8px; font-size: 12px; color: #9a9daa; display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: baseline; }
+  #passage-link .copied { color: #6ee7a0; }
+  #passage-link code { user-select: all; -webkit-user-select: all; word-break: break-all; color: #c5c8d4;
+    background: #1b1d24; border: 1px solid #3a3d47; border-radius: 6px; padding: 4px 8px; font-size: 12px; }
   google-cast-launcher { width: 28px; height: 28px; cursor: pointer; --connected-color: #5b8def; --disconnected-color: #9a9daa; }
   #chapters { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
   #chapters button { font-size: 12px; padding: 4px 10px; }
@@ -259,8 +273,12 @@
         <select id="subs" title="Subtitles" style="display:none"></select>
         <select id="audio" title="Audio track" style="display:none"></select>
         <button id="btn-autoplay"></button>
+        <span class="markchip" id="chip-mark-in"><button id="btn-mark-in" title="Mark the passage's start at the current position">Mark in</button><button class="mark-clear" id="btn-mark-in-clear" title="Clear the in point" hidden>×</button></span>
+        <span class="markchip" id="chip-mark-out"><button id="btn-mark-out" title="Mark the passage's end at the current position">Mark out</button><button class="mark-clear" id="btn-mark-out-clear" title="Clear the out point" hidden>×</button></span>
+        <button id="btn-mark-link" title="Copy the link to the marked passage" hidden>Copy passage link</button>
         <google-cast-launcher id="cast-btn"></google-cast-launcher>
       </div>
+      <div id="passage-link" hidden><span id="passage-link-note">Passage link</span><code id="passage-link-url"></code></div>
       <div id="status">Select an item to play.</div>
       <div id="chapters"></div>
       <div id="trace"></div>
@@ -316,6 +334,12 @@ let endFired = false;           // one natural-end per stream load (re-armed on 
 let passage = null;
 let passageEndFired = false;    // the end bound (or the run's last item) has been reached and the panel shown
 let passageNaturalEnd = false;  // …by the item ending on its own rather than by the `end` bound
+// making a passage (the producer side; logic in passage.js): the in/out
+// marks set from the player, { t, inItem, end, endItem }, and the WORK they
+// belong to (a show, or one film). Marks outlive an episode advance so a run
+// can be marked out on a later episode; they die with the player or when a
+// different work starts. Never stored: the passage is its link.
+let markState = null, markWork = null;
 const video = document.getElementById('video');
 const scrub = document.getElementById('scrub');
 const $ = id => document.getElementById(id);
@@ -1262,6 +1286,7 @@ $('detail-play').onclick = () => playItem(detailItem, null);
 function closePlayer() {
   hideUpNext();
   setPassage(null); // the next normal play is normal
+  clearMarks();     // a half-made passage does not outlive the player
   if (casting()) { castEndSuppressed = true; remoteController.stop(); }
   else { video.pause(); video.removeAttribute('src'); video.load(); }
   stopSession();
@@ -1282,6 +1307,8 @@ async function playItem(item, startAt) {
   hideUpNext();
   currentItem = item;
   seekOffset = 0;
+  if (markState && markWork !== workKey(item)) clearMarks(); // marks belong to one work
+  else renderMarks(); // the chips name the episode a mark sits in, relative to this one
   $('detail-info').hidden = true;
   $('player-pane').hidden = false;
   $('now-playing').textContent = itemTitle(item);
@@ -1468,13 +1495,18 @@ function resetPassageEnd() {
   $('passage-end').hidden = true;
 }
 // Two bound marks on the scrubber: the start (`t`) and, on the item the
-// `end` applies to, the end. Later items of a run carry neither.
+// `end` applies to, the end. Later items of a run carry neither. A passage
+// being MADE (markState) takes the flags while it exists — the same flags,
+// so a passage looks the same whether it is played or marked.
 function renderPassageMarks() {
   scrub.querySelectorAll('.bound').forEach(b => b.remove());
   const dur = duration();
-  if (!passage || !(dur > 0)) return;
-  const marks = [['start', passage.t, 'Passage starts at '],
-                 ['end', passageEndAt(passage, currentItem?.id), 'Passage ends at ']];
+  if (!(dur > 0)) return;
+  const id = currentItem?.id;
+  const b = markState ? marksOn(markState, id)
+          : passage ? { t: passage.t, end: passageEndAt(passage, id) } : null;
+  if (!b) return;
+  const marks = [['start', b.t, 'Passage starts at '], ['end', b.end, 'Passage ends at ']];
   for (const [cls, t, label] of marks) {
     if (t == null) continue;
     const b = document.createElement('div');
@@ -1550,6 +1582,94 @@ video.addEventListener('play', () => {
   if (!passageEndFired || passageNaturalEnd) return;
   if (passageEnded(position(), passageEndAt(passage, currentItem?.id))) keepWatching();
 });
+
+// ---------------------------------------------------------------------------
+// making a passage while watching: mark in, mark out, copy the link
+// (logic in passage.js; this is the chips, the flags and the clipboard)
+// ---------------------------------------------------------------------------
+// A show's episodes are one work (a run can span them); anything else is a
+// work of its own.
+function workKey(item) {
+  return item?.identity?.kind === 'episode' && item.identity.title
+    ? 'show:' + item.identity.title : 'item:' + item?.id;
+}
+// The work's items in playing order, so a mark on a later episode is later.
+function workOrder(item) {
+  if (item?.identity?.kind !== 'episode' || !item.identity.title) return [];
+  return (buildLibrary(allItems).shows.get(item.identity.title)?.eps || []).map(e => e.id);
+}
+// A mark lands at the current position — the receiver's when casting, the
+// same clock the end detection reads — snapped to a chapter start within 2s
+// (the chapters the scrubber ticks: a tap a beat after the scene change
+// meant the scene change).
+function markAt(kind) {
+  if (!currentItem) return;
+  const starts = (currentItem.media_info?.chapters || []).map(c => c.start_seconds);
+  const pos = snapToChapter(position(), starts, 2);
+  markWork = workKey(currentItem);
+  markState = markBounds(markState, kind, pos, currentItem.id, workOrder(currentItem));
+  renderMarks();
+}
+function clearMarkAt(kind) {
+  markState = clearMark(markState, kind);
+  if (!markState) markWork = null;
+  renderMarks();
+}
+function clearMarks() {
+  markState = null; markWork = null;
+  renderMarks();
+}
+// A mark's label on its chip: the time, prefixed by the episode when the
+// mark sits in another episode of the run than the one playing.
+function markLabel(t, itemId) {
+  if (itemId === currentItem?.id) return fmtTime(t);
+  const it = allItems.find(i => i.id === itemId);
+  return (it ? epCode(it) + ' ' : '') + fmtTime(t);
+}
+function passageLinkHere() {
+  return passageLink(location.origin + location.pathname, markState);
+}
+function renderMarks() {
+  const s = markState;
+  const chips = [['in', 'Mark in', 'In ', s?.t, s?.inItem], ['out', 'Mark out', 'Out ', s?.end, s?.endItem]];
+  for (const [kind, label, prefix, t, itemId] of chips) {
+    const set = t != null;
+    $('chip-mark-' + kind).classList.toggle('set', set);
+    $('btn-mark-' + kind).textContent = set ? prefix + markLabel(t, itemId) : label;
+    $('btn-mark-' + kind).title = set
+      ? `Re-mark the ${kind} point at the current position` : `Mark the passage's ${kind === 'in' ? 'start' : 'end'} at the current position`;
+    $('btn-mark-' + kind + '-clear').hidden = !set;
+  }
+  const link = passageLinkHere();
+  $('btn-mark-link').hidden = !link; // appears once an in point exists
+  if (!link) $('passage-link').hidden = true;
+  else if (!$('passage-link').hidden) showPassageLink(link, false); // marks moved: the shown link follows
+  renderPassageMarks();
+}
+let copiedTimer = null;
+function showPassageLink(link, copied) {
+  const note = $('passage-link-note');
+  if (copiedTimer) { clearTimeout(copiedTimer); copiedTimer = null; }
+  note.textContent = copied ? 'Copied' : 'Passage link';
+  note.classList.toggle('copied', copied);
+  $('passage-link-url').textContent = link;
+  $('passage-link').hidden = false;
+  if (copied) copiedTimer = setTimeout(() => showPassageLink(link, false), 2000);
+}
+// Copy: the clipboard when there is one, and the text every time — a phone on
+// plain http has no clipboard API but can still long-press and copy.
+async function copyPassageLink() {
+  const link = passageLinkHere();
+  if (!link) return;
+  let copied = false;
+  try { await navigator.clipboard.writeText(link); copied = true; } catch (e) { /* no clipboard API, or refused */ }
+  showPassageLink(link, copied);
+}
+$('btn-mark-in').onclick = () => markAt('in');
+$('btn-mark-out').onclick = () => markAt('out');
+$('btn-mark-in-clear').onclick = () => clearMarkAt('in');
+$('btn-mark-out-clear').onclick = () => clearMarkAt('out');
+$('btn-mark-link').onclick = copyPassageLink;
 
 // ---------------------------------------------------------------------------
 // trickplay scrub previews (mouse only; touch devices skip this)
