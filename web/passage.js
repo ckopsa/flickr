@@ -18,10 +18,10 @@
 //                            predicate are the text-locator functions below
 //   #/show/<title>?ep=S02E05&t=…&end=…[&until=S02E07]
 //                            the same passage addressed by show and episode
-//                            code, for a minter that knows no item ids; it
-//                            is resolved against the show's episodes at open
-//                            time (resolveShowPassage) and then behaves
-//                            exactly like the item form
+//                            code, for a minter that knows no item ids. The
+//                            SERVER resolves it (internal/passage, answered
+//                            by GET /api/-/route) and the client is handed
+//                            the item form
 //
 // Seconds may be integers or decimals. The player also MAKES passages (mark
 // in, mark out, copy the link — the second half of this file); the link it
@@ -59,8 +59,8 @@
   // passage at all. `until` is an item id in the item form; a non-numeric
   // `until` (an episode code, show form) lands in untilEp as written, and
   // `ep` is kept as written too — both are resolved, and their spelling
-  // judged, by resolveShowPassage. An end at or before the start is no bound
-  // and is dropped.
+  // judged, by the server (internal/passage.ResolveShow). An end at or before
+  // the start is no bound and is dropped.
   function parsePassage(query) {
     if (query == null) return null;
     let q = String(query);
@@ -97,54 +97,6 @@
     if (p.from != null) parts.push('from=' + encodeURIComponent(p.from));
     if (p.to != null) parts.push('to=' + encodeURIComponent(p.to));
     return parts.length ? '?' + parts.join('&') : '';
-  }
-
-  // 'S02E05' / 's2e5' → { season: 2, episode: 5 }; anything else → null.
-  function parseEpisodeCode(s) {
-    const m = /^\s*s(\d{1,3})e(\d{1,4})\s*$/i.exec(String(s == null ? '' : s));
-    return m ? { season: Number(m[1]), episode: Number(m[2]) } : null;
-  }
-  function formatEpisodeCode(c) {
-    return 'S' + String(c.season).padStart(2, '0') + 'E' + String(c.episode).padStart(2, '0');
-  }
-  // The episode of a show matching a code. items are the show's members as
-  // the server lists them: identity.season / identity.episode, with zero
-  // values omitted; bonus material (kind "extra") named after an episode is
-  // never that episode.
-  function findEpisode(items, code) {
-    if (!code) return null;
-    for (const it of items || []) {
-      const id = it && it.identity;
-      if (!id || (id.kind != null && id.kind !== 'episode')) continue;
-      if ((id.season || 0) === code.season && (id.episode || 0) === code.episode) return it;
-    }
-    return null;
-  }
-
-  // resolveShowPassage turns a show-addressed passage into the item form:
-  // { item, passage, error }. item is the episode `ep` names and passage is
-  // ready for itemHash (until resolved to an id, ep dropped); or item is
-  // null and error is one plain sentence for the show page. A run whose
-  // `until` names no episode is an error too — silently shortening the run
-  // would play something other than what the link says.
-  function resolveShowPassage(p, items) {
-    const fail = error => ({ item: null, passage: null, error });
-    const want = parseEpisodeCode(p && p.ep);
-    if (!want) return fail(`"${p && p.ep != null ? p.ep : ''}" is not an episode code like S02E05.`);
-    const item = findEpisode(items, want);
-    if (!item) return fail(`This show has no episode ${formatEpisodeCode(want)}.`);
-    let until = p.until;
-    if (p.untilEp != null) {
-      const w = parseEpisodeCode(p.untilEp);
-      const u = findEpisode(items, w);
-      if (!u) return fail(`This show has no episode ${w ? formatEpisodeCode(w) : p.untilEp} to run until.`);
-      until = u.id;
-    }
-    return {
-      item,
-      passage: { t: p.t, end: p.end, until, untilEp: null, ep: null, from: p.from, to: p.to },
-      error: null,
-    };
   }
 
   // A passage puts the PLAYER into passage mode only when it says something
@@ -356,7 +308,6 @@
 
   const api = { splitHash, parsePassage, passageQuery, isTimedPassage,
                 passageEndAt, passageEnded, runContinues, passageForNext,
-                parseEpisodeCode, findEpisode, resolveShowPassage,
                 markTime, snapToChapter, markBounds, clearMark, marksOn, markPassage, passageLink,
                 parseLocator, formatLocator, sectionFromCFI, locatorSection,
                 isTextPassage, textPassageEnded };

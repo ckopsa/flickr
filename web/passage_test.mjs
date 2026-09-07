@@ -6,7 +6,6 @@ import assert from 'node:assert/strict';
 import passage from './passage.js';
 const { splitHash, parsePassage, passageQuery, isTimedPassage,
         passageEndAt, passageEnded, runContinues, passageForNext,
-        parseEpisodeCode, findEpisode, resolveShowPassage,
         markTime, snapToChapter, markBounds, clearMark, marksOn, markPassage, passageLink,
         parseLocator, formatLocator, sectionFromCFI, locatorSection,
         isTextPassage, textPassageEnded } = passage;
@@ -114,76 +113,11 @@ test('passageForNext keeps until and drops the first item\'s t/end', () => {
   assert.equal(passageForNext(null), null);
 });
 
-// --- show-addressed passages -------------------------------------------------
-
-// a show's members as /api/items lists them: zero season/episode omitted,
-// bonus material carrying an episode-shaped name
-const show = [
-  { id: 40, identity: { kind: 'episode', title: 'Ninjago', season: 1, episode: 1 } },
-  { id: 41, identity: { kind: 'episode', title: 'Ninjago', season: 1, episode: 2 } },
-  { id: 58, identity: { kind: 'episode', title: 'Ninjago', season: 2, episode: 5 } },
-  { id: 59, identity: { kind: 'episode', title: 'Ninjago', season: 2, episode: 6 } },
-  { id: 60, identity: { kind: 'episode', title: 'Ninjago', season: 2, episode: 7 } },
-  { id: 61, identity: { kind: 'episode', title: 'Ninjago' } },                       // unnumbered rip
-  { id: 70, identity: { kind: 'extra', title: 'Ninjago', season: 2, episode: 5 } },  // deleted scene named S02E05
-];
-
-test('parseEpisodeCode reads SxxEyy in any case and nothing else', () => {
-  assert.deepEqual(parseEpisodeCode('S02E05'), { season: 2, episode: 5 });
-  assert.deepEqual(parseEpisodeCode('s2e5'), { season: 2, episode: 5 });
-  assert.deepEqual(parseEpisodeCode(' S10E123 '), { season: 10, episode: 123 });
-  assert.equal(parseEpisodeCode('E05'), null);
-  assert.equal(parseEpisodeCode('S02E05x'), null);
-  assert.equal(parseEpisodeCode(''), null);
-  assert.equal(parseEpisodeCode(null), null);
-});
-
-test('findEpisode matches season/episode numbers, never bonus material', () => {
-  assert.equal(findEpisode(show, { season: 2, episode: 5 }).id, 58);
-  assert.equal(findEpisode(show, { season: 1, episode: 1 }).id, 40);
-  assert.equal(findEpisode(show, { season: 2, episode: 9 }), null);
-  assert.equal(findEpisode(show, { season: 0, episode: 0 }).id, 61); // an unnumbered file is S00E00
-  assert.equal(findEpisode([], { season: 2, episode: 5 }), null);
-  assert.equal(findEpisode(show, null), null);
-});
-
-test('resolveShowPassage: a scene of one episode becomes the item form', () => {
-  const r = resolveShowPassage(parsePassage('ep=S02E05&t=60&end=300'), show);
-  assert.equal(r.error, null);
-  assert.equal(r.item.id, 58);
-  assert.deepEqual(r.passage, P({ t: 60, end: 300 }));
-  assert.equal(passageQuery(r.passage), '?t=60&end=300');
-});
-
-test('resolveShowPassage: a run resolves until to the last episode\'s id', () => {
-  const r = resolveShowPassage(parsePassage('ep=s2e5&t=120&until=S02E07'), show);
-  assert.equal(r.error, null);
-  assert.equal(r.item.id, 58);
-  assert.deepEqual(r.passage, P({ t: 120, until: 60 }));
-  // an item-id until passes through untouched
-  assert.equal(resolveShowPassage(parsePassage('ep=S02E05&until=60'), show).passage.until, 60);
-});
-
-test('resolveShowPassage: ep alone is a plain episode route', () => {
-  const r = resolveShowPassage(parsePassage('ep=S01E02'), show);
-  assert.equal(r.item.id, 41);
-  assert.equal(passageQuery(r.passage), '');
-  assert.equal(isTimedPassage(r.passage), false);
-});
-
-test('resolveShowPassage: an ep that names no episode is one sentence, no item', () => {
-  let r = resolveShowPassage(parsePassage('ep=S02E09&t=60'), show);
-  assert.equal(r.item, null);
-  assert.equal(r.passage, null);
-  assert.equal(r.error, 'This show has no episode S02E09.');
-  r = resolveShowPassage(parsePassage('ep=finale&t=60'), show);
-  assert.equal(r.item, null);
-  assert.equal(r.error, '"finale" is not an episode code like S02E05.');
-  r = resolveShowPassage(parsePassage('ep=S02E05&until=S02E99'), show);
-  assert.equal(r.item, null);
-  assert.equal(r.error, 'This show has no episode S02E99 to run until.');
-  assert.equal(resolveShowPassage(parsePassage('t=60'), show).item, null); // no ep at all
-});
+// The show form (#/show/<title>?ep=S02E05) is resolved by the SERVER —
+// internal/passage, answered by GET /api/-/route — and its cases live in
+// internal/passage/passage_test.go under these same names. What is left here
+// is what the browser still owns: the parse of a passage it is handed, the
+// clock predicates, and the marks it makes.
 
 // --- making a passage while watching ----------------------------------------
 

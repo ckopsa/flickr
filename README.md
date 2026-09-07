@@ -319,15 +319,16 @@ to demonstrate how the same file direct-plays or transcodes per client.
 
 flickr is becoming backend-driven: the server says what exists and what may
 be done to it, and the browser renders what it is told (`docs/hypermedia.md`
-has the envelope, the document table and the order of work). Three of those
-documents are served now, beside — not instead of — everything above, and no
-client reads them yet:
+has the envelope, the document table and the order of work). Four of those
+documents are served now, beside — not instead of — everything above, and the
+router is the only part of the client that reads one yet:
 
 | Endpoint | Document |
 |---|---|
 | `GET /api/` | the root: the profile (`client_id`, query or cookie), links to library, continue, artists, works, items, scan and system, and the `scan` action. It is the only address a client is meant to know by heart |
 | `GET /api/items/{id}` | one item: its fields, `media_info` (chapters, sections, page count), its subtitle tracks with their `.vtt` addresses, artwork links, `links.work`/`prev`/`next` (the work's own order, bonus material aside), and the actions `play`, `read`, `progress`, `identity`, `reprobe`, `enrich` |
 | `GET /api/works/{key}` | one work: the fields `/api/works` publishes, `members` in order as item envelopes, `places` (the passage grammar's tokens with the labels a chip shows — `S03E22 0:00` · "S03E22 · Beach Games", `1:19:00` · "Let It Go", `ch. 7` · "The Cellar"), the profile's progress, and the actions `play`, `read`, `passage` |
+| `GET /api/-/route?hash=` | what a hash means: `view` (`library`, `work`, `artist`, `item`), the `document` to render, the `passage` resolved to item ids and spine sections, and `autoplay`. See "Deep links and passages" |
 
 Every document is one JSON object with `self`, `kind`, `title`, its own
 fields, then `links`, `actions` (each with an `input` sketch and a `label`)
@@ -393,8 +394,18 @@ item route:
   episode, `until=S02E07` names the last episode of a run. It is resolved
   against the show's season/episode numbers when opened and the route is
   replaced by the item form, so everything below applies unchanged. An `ep`
-  (or `until`) that names no episode shows one sentence on the show page
-  and plays nothing.
+  (or `until`) that names no episode is refused in one sentence, and nothing
+  plays.
+
+**The server resolves the hash.** The browser splits the hash off the URL and
+asks `GET /api/-/route?hash=<hash>`, which answers which `view` to render
+(`library`, `work`, `artist`, `item`), the `document` to render it from, the
+`passage` with every episode code resolved to an item id and every text
+locator to a spine section, and whether arriving `autoplay`s. A title, an
+episode or an item that is not there comes back as `application/problem+json`
+with a remedy — the library, or the show's own page. The grammar above lives
+in `internal/passage` (Go), one implementation, table-tested against the same
+cases as `web/passage_test.mjs`; the client parses nothing past the hash.
 
 Examples:
 

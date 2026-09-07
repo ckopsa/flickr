@@ -547,7 +547,13 @@ func (s *server) handleWorkDoc(w http.ResponseWriter, r *http.Request) {
 		hyper.WriteProblem(w, serverProblem(err))
 		return
 	}
+	hyper.WriteDoc(w, http.StatusOK, s.workEnvelope(wk, profile, positions))
+}
 
+// workEnvelope is that document, apart from the request that asked for it:
+// the route resolver (route.go) answers a #/show/<title> hash with the very
+// same document, and one work is one document however it was reached.
+func (s *server) workEnvelope(wk *works.Work, profile string, positions map[int64]store.Position) *hyper.Envelope {
 	doc := hyper.Doc(workHref(wk.Key), "work", wk.Title)
 	// The work's own kind ("show", "album", "book") is not the DOCUMENT's
 	// kind, which is always "work". The envelope's name wins, so the work's
@@ -628,7 +634,7 @@ func (s *server) handleWorkDoc(w http.ResponseWriter, r *http.Request) {
 		Label:  "Copy a passage link",
 	})
 
-	hyper.WriteDoc(w, http.StatusOK, doc)
+	return doc
 }
 
 // positionsFor is one profile's playback rows, by item id; nil for an

@@ -240,6 +240,7 @@ func (s *server) routes() *http.ServeMux {
 	mux.HandleFunc("GET /api/{$}", s.handleRootDoc)
 	mux.HandleFunc("GET /api/items/{id}", s.handleItemDoc)
 	mux.HandleFunc("GET /api/works/{key}", s.handleWorkDoc)
+	mux.HandleFunc("GET /api/-/route", s.handleRouteDoc)
 	mux.HandleFunc("GET /api/items", s.handleListItems)
 	mux.HandleFunc("GET /api/works", s.handleWorks)
 	mux.HandleFunc("GET /api/works/{key}/items", s.handleWorkItems)

@@ -78,7 +78,7 @@
 
   /* show (episode list) view */
   #view-show h2 { margin: 14px 20px 6px; font-size: 18px; }
-  #show-note { margin: 0 20px 8px; font-size: 13px; color: #f0b45c; }
+  #show-note, #lib-note { margin: 0 20px 8px; font-size: 13px; color: #f0b45c; }
   #episode-list, #extras-list { margin: 8px 20px 30px; border: 1px solid #2a2c33; border-radius: 8px; overflow: hidden; }
   #extras-head { margin: 18px 20px 0; font-size: 13px; color: #9a9daa; text-transform: uppercase; letter-spacing: .06em; }
   .item { padding: 10px 16px; border-bottom: 1px solid #1e2026; cursor: pointer; }
@@ -252,6 +252,7 @@
 
   <!-- library: poster grid -->
   <div id="view-library">
+    <div id="lib-note" hidden></div>
     <div id="genre-row" hidden></div>
     <div id="cw" hidden>
       <h3>Continue watching</h3>
@@ -1103,7 +1104,7 @@ async function renderContinueWatching() {
 //   #/artist/<name>    an artist's albums, year order (name encodeURIComponent'd; web/audio.js)
 //   #/item/<id>        detail pane (back target: its show for episodes, else grid)
 //   #/item/<id>?t=<s>&end=<s>[&until=<item_id>]
-//                      a PASSAGE of that item (grammar in passage.js): plays on
+//                      a PASSAGE of that item (grammar in internal/passage): plays on
 //                      arrival from t, stops at end, writes no progress
 //   #/item/<id>?from=<loc>&to=<loc>
 //                      a text passage: the reader opens at from, stops at to,
@@ -1111,11 +1112,15 @@ async function renderContinueWatching() {
 //   #/show/<title>?ep=S02E05&t=<s>&end=<s>[&until=S02E07]
 //                      the same passage addressed by episode code, for a minter
 //                      that knows no item ids; resolved against the show's
-//                      episodes on arrival and REPLACED by the item form above
+//                      episodes by the SERVER and REPLACED by the item form above
 // Every navigation action just sets the hash; the hashchange listener renders.
+// The hash is not parsed here: applyRoute asks GET /api/-/route what it means
+// and renders the answer (docs/hypermedia.md; the grammar is internal/passage).
 // ---------------------------------------------------------------------------
 let pendingAutoplay = null; // item id to auto-resume once its route renders
 let routeSeq = 0;
+let currentRoute = null;    // the route document the current hash resolved to
+let libraryNote = null;     // one sentence for the library view (a refused route)
 
 function showHash(name) { return '#/show/' + encodeURIComponent(name); }
 // itemHash(id) keeps whatever passage the CURRENT route carries for that same
@@ -1123,8 +1128,7 @@ function showHash(name) { return '#/show/' + encodeURIComponent(name); }
 // Pass null to build the bare route, or a passage to route into one.
 function itemHash(id, p) {
   if (p === undefined) {
-    const r = parseRoute();
-    p = r.view === 'item' && r.id === id ? r.passage : null;
+    p = currentRoute?.view === 'item' && currentRoute.document?.id === id ? currentRoute.passage : null;
   }
   return '#/item/' + id + passageQuery(p);
 }
@@ -1132,51 +1136,78 @@ function navigate(hash) {
   if (location.hash === hash) applyRoute(); // same hash: no hashchange event fires
   else location.hash = hash;
 }
-// The query part follows the hash PATH (#/item/51?t=4740&end=5070), so it is
-// parsed out of location.hash, never location.search.
-function parseRoute() {
-  const { path, query } = splitHash(location.hash || '#/');
-  if (path.startsWith('#/show/')) {
-    try { return { view: 'show', name: decodeURIComponent(path.slice(7)), passage: parsePassage(query) }; }
-    catch (e) { return { view: 'library' }; }
+// The hash is resolved by the SERVER (docs/hypermedia.md, "Routes are resolved
+// by the server"): the grammar lives in internal/passage and this client
+// parses nothing past handing the whole hash over. The answer says which view
+// to render, the document to render it from, the passage with every episode
+// code and locator already resolved to ids and sections, and whether arriving
+// starts it. A refusal comes back as problem+json.
+async function fetchRoute(hash) {
+  try {
+    const res = await fetch('/api/-/route?hash=' + encodeURIComponent(hash) +
+                            '&client_id=' + encodeURIComponent(clientId || 'anonymous'));
+    const body = await res.json().catch(() => null);
+    if (res.ok && body) return body;
+    return { view: 'library', document: null, passage: null,
+             problem: body || { detail: 'That link could not be opened.' } };
+  } catch (e) {
+    return { view: 'library', document: null, passage: null,
+             problem: { detail: 'That link could not be opened: ' + (e.message || e) } };
   }
-  if (path.startsWith('#/artist/')) {
-    try { return { view: 'artist', name: decodeURIComponent(path.slice(9)) }; }
-    catch (e) { return { view: 'library' }; }
+}
+// Does the CURRENT hash already name this item? A show-addressed passage
+// (#/show/<title>?ep=S02E05) resolves to an item and the route is then
+// REPLACED by the item link — the show link was the minter's spelling, the
+// item link is ours.
+function hashNamesItem(id) {
+  const h = location.hash || '';
+  return h === '#/item/' + id || h.startsWith('#/item/' + id + '?');
+}
+// The work document names the show; the renderers still group /api/items
+// themselves (hyper 3 hands them the document instead) and those groups are
+// keyed by the title the show's own files spell — so a member of the work
+// says which group it is.
+function showNameOf(doc) {
+  const { shows } = buildLibrary(allItems);
+  for (const m of doc.members || []) {
+    const it = allItems.find(i => i.id === m.id);
+    const name = showNameFor(shows, it?.identity?.title);
+    if (name) return name;
   }
-  const m = path.match(/^#\/item\/(\d+)$/);
-  if (m) return { view: 'item', id: Number(m[1]), passage: parsePassage(query) };
-  return { view: 'library' };
+  return showNameFor(shows, doc.title) || doc.title;
 }
 
 async function applyRoute() {
   const seq = ++routeSeq;
-  const r = parseRoute();
-  if (r.view !== 'library' && !itemsLoaded) {
-    showView('view-loading'); // deep link: brief loading state while items fetch
-    await itemsReady;
-    if (seq !== routeSeq) return; // superseded by a newer navigation
-  }
+  if (!itemsLoaded) showView('view-loading'); // deep link: brief loading state
+  const [r] = await Promise.all([fetchRoute(location.hash || '#/'), itemsReady]);
+  if (seq !== routeSeq) return; // superseded by a newer navigation
+  currentRoute = r;
+  const routedItem = r.view === 'item' ? r.document.id : null;
   // leaving the item that's playing (browser back/forward included): stop it
-  if (currentItem && !(r.view === 'item' && r.id === currentItem.id)) closePlayer();
-  if (r.view === 'show') {
-    const { shows } = buildLibrary(allItems);
-    if (!shows.has(r.name)) { pendingAutoplay = null; pendingPlay = null; location.replace('#/'); return; }
-    if (r.passage?.ep != null) {
-      // show-addressed passage: find the episode, then hand over to the item
-      // form so one code path plays every passage. The route is REPLACED —
-      // the show link was the minter's spelling, the item link is ours.
-      const res = resolveShowPassage(r.passage, shows.get(r.name).eps);
-      if (res.item) { pendingAutoplay = null; pendingPlay = null; location.replace(itemHash(res.item.id, res.passage)); return; }
-      renderShow(r.name, res.error); // names no episode: say so, play nothing
-    } else {
-      renderShow(r.name);
-    }
+  if (currentItem && routedItem !== currentItem.id) closePlayer();
+  if (r.problem) {
+    // A refusal is an answer: its sentence goes on the library view, which is
+    // where its remedy points.
+    libraryNote = r.problem.detail || r.problem.title || '';
+    pendingAutoplay = null;
+    pendingPlay = null;
+    if ((location.hash || '#/') !== '#/') { location.replace('#/'); return; }
+  }
+  if (r.view === 'work') {
+    renderShow(showNameOf(r.document));
   } else if (r.view === 'artist') {
-    if (!renderArtist(r.name)) { pendingAutoplay = null; pendingPlay = null; location.replace('#/'); return; }
+    if (!renderArtist(r.document.title)) { pendingAutoplay = null; pendingPlay = null; location.replace('#/'); return; }
   } else if (r.view === 'item') {
-    const it = allItems.find(i => i.id === r.id);
+    const it = allItems.find(i => i.id === routedItem);
     if (!it) { pendingAutoplay = null; pendingPlay = null; location.replace('#/'); return; }
+    if (!hashNamesItem(it.id)) {
+      // the show form resolved to this item: hand over to the item route so
+      // one code path plays every passage
+      pendingAutoplay = null; pendingPlay = null;
+      location.replace(itemHash(it.id, r.passage || null));
+      return;
+    }
     if (isText(it)) {
       // A book: the reader takes the route (openReader). A from/to passage
       // opens it on arrival; "Keep reading" re-routes the open book bare.
@@ -1213,6 +1244,9 @@ async function applyRoute() {
       }
     }
   } else {
+    $('lib-note').textContent = libraryNote || '';
+    $('lib-note').hidden = !libraryNote;
+    libraryNote = null;
     showView('view-library');
   }
   pendingAutoplay = null;
@@ -1606,8 +1640,8 @@ function openReader(item, routePassage) {
     passage: tp,
     clientId: clientId || 'anonymous',
     onPlace: place => saveProgress(0, place), // gated: a passage writes nothing
-    onKeep: () => { setPassage(null); if (parseRoute().passage) location.replace(itemHash(item.id, null)); },
-    onBack: () => { closePlayer(); if (parseRoute().passage) location.replace(itemHash(item.id, null)); },
+    onKeep: () => { setPassage(null); if (currentRoute?.passage) location.replace(itemHash(item.id, null)); },
+    onBack: () => { closePlayer(); if (currentRoute?.passage) location.replace(itemHash(item.id, null)); },
   });
   if (!tp) recordRecentlyPlayed(item.id); // feeds the continue row's fallback path
 }
@@ -1689,7 +1723,7 @@ function keepWatching() {
   const wasNaturalEnd = passageNaturalEnd;
   const id = currentItem.id;
   setPassage(null);
-  if (parseRoute().passage) location.replace(itemHash(id, null));
+  if (currentRoute?.passage) location.replace(itemHash(id, null));
   if (wasNaturalEnd) {
     // The item already ended: give it the natural end it was denied — the
     // finished-write and the up-next offer.
@@ -1705,7 +1739,7 @@ $('passage-keep').onclick = keepWatching;
 $('passage-back').onclick = () => {
   const id = currentItem?.id;
   closePlayer();
-  if (id != null && parseRoute().passage) location.replace(itemHash(id, null));
+  if (id != null && currentRoute?.passage) location.replace(itemHash(id, null));
 };
 video.addEventListener('timeupdate', checkPassageEnd);
 // Pressing play (ours or the <video> controls') while paused at the end
