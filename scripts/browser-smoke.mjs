@@ -173,6 +173,12 @@ async function walk(page) {
     // moment the panel is up; nothing is playing, so it says so.
     await page.waitForFunction(
       () => /\S/.test(document.getElementById('settings-activity').textContent));
+    // The subtitle look: picking a size writes the ::cue rule the page carries
+    // and remembers it, which is the whole of that setting's server side.
+    await page.selectOption('#cue-size', 'large');
+    await page.waitForFunction(
+      () => /font-size: 140%/.test(document.getElementById('cue-style').textContent));
+    await page.selectOption('#cue-size', 'medium');
     await page.click('#settings-close');
     await page.waitForFunction(() => document.getElementById('settings').hidden);
   });

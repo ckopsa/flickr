@@ -312,6 +312,16 @@ func fixtureServer(t *testing.T) (*server, http.Handler) {
 	if err := state.SetPosition(idDunePart1, "chris", 4800); err != nil {
 		t.Fatal(err)
 	}
+	// Two things put by for later: the film, and the book. The ORDER is the
+	// same trick the three writes above play — My List reads newest first and
+	// breaks a tie by key, so the LATER save has the smaller key and the
+	// shelf reads [book, film] whether the millisecond clock separated the
+	// two writes or the tie-break had to.
+	for _, key := range []string{"tmdb:109445", "book:shirley-jackson-the-haunting-of-hill-house-1959"} {
+		if err := state.Save("chris", key); err != nil {
+			t.Fatal(err)
+		}
+	}
 
 	srv := &server{library: library, state: state, policy: model.DefaultPolicy()}
 	return srv, srv.routes()
@@ -372,6 +382,7 @@ func TestHyperGolden(t *testing.T) {
 		{"search", "/api/search?q=he&client_id=chris"},
 		{"artist", "/api/artists/Radiohead?client_id=chris"},
 		{"continue", "/api/continue?client_id=chris"},
+		{"list", "/api/list?client_id=chris"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			w := get(t, h, tc.target)

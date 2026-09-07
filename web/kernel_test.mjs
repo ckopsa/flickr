@@ -73,6 +73,25 @@ test('the shell lists every file the page loads, and the cache is bumped with th
   assert.match(sw, /const CACHE = 'flickr-shell-v\d+';/);
 });
 
+// How the subtitles look is the one setting no document has an opinion about,
+// so it is split across three files: the page offers the controls and carries
+// the sheet, the kernel writes the ::cue rule into it, and the device — the
+// only half that can reach a cue — puts the line on the cues it has loaded.
+// The halves have to agree on the ids, which is what this checks.
+test('the subtitle look has a control, a rule to write and a device to place it', () => {
+  const html = read('index.html');
+  const src = read('kernel.js');
+  assert.match(html, /<style id="cue-style">/,
+    'the page carries no sheet for the kernel to write the ::cue rule into');
+  for (const id of ['cue-size', 'cue-ground', 'cue-position']) {
+    assert.match(html, new RegExp('<select id="' + id + '"'), id + ' is not on the page');
+    assert.ok(code(src).includes("'" + id + "'"), id + ' is not driven by the kernel');
+  }
+  assert.match(code(src), /::cue \{/, 'the kernel writes no ::cue rule');
+  assert.match(code(read('player.js')), /setCueLine/,
+    'the device is never told where the cues sit');
+});
+
 // --- the documents the kernel follows ----------------------------------------
 
 test('the root names everything the client needs to reach', () => {
@@ -158,6 +177,27 @@ test('the resume shelf carries its own pictures and one action per row', () => {
     assert.ok(en.actions.forget, `${en.title}: no way to take the row off the shelf`);
     assert.equal(typeof en.percent, 'number');
   }
+});
+
+// My List: the one shelf a person writes rather than one the library
+// derives. Every half of it is the document's — the root names it, the home
+// carries it, and a tile says which way the next press goes.
+test('my list is a shelf of tiles, and the bookmark says which way it goes', () => {
+  const doc = golden('list');
+  assert.equal(doc.kind, 'list');
+  assert.equal(doc.count, doc.items.length);
+  for (const t of doc.items) {
+    assert.equal(t.actions.unsave.method, 'DELETE', `${t.title}: no way off the list`);
+    assert.ok(!t.actions.save, `${t.title}: on the list and offered a save as well`);
+  }
+  assert.ok(golden('root').links.list, 'the root does not name the shelf');
+  // The library carries the same shelf, so the home draws the row without a
+  // second fetch.
+  assert.deepEqual(golden('library').list.map(t => t.self), doc.items.map(t => t.self));
+  // A press against it moves a shelf, so the kernel re-reads the view rather
+  // than patching the tile where it stands.
+  assert.match(read('kernel.js'), /name === 'save' \|\| name === 'unsave'/,
+    'the bookmark is not one of the writes the kernel re-reads after');
 });
 
 // The household dashboard behind the gear: a list of live sittings, each

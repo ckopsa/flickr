@@ -178,11 +178,18 @@ func tileFor(w *works.Work, subtitle string) *hyper.Envelope {
 	t.Field("search", searchText(w.Title, w.Author, path.Base(w.Items[0].ObjectKey)))
 	t.Link("self", workHref(w.Key), w.Title)
 	t.Link("artwork", artworkHref(w.RepresentativeItemID, w.Medium), "")
-	// The wide picture, where there is one: a row that leads with a hero
-	// rather than a grid of tiles has it on the tile it already draws.
-	if rep := memberByID(w, w.RepresentativeItemID); rep != nil &&
-		rep.Enrichment != nil && rep.Enrichment.HasBackdrop {
-		t.Link("backdrop", itemHref(rep.ID)+"/backdrop", "")
+	if rep := memberByID(w, w.RepresentativeItemID); rep != nil {
+		// The wide picture, where there is one: a row that leads with a hero
+		// rather than a grid of tiles has it on the tile it already draws.
+		if rep.Enrichment != nil && rep.Enrichment.HasBackdrop {
+			t.Link("backdrop", itemHref(rep.ID)+"/backdrop", "")
+		}
+		// The scrub sheets of the member a tap opens, on the same terms the
+		// item document offers them: a tile the pointer rests on plays the
+		// frames the scrub bar previews, and asks for them the same way.
+		if hasTrickplay(w.Medium, rep.MediaInfo) {
+			t.Link("trickplay", trickplayHref(rep.ID), "")
+		}
 	}
 	return t
 }
@@ -800,20 +807,40 @@ func (s *server) handleLibrary(w http.ResponseWriter, r *http.Request) {
 		hyper.WriteProblem(w, serverProblem(err))
 		return
 	}
+	rows, err := s.state.SavedFor(profile)
+	if err != nil {
+		hyper.WriteProblem(w, serverProblem(err))
+		return
+	}
+	saved := make(map[string]bool, len(rows))
+	for _, r := range rows {
+		saved[r.WorkKey] = true
+	}
 	now := time.Now()
 	order := libraryOrder(ws, works.Artists(ws))
+	// Every tile the grid draws carries the bookmark for the thing it stands
+	// for, so a title goes on the list from wherever it is seen rather than
+	// only from its own page. An artist's shelf carries none: a list is a
+	// list of works, and a shelf is not one.
+	tile := func(sh shelf) *hyper.Envelope {
+		t := tileOf(sh, now)
+		if sh.Work != nil {
+			listAction(t, sh.Work.Key, profile, saved[sh.Work.Key])
+		}
+		return t
+	}
 	tiles := make([]*hyper.Envelope, 0, len(order))
 	for _, sh := range order {
-		tiles = append(tiles, tileOf(sh, now))
+		tiles = append(tiles, tile(sh))
 	}
 	byKey := works.ByKey(ws)
 	recent := make([]*hyper.Envelope, 0, recentlyAddedTiles)
 	for _, sh := range recentlyAdded(order, byKey, recentlyAddedTiles) {
-		recent = append(recent, tileOf(sh, now))
+		recent = append(recent, tile(sh))
 	}
 	fresh := make([]*hyper.Envelope, 0, newEpisodeTiles)
 	for _, sh := range newEpisodes(order, now, newEpisodeTiles) {
-		fresh = append(fresh, tileOf(sh, now))
+		fresh = append(fresh, tile(sh))
 	}
 
 	doc := hyper.Doc("/api/library", "library", "Library")
@@ -828,7 +855,11 @@ func (s *server) handleLibrary(w http.ResponseWriter, r *http.Request) {
 		Field("bands", bandsOf(order)).
 		Field("items", tiles).
 		Field("recently_added", recent).
-		Field("new_episodes", fresh)
+		Field("new_episodes", fresh).
+		// What this profile put by for later, carried here as well as at
+		// /api/list: the home draws the row without a second fetch, and it is
+		// the same tiles in the same order either way (list.go).
+		Field("list", savedTiles(rows, byKey, profile))
 	// The one row that is this profile's own. It is left OUT rather than
 	// written empty: a heading over nothing is worse than no heading.
 	if seed, picks := because(order, ws, positions, becauseTiles); seed != nil {
@@ -841,6 +872,7 @@ func (s *server) handleLibrary(w http.ResponseWriter, r *http.Request) {
 	doc.Field("facets", map[string][]facet{"genre": genreFacet(order)}).
 		Link("root", "/api/", "flickr").
 		Link("continue", cont, "Continue watching").
+		Link("list", listHref(profile), "My List").
 		Link("artists", "/api/artists", "Artists")
 	hyper.WriteDoc(w, http.StatusOK, doc)
 }

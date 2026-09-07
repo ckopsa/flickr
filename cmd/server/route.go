@@ -301,10 +301,15 @@ func (s *server) handleRouteDoc(w http.ResponseWriter, r *http.Request) {
 		hyper.WriteProblem(w, serverProblem(err))
 		return
 	}
+	saved, err := s.savedSet(profile)
+	if err != nil {
+		hyper.WriteProblem(w, serverProblem(err))
+		return
+	}
 	var doc *hyper.Envelope
 	switch target.View {
 	case "work":
-		doc = s.workEnvelope(target.Work, ws, profile, positions)
+		doc = s.workEnvelope(target.Work, ws, profile, positions, saved)
 	case "artist":
 		doc = artistEnvelope(target.Artist)
 	case "item":

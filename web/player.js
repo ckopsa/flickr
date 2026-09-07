@@ -371,6 +371,9 @@
       tr.srclang = s.language || '';
       tr.label = subLabel(s);
       tr.dataset.ordinal = s.ordinal;
+      // A cue exists only once its track has been fetched and parsed, so the
+      // height the settings panel asked for is put on it then.
+      tr.addEventListener('load', () => setCueLine(cueLine));
       video.appendChild(tr);
     }
     applyLocalSubSelection();
@@ -379,6 +382,20 @@
     for (const tr of video.querySelectorAll('track')) {
       tr.track.mode = (selectedSubOrdinal != null && Number(tr.dataset.ordinal) === selectedSubOrdinal)
         ? 'showing' : 'disabled';
+    }
+  }
+
+  // How high the subtitles sit. The size and the ground are a ::cue rule the
+  // kernel writes, which needs no device at all; the LINE is a property of
+  // each cue, so it can only be set here, on whatever has been loaded — and
+  // remembered, because the next track to load wants the same answer.
+  let cueLine = 'auto';
+  function setCueLine(line) {
+    cueLine = line == null ? 'auto' : line;
+    if (!video) return;
+    for (let i = 0; i < video.textTracks.length; i++) {
+      const cues = video.textTracks[i].cues;
+      for (let j = 0; cues && j < cues.length; j++) cues[j].line = cueLine;
     }
   }
   function audioTracks() {
@@ -2026,6 +2043,9 @@
     // The setting is the device's; the settings panel hosts a second switch
     // for it, so it is read and set through here rather than duplicated.
     setAutoplay, autoplay: () => autoplayNext,
+    // Where the subtitles sit: the kernel's setting, applied to the cues the
+    // device has loaded, because a cue's line is nobody else's to set.
+    setCueLine,
     setBaseUrl: u => { baseUrl = u; },
     playingItem: () => (item ? item.id : null),
     // What the device is playing, for the one rule that turns on it: audio

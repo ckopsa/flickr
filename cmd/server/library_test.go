@@ -814,6 +814,22 @@ func TestLibraryTiles(t *testing.T) {
 	if dune.Links["artwork"].Href != "/api/items/1/cover" {
 		t.Errorf("an audiobook's picture is its own cover: %q", dune.Links["artwork"].Href)
 	}
+
+	// The scrub sheets of the member a tap opens, so a pointer resting on a
+	// tile can play the frames the scrub bar previews. A video long enough is
+	// offered them; nothing else has frames to play.
+	if frozen := byTitle["Frozen"]; frozen.Links["trickplay"].Href != "/api/items/4/trickplay.json" {
+		t.Errorf("a film's tile carries its own sheets: %q", frozen.Links["trickplay"].Href)
+	}
+	if office.Links["trickplay"].Href != "/api/items/8/trickplay.json" {
+		t.Errorf("a show's tile carries its representative episode's sheets: %q",
+			office.Links["trickplay"].Href)
+	}
+	for _, silent := range []string{"Dune", "Radiohead", "The Haunting of Hill House"} {
+		if h := byTitle[silent].Links["trickplay"]; h.Href != "" {
+			t.Errorf("%q has no frames to play, but its tile offers %q", silent, h.Href)
+		}
+	}
 }
 
 // The library document carries what is new as the SAME tiles the grid draws
