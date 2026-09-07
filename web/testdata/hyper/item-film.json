@@ -11,6 +11,13 @@
   "tech": "1920x816 h264/ac3 · 8.40 GB · 3 ch",
   "overview": "Young princess Anna sets off to find her sister.",
   "year": 2013,
+  "runtime_minutes": 102,
+  "certification": "PG",
+  "cast": [
+    "Kristen Bell",
+    "Idina Menzel",
+    "Jonathan Groff"
+  ],
   "identity": {
     "kind": "movie",
     "title": "Frozen",
@@ -27,6 +34,14 @@
       "Animation",
       "Family",
       "Adventure"
+    ],
+    "has_backdrop": true,
+    "runtime_minutes": 102,
+    "certification": "PG",
+    "cast": [
+      "Kristen Bell",
+      "Idina Menzel",
+      "Jonathan Groff"
     ]
   },
   "media_info": {
@@ -98,6 +113,9 @@
     }
   ],
   "links": {
+    "backdrop": {
+      "href": "/api/items/4/backdrop"
+    },
     "poster": {
       "href": "/api/items/4/poster"
     },

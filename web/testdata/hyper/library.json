@@ -23,6 +23,9 @@
         "artwork": {
           "href": "/api/items/8/poster"
         },
+        "backdrop": {
+          "href": "/api/items/8/backdrop"
+        },
         "self": {
           "href": "/api/works/tmdb%3A2316",
           "title": "The Office"
@@ -48,6 +51,9 @@
       "links": {
         "artwork": {
           "href": "/api/items/4/poster"
+        },
+        "backdrop": {
+          "href": "/api/items/4/backdrop"
         },
         "self": {
           "href": "/api/works/tmdb%3A109445",

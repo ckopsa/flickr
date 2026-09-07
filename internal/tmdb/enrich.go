@@ -17,7 +17,8 @@ import (
 // makes the next pass re-enrich items whose stored enrichment predates the
 // current field set, even though their identity is unchanged.
 // v2: genres + per-episode fields (title, overview, still).
-const EnrichmentVersion = 2
+// v3: backdrop, runtime, US certification and the top-billed cast.
+const EnrichmentVersion = 3
 
 // libraryStore is the slice of the store the enricher needs (narrow so tests
 // can fake it without SQLite).
@@ -30,10 +31,11 @@ type libraryStore interface {
 // by design: an unenriched item stays unenriched (still NULL in the store)
 // and is simply retried on the next scan.
 type Enricher struct {
-	Client     Client
-	Library    libraryStore
-	PostersDir string
-	StillsDir  string
+	Client       Client
+	Library      libraryStore
+	PostersDir   string
+	StillsDir    string
+	BackdropsDir string
 }
 
 // runCache memoizes per-run TMDB lookups so N episodes cost one show
@@ -43,20 +45,26 @@ type Enricher struct {
 type runCache struct {
 	shows     map[string]*Result          // lowercased show title -> result (nil = known miss)
 	posters   map[string][]byte           // poster path -> bytes
+	backdrops map[string][]byte           // backdrop path -> bytes
 	genres    map[string]map[int64]string // "movie"/"tv" -> id -> name
 	genreErr  map[string]bool             // genre list fetch failed this run
 	seasons   map[string]*Season          // "tvID/season" -> payload (nil = TMDB has no such season)
 	seasonErr map[string]bool             // season fetch failed this run
+	details   map[string]*Details         // "kind/id" -> payload (nil = TMDB has no such title)
+	detailErr map[string]bool             // detail fetch failed this run
 }
 
 func newRunCache() *runCache {
 	return &runCache{
 		shows:     map[string]*Result{},
 		posters:   map[string][]byte{},
+		backdrops: map[string][]byte{},
 		genres:    map[string]map[int64]string{},
 		genreErr:  map[string]bool{},
 		seasons:   map[string]*Season{},
 		seasonErr: map[string]bool{},
+		details:   map[string]*Details{},
+		detailErr: map[string]bool{},
 	}
 }
 
@@ -124,33 +132,24 @@ func (e *Enricher) lookup(ctx context.Context, ident *model.Identity, shows map[
 	}
 }
 
-// enrichOne persists one enrichment (images first, so has_poster/has_still
-// are honest) and returns it. A nil return means "not persisted" — either a
-// dependent fetch (genre list, season) failed and the item should be retried
-// next scan, or the store write failed.
+// enrichOne persists one enrichment (images first, so has_poster,
+// has_backdrop and has_still are honest) and returns it. A nil return means
+// "not persisted" — either a dependent fetch (genre list, details, season)
+// failed and the item should be retried next scan, or the store write failed.
 func (e *Enricher) enrichOne(ctx context.Context, it store.Item, res *Result, cache *runCache) *model.Enrichment {
-	hasPoster := false
-	if res.PosterPath != "" {
-		b, ok := cache.posters[res.PosterPath]
-		if !ok {
-			var err error
-			b, err = e.Client.Poster(ctx, res.PosterPath)
-			if err != nil {
-				b = nil
-			}
-			cache.posters[res.PosterPath] = b
-		}
-		if b != nil {
-			hasPoster = writeImage(e.PostersDir, it.ID, b)
-		}
-	}
+	hasPoster := e.image(ctx, e.PostersDir, it.ID, res.PosterPath, cache.posters, e.Client.Poster)
+	hasBackdrop := e.image(ctx, e.BackdropsDir, it.ID, res.BackdropPath, cache.backdrops, e.Client.Backdrop)
 
 	genres, ok := e.genreNames(ctx, it.Identity.Kind, res.GenreIDs, cache)
 	if !ok {
 		return nil // genre list fetch failed — skip so the item is retried
 	}
+	det, ok := e.details(ctx, it.Identity.Kind, res.ID, cache)
+	if !ok {
+		return nil // detail fetch failed — skip so the item is retried
+	}
 
-	enr := mapResult(res, hasPoster)
+	enr := mapResult(res, det, hasPoster, hasBackdrop)
 	enr.Genres = genres
 
 	if it.Identity.Kind == "episode" && it.Identity.Season > 0 && it.Identity.Episode > 0 {
@@ -178,16 +177,65 @@ func (e *Enricher) enrichOne(ctx context.Context, it store.Item, res *Result, ca
 	return enr
 }
 
+// image downloads one artwork path and writes it under the item id,
+// reporting whether the file is there afterwards. The per-run cache is keyed
+// by TMDB path, so a show's poster and backdrop are fetched once however
+// many of its episodes carry them; a failed download is cached as nil bytes.
+func (e *Enricher) image(ctx context.Context, dir string, itemID int64, path string,
+	cached map[string][]byte, fetch func(context.Context, string) ([]byte, error)) bool {
+	if path == "" || dir == "" {
+		return false
+	}
+	b, ok := cached[path]
+	if !ok {
+		var err error
+		if b, err = fetch(ctx, path); err != nil {
+			b = nil
+		}
+		cached[path] = b
+	}
+	return b != nil && writeImage(dir, itemID, b)
+}
+
+// tmdbKind is which half of TMDB an identity is looked up in: an episode is
+// its show's TV entry, and everything else enrichable is a movie.
+func tmdbKind(identKind string) string {
+	if identKind == "episode" {
+		return "tv"
+	}
+	return "movie"
+}
+
+// details returns the per-title detail payload — runtime, certification,
+// cast — from the per-run cache. ok=false means the fetch failed this run
+// (retry next scan); a nil Details with ok=true means TMDB has no such
+// title, which is legitimate and leaves those three fields empty.
+func (e *Enricher) details(ctx context.Context, identKind string, tmdbID int64, cache *runCache) (*Details, bool) {
+	kind := tmdbKind(identKind)
+	key := fmt.Sprintf("%s/%d", kind, tmdbID)
+	d, cached := cache.details[key]
+	if !cached {
+		if cache.detailErr[key] {
+			return nil, false
+		}
+		var err error
+		d, err = e.Client.Details(ctx, kind, tmdbID)
+		if err != nil {
+			cache.detailErr[key] = true
+			return nil, false
+		}
+		cache.details[key] = d
+	}
+	return d, true
+}
+
 // genreNames resolves genre ids to names via the per-run cached genre list
 // for the identity's kind. ok=false means the list fetch failed this run.
 func (e *Enricher) genreNames(ctx context.Context, identKind string, ids []int64, cache *runCache) ([]string, bool) {
 	if len(ids) == 0 {
 		return nil, true
 	}
-	kind := "movie"
-	if identKind == "episode" {
-		kind = "tv"
-	}
+	kind := tmdbKind(identKind)
 	m, cached := cache.genres[kind]
 	if !cached {
 		if cache.genreErr[kind] {
@@ -250,14 +298,25 @@ func writeImage(dir string, itemID int64, b []byte) bool {
 	return os.WriteFile(path, b, 0o644) == nil
 }
 
-// mapResult is the pure TMDB-result -> enrichment mapping.
-func mapResult(r *Result, hasPoster bool) *model.Enrichment {
-	return &model.Enrichment{
-		Version:   EnrichmentVersion,
-		TMDBID:    r.ID,
-		Title:     r.Title,
-		Year:      r.Year,
-		Overview:  r.Overview,
-		HasPoster: hasPoster,
+// mapResult is the pure TMDB-result -> enrichment mapping. det is what the
+// detail call added and may be nil — TMDB matched the search but answered
+// nothing for the title behind it. Each of its three facts stays empty when
+// TMDB did not know it, so "no certification" reads as an absence rather
+// than as a claim somebody made.
+func mapResult(r *Result, det *Details, hasPoster, hasBackdrop bool) *model.Enrichment {
+	e := &model.Enrichment{
+		Version:     EnrichmentVersion,
+		TMDBID:      r.ID,
+		Title:       r.Title,
+		Year:        r.Year,
+		Overview:    r.Overview,
+		HasPoster:   hasPoster,
+		HasBackdrop: hasBackdrop,
 	}
+	if det != nil {
+		e.RuntimeMinutes = det.RuntimeMinutes
+		e.Certification = det.Certification
+		e.Cast = det.Cast
+	}
+	return e
 }

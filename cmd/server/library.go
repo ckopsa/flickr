@@ -137,6 +137,12 @@ func tileFor(w *works.Work, subtitle string) *hyper.Envelope {
 	t.Field("search", searchText(w.Title, w.Author, path.Base(w.Items[0].ObjectKey)))
 	t.Link("self", workHref(w.Key), w.Title)
 	t.Link("artwork", artworkHref(w.RepresentativeItemID, w.Medium), "")
+	// The wide picture, where there is one: a row that leads with a hero
+	// rather than a grid of tiles has it on the tile it already draws.
+	if rep := memberByID(w, w.RepresentativeItemID); rep != nil &&
+		rep.Enrichment != nil && rep.Enrichment.HasBackdrop {
+		t.Link("backdrop", itemHref(rep.ID)+"/backdrop", "")
+	}
 	return t
 }
 

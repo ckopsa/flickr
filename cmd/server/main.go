@@ -153,6 +153,7 @@ func main() {
 		srv.enricher = &tmdb.Enricher{
 			Client: tmdb.NewHTTPClient(key), Library: library,
 			PostersDir: "data/posters", StillsDir: "data/stills",
+			BackdropsDir: "data/backdrops",
 		}
 	} else {
 		log.Printf("TMDB enrichment disabled (TMDB_API_KEY not set)")
@@ -275,6 +276,7 @@ func (s *server) routes() *http.ServeMux {
 	mux.HandleFunc("GET /api/items/{id}/poster", s.handlePoster)
 	mux.HandleFunc("GET /api/items/{id}/cover", s.handleCover)
 	mux.HandleFunc("GET /api/items/{id}/still", s.handleStill)
+	mux.HandleFunc("GET /api/items/{id}/backdrop", s.handleBackdrop)
 	mux.HandleFunc("GET /api/items/{id}/book", s.handleBook)
 	mux.HandleFunc("GET /api/items/{id}/trickplay.json", s.handleTrickplayIndex)
 	mux.HandleFunc("GET /api/items/{id}/trickplay/{file}", s.handleTrickplaySheet)
@@ -1202,6 +1204,13 @@ func (s *server) ensureCover(ctx context.Context, id int64) bool {
 // the enrichment stage.
 func (s *server) handleStill(w http.ResponseWriter, r *http.Request) {
 	s.serveItemImage(w, r, "data/stills", "no still")
+}
+
+// handleBackdrop serves the cached TMDB backdrop — the wide still a home
+// screen leads with, where the poster is the tile. Same discipline as the
+// poster: written by the enrichment stage, 404 when there is none.
+func (s *server) handleBackdrop(w http.ResponseWriter, r *http.Request) {
+	s.serveItemImage(w, r, "data/backdrops", "no backdrop")
 }
 
 func (s *server) serveItemImage(w http.ResponseWriter, r *http.Request, dir, missing string) {

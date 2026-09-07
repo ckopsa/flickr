@@ -23,7 +23,23 @@ type Result struct {
 	Overview   string
 	PosterPath string  // e.g. "/abc123.jpg"; "" = no poster
 	GenreIDs   []int64 // resolved to names via GenreList — no per-title detail call
+	// BackdropPath is the wide still a home screen leads with; "" = none.
+	BackdropPath string
 }
+
+// Details is what a search result does NOT carry, and a home screen and a
+// detail page do: one detail call per title covers all three.
+type Details struct {
+	RuntimeMinutes int // a show's is its typical episode run time
+	// Certification is the US rating ("PG", "TV-14"); "" when TMDB has
+	// none for the US, which is common and not an error.
+	Certification string
+	Cast          []string // top-billed names, in TMDB's own order
+}
+
+// castNames is how many names a detail page shows: enough to say who is in
+// it, few enough to fit under a title.
+const castNames = 5
 
 // Season is one TV season's episode listing (GET /tv/{id}/season/{n}) —
 // a single call covers every episode of that show-season.
@@ -53,6 +69,11 @@ type Client interface {
 	// means TMDB has no such season.
 	Season(ctx context.Context, tvID int64, season int) (*Season, error)
 	Still(ctx context.Context, stillPath string) ([]byte, error)
+	// Details fetches runtime, US certification and top-billed cast for one
+	// title, kind "movie" or "tv". Nil (with nil error) means TMDB has no
+	// such title.
+	Details(ctx context.Context, kind string, id int64) (*Details, error)
+	Backdrop(ctx context.Context, backdropPath string) ([]byte, error)
 }
 
 // HTTPClient talks to api.themoviedb.org v3, rate-limited to ~3 req/s so a
@@ -89,6 +110,7 @@ type searchResponse struct {
 		FirstAirDate string  `json:"first_air_date"`
 		Overview     string  `json:"overview"`
 		PosterPath   string  `json:"poster_path"`
+		BackdropPath string  `json:"backdrop_path"`
 		GenreIDs     []int64 `json:"genre_ids"`
 	} `json:"results"`
 }
@@ -134,7 +156,8 @@ func (c *HTTPClient) search(ctx context.Context, endpoint string, params url.Val
 	if title == "" {
 		title, date = top.Name, top.FirstAirDate
 	}
-	r := &Result{ID: top.ID, Title: title, Overview: top.Overview, PosterPath: top.PosterPath, GenreIDs: top.GenreIDs}
+	r := &Result{ID: top.ID, Title: title, Overview: top.Overview, PosterPath: top.PosterPath,
+		BackdropPath: top.BackdropPath, GenreIDs: top.GenreIDs}
 	if len(date) >= 4 {
 		r.Year, _ = strconv.Atoi(date[:4])
 	}
@@ -185,6 +208,91 @@ func (c *HTTPClient) Season(ctx context.Context, tvID int64, season int) (*Seaso
 	return s, nil
 }
 
+// detailsResponse is one detail call with its two appended sub-resources.
+// The movie and the TV endpoints spell the same facts differently — runtime
+// against episode_run_time, release_dates against content_ratings — so both
+// spellings are decoded here and `details` reads the one its kind uses.
+type detailsResponse struct {
+	Runtime        int   `json:"runtime"`          // movie: minutes
+	EpisodeRunTime []int `json:"episode_run_time"` // tv: minutes per episode
+	ReleaseDates   struct {
+		Results []struct {
+			Country      string `json:"iso_3166_1"`
+			ReleaseDates []struct {
+				Certification string `json:"certification"`
+			} `json:"release_dates"`
+		} `json:"results"`
+	} `json:"release_dates"`
+	ContentRatings struct {
+		Results []struct {
+			Country string `json:"iso_3166_1"`
+			Rating  string `json:"rating"`
+		} `json:"results"`
+	} `json:"content_ratings"`
+	Credits struct {
+		Cast []struct {
+			Name string `json:"name"`
+		} `json:"cast"`
+	} `json:"credits"`
+}
+
+// details reads the payload into the three facts. A missing certification is
+// left empty rather than guessed at: TMDB has no US entry for plenty of
+// titles, and "unrated" is a claim nobody made.
+func (d *detailsResponse) details(kind string) *Details {
+	out := &Details{}
+	if kind == "tv" {
+		if len(d.EpisodeRunTime) > 0 {
+			out.RuntimeMinutes = d.EpisodeRunTime[0]
+		}
+		for _, r := range d.ContentRatings.Results {
+			if r.Country == "US" && r.Rating != "" {
+				out.Certification = r.Rating
+				break
+			}
+		}
+	} else {
+		out.RuntimeMinutes = d.Runtime
+		for _, r := range d.ReleaseDates.Results {
+			if r.Country != "US" {
+				continue
+			}
+			for _, rd := range r.ReleaseDates {
+				if rd.Certification != "" {
+					out.Certification = rd.Certification
+					break
+				}
+			}
+			break
+		}
+	}
+	for _, c := range d.Credits.Cast {
+		if len(out.Cast) == castNames {
+			break
+		}
+		if c.Name != "" {
+			out.Cast = append(out.Cast, c.Name)
+		}
+	}
+	return out
+}
+
+// Details fetches /movie/{id} or /tv/{id} with the certification and credits
+// appended — one request per title, not three. A 404 is a nil Details.
+func (c *HTTPClient) Details(ctx context.Context, kind string, id int64) (*Details, error) {
+	var dr detailsResponse
+	appended := "release_dates,credits"
+	if kind == "tv" {
+		appended = "content_ratings,credits"
+	}
+	params := url.Values{"append_to_response": {appended}}
+	ok, err := c.getJSON(ctx, fmt.Sprintf("%s/%d", kind, id), params, true, &dr)
+	if err != nil || !ok {
+		return nil, err
+	}
+	return dr.details(kind), nil
+}
+
 func (c *HTTPClient) SearchMovie(ctx context.Context, title string, year int) (*Result, error) {
 	params := url.Values{"query": {title}}
 	if year > 0 {
@@ -199,6 +307,12 @@ func (c *HTTPClient) SearchTV(ctx context.Context, title string) (*Result, error
 
 func (c *HTTPClient) Poster(ctx context.Context, posterPath string) ([]byte, error) {
 	return c.image(ctx, "w342", posterPath)
+}
+
+// Backdrop downloads the wide still at w1280 — it is drawn full-bleed behind
+// a home screen, so it is the one image worth more than a thumbnail.
+func (c *HTTPClient) Backdrop(ctx context.Context, backdropPath string) ([]byte, error) {
+	return c.image(ctx, "w1280", backdropPath)
 }
 
 // Still downloads an episode still at w300 (stills are landscape frames;

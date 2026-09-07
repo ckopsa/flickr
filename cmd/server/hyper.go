@@ -217,6 +217,11 @@ func (s *server) itemEnvelope(it store.Item, wk *works.Work, full bool, position
 		doc.Field("year", y)
 	}
 	if full {
+		// The three facts a page states beside a title. They belong to the
+		// title, not to the file, so they are the item's OWN document only:
+		// down a twenty-episode member list they would be twenty copies of
+		// the show's.
+		enrichmentFacts(doc, it.Enrichment)
 		if it.Identity != nil {
 			doc.Field("identity", it.Identity)
 		}
@@ -377,15 +382,39 @@ func itemYear(it store.Item) int {
 	return 0
 }
 
+// enrichmentFacts writes what TMDB knows about the TITLE beside it: how
+// long it runs (a show's is its typical episode), the certification a kids
+// filter reads, and the few names a detail page bills. Each is left out
+// when the enrichment does not have it — a document says what it knows.
+func enrichmentFacts(doc *hyper.Envelope, e *model.Enrichment) {
+	if e == nil {
+		return
+	}
+	if e.RuntimeMinutes > 0 {
+		doc.Field("runtime_minutes", e.RuntimeMinutes)
+	}
+	if e.Certification != "" {
+		doc.Field("certification", e.Certification)
+	}
+	if len(e.Cast) > 0 {
+		doc.Field("cast", e.Cast)
+	}
+}
+
 // artworkLinks names every picture and every byte-stream this item has, by
-// relation: a TMDB poster and episode still when the enrichment fetched
-// them, the item's OWN cover for audio and text (extracted on first ask and
-// falling back to the poster route), the book itself for a reader, and the
-// scrub-preview index for a video long enough to have been given one.
+// relation: a TMDB poster, backdrop and episode still when the enrichment
+// fetched them, the item's OWN cover for audio and text (extracted on first
+// ask and falling back to the poster route), the book itself for a reader,
+// and the scrub-preview index for a video long enough to have been given one.
 func artworkLinks(doc *hyper.Envelope, it store.Item, medium string) {
 	base := itemHref(it.ID)
 	if it.Enrichment != nil && it.Enrichment.HasPoster {
 		doc.Link("poster", base+"/poster", "")
+	}
+	// The wide still, for the screens that lead with a picture rather than
+	// stand a tile in a grid.
+	if it.Enrichment != nil && it.Enrichment.HasBackdrop {
+		doc.Link("backdrop", base+"/backdrop", "")
 	}
 	if it.Enrichment != nil && it.Enrichment.HasStill {
 		doc.Link("still", base+"/still", "")
@@ -650,6 +679,14 @@ func (s *server) workEnvelope(wk *works.Work, profile string, positions map[int6
 	// else works.Work publishes is embedded as it stands, so a field added
 	// there appears here without this handler being touched.
 	doc.Field("work_kind", wk.Kind).Embed(wk)
+	// The work's representative member is the one that carries the TITLE's
+	// enrichment — a show's is any episode's, and they all say the same
+	// thing — so the runtime, the certification and the cast are stated
+	// once here rather than repeated down `members`.
+	rep := memberByID(wk, wk.RepresentativeItemID)
+	if rep != nil {
+		enrichmentFacts(doc, rep.Enrichment)
+	}
 	if profile != "" {
 		doc.Field("profile", profile)
 	}
@@ -672,10 +709,12 @@ func (s *server) workEnvelope(wk *works.Work, profile string, positions map[int6
 	doc.Field("members", members)
 
 	doc.Link("items", workHref(wk.Key)+"/items", "")
-	rep := memberByID(wk, wk.RepresentativeItemID)
 	if rep != nil {
 		if rep.Enrichment != nil && rep.Enrichment.HasPoster {
 			doc.Link("poster", itemHref(rep.ID)+"/poster", "")
+		}
+		if rep.Enrichment != nil && rep.Enrichment.HasBackdrop {
+			doc.Link("backdrop", itemHref(rep.ID)+"/backdrop", "")
 		}
 		if wk.Medium != model.MediumVideo {
 			doc.Link("cover", itemHref(rep.ID)+"/cover", "")

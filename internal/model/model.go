@@ -176,6 +176,15 @@ type Enrichment struct {
 	Overview  string   `json:"overview"`
 	HasPoster bool     `json:"has_poster"`
 	Genres    []string `json:"genres,omitempty"`
+	// HasBackdrop is the wide still a home screen leads with — the same
+	// on-disk discipline as the poster, cached under data/backdrops.
+	HasBackdrop bool `json:"has_backdrop,omitempty"`
+	// What a detail page says beside the title: how long it runs (a show's
+	// is its typical episode), the US certification a kids filter reads,
+	// and the top-billed names. Each is absent when TMDB did not know it.
+	RuntimeMinutes int      `json:"runtime_minutes,omitempty"`
+	Certification  string   `json:"certification,omitempty"`
+	Cast           []string `json:"cast,omitempty"`
 	// Per-episode fields, populated for kind=episode items from the show's
 	// TMDB season payload (one call per show-season per run).
 	EpisodeTitle    string `json:"episode_title,omitempty"`

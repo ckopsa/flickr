@@ -223,6 +223,9 @@
         "artwork": {
           "href": "/api/items/8/still"
         },
+        "backdrop": {
+          "href": "/api/items/8/backdrop"
+        },
         "poster": {
           "href": "/api/items/8/poster"
         },
