@@ -67,6 +67,17 @@
   .card:hover .poster-wrap { outline: 2px solid #5b8def; }
   .poster-wrap { aspect-ratio: 2/3; width: 100%; border-radius: 8px; background: #1e2026; overflow: hidden; position: relative; }
   .poster-wrap img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  /* a frame with no picture in it yet shimmers rather than sitting empty: the
+     kernel's one delegated load listener adds .loaded when the picture lands,
+     and the picture fades up into the frame it was already holding */
+  .poster-wrap:not(.text-tile):not(.loaded), #detail-poster:not(.loaded) {
+    background-image: linear-gradient(100deg, #1e2026 35%, #2b2e38 50%, #1e2026 65%);
+    background-size: 300% 100%; animation: shimmer 1.4s ease-in-out infinite; }
+  /* the tile's picture fades up out of its own frame; the detail poster IS
+     the frame, so it wears the shimmer itself and the picture lands on it */
+  .poster-wrap img { opacity: 0; transition: opacity 220ms ease; }
+  .poster-wrap.loaded img { opacity: 1; }
+  @keyframes shimmer { from { background-position: 150% 0; } to { background-position: -150% 0; } }
   .poster-wrap.text-tile { display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 8px; padding: 12px; text-align: center; background: linear-gradient(160deg, #232633, #191b22); }
   .text-tile .tile-title { font-size: 14px; font-weight: 600; color: #c5c8d4; word-break: break-word; }
   .text-tile .tile-sub { font-size: 11px; color: var(--muted); }
@@ -437,6 +448,25 @@
   .card:focus-visible, .cw-card:focus-visible, .item:focus-visible, summary:focus-visible,
   google-cast-launcher:focus-visible, [tabindex]:focus-visible {
     outline: 2px solid #5b8def; outline-offset: 2px;
+  }
+
+  /* --- motion ---------------------------------------------------------------
+
+     A route change cross-fades rather than cuts (kernel.js wraps the swap in
+     document.startViewTransition where the browser has one), and the poster
+     that was tapped morphs into the poster on the page it opened, because
+     both wear the same view-transition-name for the length of the swap.
+     Short: this is punctuation, not a performance. */
+  ::view-transition-old(root), ::view-transition-new(root) { animation-duration: 160ms; }
+  ::view-transition-group(*) { animation-duration: 260ms; animation-timing-function: ease; }
+
+  /* asked for less motion: no shimmer, no fade, no transition. The kernel
+     skips startViewTransition outright; this is the rest of the same answer. */
+  @media (prefers-reduced-motion: reduce) {
+    .poster-wrap, #detail-poster { animation: none; }
+    .poster-wrap img { transition: none; }
+    ::view-transition-group(*), ::view-transition-old(*), ::view-transition-new(*) {
+      animation: none !important; }
   }
 </style>
 </head>

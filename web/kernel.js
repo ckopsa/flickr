@@ -103,11 +103,71 @@
 
   // --- views -------------------------------------------------------------------
 
-  function mount(html) { $('view').innerHTML = html; }
+  // A route change swaps the whole of the view, and a cut between two screens
+  // reads as a flicker. document.startViewTransition cross-fades the swap
+  // where the browser has one; where it does not, or where the person asked
+  // for less motion, the swap is the plain swap it always was.
+  //
+  // The tapped poster is the exception to the cross-fade: it wears a
+  // view-transition-name for the length of the swap and the detail poster it
+  // becomes takes the SAME name, which is what tells the browser to morph one
+  // into the other. The name is derived from the tile's own hash, which names
+  // the same thing its `self` does, and only one element wears it at a time.
+  let morphing = null;   // the poster tapped, named and waiting to be morphed
+  let morphName = '';
+
+  function animates() {
+    return typeof document.startViewTransition === 'function' &&
+      !matchMedia('(prefers-reduced-motion: reduce)').matches;
+  }
+
+  function swap(mutate) {
+    if (!animates()) { mutate(); return; }
+    const t = document.startViewTransition(mutate);
+    // A swap that overtakes another skips it, and a skip rejects `ready`:
+    // that is the expected way of two navigations in a row, not an error.
+    if (t && t.ready) t.ready.catch(() => {});
+  }
+
+  function morph(el) {
+    if (morphing) morphing.style.viewTransitionName = ''; // one wearer at a time
+    morphing = null;
+    morphName = '';
+    if (!animates() || !el) return;
+    const poster = el.querySelector('.poster-wrap');
+    const hash = el.dataset.nav || '';
+    if (!poster || !hash) return;
+    morphName = 'poster' + hash.replace(/[^A-Za-z0-9]+/g, '-');
+    morphing = poster;
+    poster.style.viewTransitionName = morphName;
+  }
+
+  // A picture is there or it is on its way; .loaded says which, and the frame
+  // shimmers until it does (index.html carries the placeholder).
+  function markLoaded(img) {
+    (img.closest('.poster-wrap') || img).classList.add('loaded');
+  }
+
+  function mount(html) {
+    swap(() => {
+      $('view').innerHTML = html;
+      // The tapped tile went with the markup above; its name moves to the
+      // poster it became, and a picture already in the cache is already there.
+      const poster = $('detail-poster');
+      if (poster && morphName) poster.style.viewTransitionName = morphName;
+      morphing = null;
+      morphName = '';
+      for (const img of $('view').querySelectorAll('img')) {
+        if (img.complete && img.naturalWidth) markLoaded(img);
+      }
+    });
+  }
 
   function showStage(on) {
-    $('stage').hidden = !on;
-    $('view').hidden = !!on;
+    swap(() => {
+      $('stage').hidden = !on;
+      $('view').hidden = !!on;
+    });
   }
 
   // The session chrome, re-rendered from the session document every time that
@@ -562,6 +622,7 @@
       // own page is where the place to pick up from is written.
       if (actEl.dataset.nav) {
         pendingAutoplay = Number(actEl.dataset.nav.replace('#/item/', ''));
+        morph(actEl);
         navigate(actEl.dataset.nav);
         return;
       }
@@ -574,8 +635,23 @@
     if (navEl) {
       e.preventDefault();
       if (navEl.dataset.autoplay) pendingAutoplay = Number(navEl.dataset.nav.replace('#/item/', ''));
+      morph(navEl);
       navigate(navEl.dataset.nav);
     }
+  }
+
+  // A poster is fetched after its frame is drawn, so the frame shimmers until
+  // the picture lands. `load` does not bubble, so the one listener for the
+  // whole page catches it on the way down instead.
+  function onLoad(e) {
+    const img = e.target;
+    if (img && img.tagName === 'IMG') markLoaded(img);
+  }
+  // A picture that fails is settled too: the frame stops shimmering rather
+  // than promising a picture that is not coming.
+  function onImageError(e) {
+    const img = e.target;
+    if (img && img.tagName === 'IMG') markLoaded(img);
   }
 
   // The keyboard does what the mouse does. The renderers' tiles are divs with
@@ -648,6 +724,8 @@
   async function boot() {
     document.addEventListener('click', onClick);
     document.addEventListener('keydown', onKeydown);
+    document.addEventListener('load', onLoad, true); // capture: load does not bubble
+    document.addEventListener('error', onImageError, true);
     document.addEventListener('submit', onSubmit);
     window.addEventListener('hashchange', applyRoute);
     window.addEventListener('beforeunload', () => root.Player.close());
