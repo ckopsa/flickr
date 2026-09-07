@@ -184,20 +184,10 @@
     const n = Number(m[1]);
     return n >= 2 && n % 2 === 0 ? n / 2 : null;
   }
-  // The spine section (1-based) a locator lands in, for a book of `sections`
-  // spine items: ch is itself, pct is proportional (1 lands in the last
-  // section), cfi is read off the string; clamped into [1, sections]. null
-  // when it cannot be told (a page says nothing about sections), or the book
-  // has no sections.
-  function locatorSection(loc, sections) {
-    if (!loc || !(sections > 0)) return null;
-    let n = null;
-    if (loc.kind === 'ch') n = loc.n;
-    else if (loc.kind === 'pct') n = Math.floor(loc.f * sections) + 1;
-    else if (loc.kind === 'cfi') n = sectionFromCFI(loc.cfi);
-    if (n == null) return null;
-    return Math.min(sections, Math.max(1, n));
-  }
+  // Which SECTION (or, for a PDF, which PAGE) a locator lands in is not here
+  // any more: the reading session answers it (`passage.from_section` /
+  // `from_page`, cmd/server/read.go), resolved against the book the server
+  // probed rather than against what the client happens to know about it.
   // A passage that says something about the text: from or to present. The
   // reader's counterpart of isTimedPassage; an item is a film or a book, so
   // the two never both apply to one route.
@@ -230,7 +220,7 @@
 
   const api = { splitHash, parsePassage, passageQuery, isTimedPassage,
                 passageEndAt, passageEnded, runContinues, passageForNext,
-                parseLocator, formatLocator, sectionFromCFI, locatorSection,
+                parseLocator, formatLocator, sectionFromCFI,
                 isTextPassage, textPassageEnded };
   if (typeof module === 'object' && module.exports) module.exports = api;
   else Object.assign(root, api);

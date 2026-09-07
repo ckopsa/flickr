@@ -145,11 +145,12 @@ a handful of architectural decisions (see design notes below):
    no shuffle, no lyrics: the unit is the record, and the order is the
    record's.
 15. **Text reads in a reader, and a place in a text is a locator** — a
-   book is opened from `GET /api/items/{id}/book` (the epub bytes off the
-   bucket, range-capable) by a reader pane on epub.js, vendored under
+   book is opened by `POST /api/items/{id}/read`, which answers a reading
+   session naming `links.book` (the epub bytes off the bucket,
+   range-capable), and read by a reader pane on epub.js, vendored under
    `web/vendor/` with JSZip and precached by the service worker, so the
    LAN-only engine loads nothing from the internet at read time. The pane
-   shows the prober's TOC (`media_info.chapters`, one per spine item), pages,
+   shows the session's contents (`sections`, one per spine item), pages,
    and reports where the reader is as an EPUB **CFI** plus the book's own
    **percentage**: `playback_state` gained a nullable `locator TEXT` column
    beside `position_seconds`, holding `{"cfi","section","fraction"}` as
@@ -301,6 +302,7 @@ leaves the variable write to a person.
 | `GET /api/feed/media?since=CURSOR` | change feed: works changed since the cursor with per-audience progress; response carries the next cursor (`l<n>.s<n>`); no `since` = everything |
 | `POST /api/items/{id}/decision` | dry-run: decision + trace, no side effects; audio items take the audio branch (415 for text — books are read, not streamed) |
 | `POST /api/items/{id}/play` | decide and act: presigned URL (direct) or HLS session (transcode, audio-only for audio items); 415 for text. Answers the **session document** (below), and takes an optional `passage` |
+| `POST /api/items/{id}/read` | open a book: answers the **reading session** (below) — `links.book`, `sections` (or `page_count`), the profile's saved `locator`, the `passage` resolved to sections or pages — and takes an optional `passage`. 415 for anything that is not text |
 | `POST /api/items/{id}/identity` | user identity override (persists across scans) |
 | `POST /api/items/{id}/reprobe` | re-probe one item on demand (also re-discovers subtitle sidecars in its directory) |
 | `POST /api/items/{id}/enrich` | TMDB-enrich one item on demand (503 if no API key) |
@@ -316,6 +318,7 @@ leaves the variable write to a person.
 | `GET /api/sessions/{id}` | the session document: url, method, decision trace, the passage resolved, the marks, and the actions below |
 | `POST /api/sessions/{id}/progress` | the place, written to the same store as `/api/progress` — **409 `passage-on`** while a passage is on |
 | `POST /api/sessions/{id}/keep_watching` | leave the passage; progress writes are accepted from then on. Answers the session |
+| `POST /api/sessions/{id}/keep_reading` | the same, in the words of the medium: a reading session's way out of a text passage |
 | `POST /api/sessions/{id}/next` | start the work's next member on the same device, carrying a run's `until` forward. Answers the NEW session |
 | `POST /api/sessions/{id}/mark/{in\|out}` | set one end of a passage at `{"seconds": n}` (or `{"clear": true}`); snapped, swapped and turned into a run by the server. Answers the session |
 | `GET /api/sessions/{id}/link` | the marked passage: the absolute link and the sentence that says it; 409 until an in point exists |
@@ -354,7 +357,8 @@ reads the session document it gets back from play:
 | `GET /api/library` | the grid: `items`, one tile per thing in the order the grid draws them (see *Library layout*), a `genre` facet for the chip row, and `count`. A tile is a small envelope — `self` and `links.self` (the work or artist document), `kind` (`work`/`artist`), `title`, `subtitle` ("3 seasons · 42 episodes", "Radiohead · 1997 · 12 tracks", "3 albums"), `tech`, `medium`, `work_kind`, `year`, `genres`, `item_id` (the member a tap opens) and `links.artwork`, the poster or the file's own cover, chosen here rather than in the browser |
 | `GET /api/artists/{name}` | one artist's shelf: `name` as the shelf spells it (the match is case-insensitive), `album_count`, `track_count`, `albums` in year order (the year-less last) as the same tiles with their covers, and `links.artwork`. An unknown name is a `no-such-artist` problem with the library as the remedy |
 | `GET /api/sessions/{id}` | one play — direct play included, which used to have no id: `url`, `method`, `decision`, `started_at`, the `passage` resolved (with `ends_at`, the bound that applies to THIS item) and the `marks` being made, `links.item`/`back`/`work`/`next`, and the actions `progress`, `keep_watching`, `stop`, `next`, `mark_in`, `mark_out`, `link` |
-| `GET /api/-/route?hash=` | what a hash means: `view` (`library`, `work`, `artist`, `item`), the `document` to render, the `passage` resolved to item ids and spine sections, and `autoplay`. See "Deep links and passages" |
+| `GET /api/sessions/{id}` (a book) | one reading, opened by `read`: `method: "read"`, `format` (`epub`/`pdf`), `etag`, `sections` (the contents, `index` + `title`) or `page_count`, the profile's saved `locator` (or null), the `passage` resolved (`from`/`to` as locators, the `from_section`/`to_section` or `from_page`/`to_page` they land on, and `ends_at`), `links.book`/`item`/`back`/`work`, and the actions `progress`, `keep_reading`, `stop` |
+| `GET /api/-/route?hash=` | what a hash means: `view` (`library`, `work`, `artist`, `item`), the `document` to render, the `passage` resolved to item ids and to a book's spine sections or a PDF's pages, and `autoplay` — true for a text passage as for a timed one. See "Deep links and passages" |
 | `GET /api/-/passage?…` | a minted passage: its absolute `href` and the `sentence` that says it (`S03E22 2:22 – 14:14 of Beach Games`) — from an item and two times, or from a work and two of the places it publishes |
 
 Every document is one JSON object with `self`, `kind`, `title`, its own
@@ -515,25 +519,35 @@ that run, `from=1:19:00&to=1:24:30` that scene of the film, `from=ch. 3&to=ch.
 4` those two sections of the book. Both answer the same document: the
 absolute `href`, the `sentence`, and the item the passage starts in.
 
-The reader keeps the same three rules for a text passage: it opens at
-`from` (never at the saved locator), shows *End of the passage* on reaching
-`to` and refuses to turn further, and reports no place while the passage is
-on — its position leaves through the same `saveProgress()` gate the player
-uses, which is closed while a passage is set. **Keep reading** and **Back**
-are the same two ways out. A book is read, not played, so it has no session
-document yet: that client-side gate is the reader's rule until the read
-action lands (`docs/hypermedia.md`, step 5).
+A book's passage is the same session. `POST /api/items/{id}/read` opens a
+**reading session** — the same envelope, in the units a book has: no stream
+and no clock, but `links.book` for the bytes, `sections` (or `page_count`)
+for the contents, the profile's saved `locator` to resume from, and the
+passage resolved to the sections or the pages its two locators land on. The
+three rules hold word for word. It opens at `from` and never at the saved
+locator; it shows *End of the passage* on reaching `to` and turns no
+further, offering `actions.keep_reading` and `links.back` as the document
+labels them; and a locator write while the passage is on is the same **409
+`passage-on`**, with **keep_reading** as the remedy — `POST
+/api/sessions/{id}/keep_reading` clears it, and the place is saved from then
+on. The reader posts its place to `actions.progress` and treats that 409 as
+the answer it is: the client not sending is no longer the rule for a book
+either.
 
 `web/passage.js` holds the grammar (`parsePassage`, `passageQuery`, and for
-text `parseLocator`, `sectionFromCFI`, `locatorSection`) and both end
-predicates (`passageEnded`, `textPassageEnded`) as pure functions; `node
---test web/passage_test.mjs` runs their tests without a build step, as
-`node --test web/cast_test.mjs` does for `web/cast.js`. The
+text `parseLocator`, `sectionFromCFI`) and both end predicates
+(`passageEnded`, `textPassageEnded`) as pure functions — the clock is the
+browser's because it is the browser that is playing, and everything else has
+gone to the server: which section or page a locator lands in is the reading
+session's answer now. `node --test web/passage_test.mjs` runs their tests
+without a build step, as `node --test web/cast_test.mjs` does for
+`web/cast.js`. The
 marking logic left it for the server (`cmd/server/passage.go`, tested in
 `cmd/server/session_test.go`): one implementation, and the rules hold for
 every client rather than for the one that remembers them.
 `web/reader.js` resolves locators against the open EPUB, `web/pdfreader.js`
-against the open PDF.
+against the open PDF; both are handed the reading session document and
+compose no address of their own.
 
 ## Casting
 

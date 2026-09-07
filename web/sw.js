@@ -41,7 +41,12 @@
 // castMediaSpec at load time, so a v15 shell serving the new index.html would
 // throw the moment anyone cast something. web/receiver.html loads the same
 // file, but from the network on the cast device — it is not shell.
-const CACHE = 'flickr-shell-v16';
+// v17: the READER reads the session document too (hyper 5) — a book is
+// opened by POST /api/items/{id}/read, reader.js and pdfreader.js take that
+// document instead of an item and the URLs they used to guess, and
+// passage.js lost locatorSection to the server. A v16 shell serving the new
+// index.html would hand the panes an item and call a function that is gone.
+const CACHE = 'flickr-shell-v17';
 const SHELL = ['/', '/index.html', '/passage.js', '/cast.js', '/audio.js', '/audio.css', '/reader.js', '/pdfreader.js',
                '/vendor/jszip.min.js', '/vendor/epub.min.js',
                '/vendor/pdf.min.mjs', '/vendor/pdf.worker.min.mjs',

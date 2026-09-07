@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import passage from './passage.js';
 const { splitHash, parsePassage, passageQuery, isTimedPassage,
         passageEndAt, passageEnded, runContinues, passageForNext,
-        parseLocator, formatLocator, sectionFromCFI, locatorSection,
+        parseLocator, formatLocator, sectionFromCFI,
         isTextPassage, textPassageEnded } = passage;
 
 // a full passage record with every field null except the overrides
@@ -164,20 +164,6 @@ test('sectionFromCFI reads the spine step like the server does', () => {
   assert.equal(sectionFromCFI('/6/14!/4'), null);
   assert.equal(sectionFromCFI(''), null);
   assert.equal(sectionFromCFI(null), null);
-});
-
-test('locatorSection lands every kind in a 1-based section, clamped', () => {
-  assert.equal(locatorSection(parseLocator('ch:3'), 12), 3);
-  assert.equal(locatorSection(parseLocator('ch:99'), 12), 12);
-  assert.equal(locatorSection(parseLocator('pct:0'), 12), 1);
-  assert.equal(locatorSection(parseLocator('pct:0.5'), 12), 7);
-  assert.equal(locatorSection(parseLocator('pct:1'), 12), 12);
-  assert.equal(locatorSection(parseLocator('cfi:epubcfi(/6/14!/4/2)'), 12), 7);
-  assert.equal(locatorSection(parseLocator('cfi:epubcfi(/6/14!/4/2)'), 3), 3);
-  assert.equal(locatorSection(parseLocator('cfi:epubcfi(/6)'), 12), null);
-  assert.equal(locatorSection(parseLocator('ch:3'), 0), null);
-  assert.equal(locatorSection(parseLocator('pg:3'), 12), null); // a page says nothing about sections
-  assert.equal(locatorSection(null, 12), null);
 });
 
 test('isTextPassage: from or to, and never a timed one', () => {

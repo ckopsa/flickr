@@ -223,8 +223,12 @@ func (s *server) itemEnvelope(it store.Item, wk *works.Work, full bool) *hyper.E
 	artworkLinks(doc, it, medium)
 
 	if medium == model.MediumText {
+		// A book is READ through a session, the way a film is played through
+		// one (read.go): the action opens the sitting, and the bytes are
+		// `links.book` on the document it answers.
 		doc.Action("read", hyper.Action{
-			Method: "GET", Href: base + "/book", Label: "Read",
+			Method: "POST", Href: base + "/read",
+			Input: readInputSketch(), Label: "Read",
 		})
 		doc.Unavailable("play", "a book is read, not played")
 	} else {
@@ -603,7 +607,8 @@ func (s *server) workEnvelope(wk *works.Work, profile string, positions map[int6
 	case wk.Medium == model.MediumText:
 		if target != nil {
 			doc.Action("read", hyper.Action{
-				Method: "GET", Href: itemHref(target.ID) + "/book", Label: "Read",
+				Method: "POST", Href: itemHref(target.ID) + "/read",
+				Input: readInputSketch(), Label: "Read",
 			})
 		}
 		doc.Unavailable("play", "a book is read, not played")

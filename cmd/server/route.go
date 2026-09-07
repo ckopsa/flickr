@@ -46,6 +46,8 @@ type resolvedPassage struct {
 	To          string   `json:"to,omitempty"`
 	FromSection int      `json:"from_section,omitempty"`
 	ToSection   int      `json:"to_section,omitempty"`
+	FromPage    int      `json:"from_page,omitempty"`
+	ToPage      int      `json:"to_page,omitempty"`
 }
 
 // routeTarget is what a hash names, before any document is built: the pure
@@ -143,9 +145,16 @@ func itemTarget(it *store.Item, p *passage.Passage) routeTarget {
 	}
 	rp := &resolvedPassage{T: p.T, End: p.End, Until: p.Until, From: p.From, To: p.To}
 	if it.MediaInfo.MediumOrVideo() == model.MediumText {
+		from, to := passage.ParseLocator(p.From), passage.ParseLocator(p.To)
 		if n := sectionCount(it); n > 0 {
-			rp.FromSection = passage.ParseLocator(p.From).Section(n)
-			rp.ToSection = passage.ParseLocator(p.To).Section(n)
+			rp.FromSection, rp.ToSection = from.Section(n), to.Section(n)
+		}
+		// A PDF counts in pages where an EPUB counts in sections, and the
+		// reading session is opened from this answer: the route resolves
+		// whichever unit this book has (read.go does the same for its own
+		// passage, since a session can be opened without a route).
+		if n := pageCount(*it); n > 0 {
+			rp.FromPage, rp.ToPage = from.Page(n), to.Page(n)
 		}
 	}
 	t.Passage = rp

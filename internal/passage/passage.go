@@ -424,3 +424,26 @@ func (l *Locator) Section(sections int) int {
 	}
 	return min(sections, max(1, n))
 }
+
+// Page is the page (1-based) a locator lands on, for a PDF of `pages` pages:
+// pg is itself, pct is proportional (1 lands on the last page); clamped into
+// [1, pages]. 0 when it cannot be told (a section or a CFI says nothing
+// about pages — those are an EPUB's spellings), or the file's page count is
+// unknown. The page counterpart of Section: a PDF has pages where an EPUB
+// has sections, and the reader is handed a place rather than a spelling.
+func (l *Locator) Page(pages int) int {
+	if l == nil || pages <= 0 {
+		return 0
+	}
+	n := 0
+	switch l.Kind {
+	case "pg":
+		n = l.N
+	case "pct":
+		n = int(math.Floor(l.F*float64(pages))) + 1
+	}
+	if n == 0 {
+		return 0
+	}
+	return min(pages, max(1, n))
+}

@@ -401,6 +401,30 @@ func TestLocatorSectionLandsEveryKindInASection(t *testing.T) {
 	}
 }
 
+func TestLocatorPageLandsEveryKindOnAPage(t *testing.T) {
+	for _, tc := range []struct {
+		in    string
+		pages int
+		want  int
+	}{
+		{"pg:213", 400, 213},
+		{"pg:999", 400, 400},
+		{"pct:0", 400, 1},
+		{"pct:0.5", 400, 201},
+		{"pct:1", 400, 400},
+		{"pg:3", 0, 0},                      // the file would not say how many pages
+		{"ch:3", 400, 0},                    // a section says nothing about pages
+		{"cfi:epubcfi(/6/14!/4/2)", 400, 0}, // nor does a CFI
+	} {
+		if got := ParseLocator(tc.in).Page(tc.pages); got != tc.want {
+			t.Errorf("%q in a PDF of %d pages = %d, want %d", tc.in, tc.pages, got, tc.want)
+		}
+	}
+	if got := (*Locator)(nil).Page(400); got != 0 {
+		t.Errorf("no locator lands on page %d", got)
+	}
+}
+
 func TestIsTextPassageFromOrToAndNeverATimedOne(t *testing.T) {
 	for _, tc := range []struct {
 		query string

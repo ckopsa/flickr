@@ -267,6 +267,7 @@ func (s *server) routes() *http.ServeMux {
 	mux.HandleFunc("GET /api/feed/media", s.handleFeed)
 	mux.HandleFunc("POST /api/items/{id}/decision", s.handleDecision)
 	mux.HandleFunc("POST /api/items/{id}/play", s.handlePlay)
+	mux.HandleFunc("POST /api/items/{id}/read", s.handleRead)
 	mux.HandleFunc("POST /api/items/{id}/identity", s.handleOverrideIdentity)
 	mux.HandleFunc("POST /api/items/{id}/reprobe", s.handleReprobe)
 	mux.HandleFunc("POST /api/items/{id}/enrich", s.handleEnrich)
@@ -286,6 +287,9 @@ func (s *server) routes() *http.ServeMux {
 	mux.HandleFunc("GET /api/sessions/{id}", s.handleSessionDoc)
 	mux.HandleFunc("POST /api/sessions/{id}/progress", s.handleSessionProgress)
 	mux.HandleFunc("POST /api/sessions/{id}/keep_watching", s.handleKeepWatching)
+	// keep_reading is keep_watching in the words of the medium (read.go):
+	// one handler, because it is one rule the passage holds either way.
+	mux.HandleFunc("POST /api/sessions/{id}/keep_reading", s.handleKeepWatching)
 	mux.HandleFunc("POST /api/sessions/{id}/next", s.handleSessionNext)
 	mux.HandleFunc("POST /api/sessions/{id}/mark/{kind}", s.handleSessionMark)
 	mux.HandleFunc("GET /api/sessions/{id}/link", s.handleSessionLink)
