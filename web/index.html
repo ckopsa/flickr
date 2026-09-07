@@ -54,10 +54,15 @@
   #scan-status { font-size: 12px; color: var(--muted); }
   #hw { font-size: 11px; padding: 2px 8px; border-radius: 10px; background: #1e2c42; color: var(--accent); cursor: help; }
 
-  /* library grid */
-  #lib-bar { display: flex; gap: 10px; align-items: center; padding: 16px 20px 0; }
-  #lib-count { font-size: 12px; color: var(--muted); }
-  #grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 16px; padding: 16px 20px 30px; }
+  /* the library's bands: #grid is the stack of sections now, and the grid of
+     tiles is inside each one. "Recently added" is a row you scroll rather
+     than a block that pushes the bands off the screen. */
+  #grid { padding: 4px 20px 30px; }
+  .band { margin-top: 18px; }
+  .band > h3 { font-size: 13px; color: var(--muted); margin: 0 0 10px; font-weight: 600; }
+  .band-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 16px; }
+  .band-row { display: flex; gap: 16px; overflow-x: auto; scrollbar-width: thin; padding-bottom: 6px; }
+  .band-row > .card { flex: 0 0 130px; }
   .card { cursor: pointer; }
   .card:hover .poster-wrap { outline: 2px solid #5b8def; }
   .poster-wrap { aspect-ratio: 2/3; width: 100%; border-radius: 8px; background: #1e2026; overflow: hidden; position: relative; }
@@ -289,12 +294,11 @@
      devices (the player's chrome around the persistent media element, and the
      reader's container), and the two are never both up */
   #view > .back, #stage > .back { margin-left: 0; }
-  #lib-bar, #genre-row, #cw, #grid, #show-title, #show-note, #episode-list,
+  #genre-row, #cw, #grid, #show-title, #show-note, #episode-list,
   #extras-head, #extras-list, #artist-head, #artist-albums { margin-left: 0; margin-right: 0; }
   #grid { padding-left: 0; padding-right: 0; }
   #artist-head { margin-left: 0; }
   #artist-albums { padding-left: 0; padding-right: 0; }
-  #lib-bar { padding-left: 0; }
   #genre-row { padding-left: 0; }
   #cw { padding-left: 0; }
   #show-title { margin-left: 0; }
@@ -343,9 +347,10 @@
     header, #view, #stage { padding-inline: 12px; }
     header { padding-block: 8px; gap: 8px; }
     header h1 { font-size: 14px; }
-    #lib-bar { flex-wrap: wrap; padding-top: 12px; }
     #search { width: 100%; max-width: none; }
-    #grid { grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 12px; }
+    .band-grid { grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 12px; }
+    .band-row { gap: 12px; }
+    .band-row > .card { flex: 0 0 110px; }
     .card .c-title { font-size: 12px; }
     .cw-card { flex: 0 0 110px; }
     .item.enriched img.still { width: 96px; }

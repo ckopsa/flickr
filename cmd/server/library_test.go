@@ -18,10 +18,11 @@ func wk(key, kind, medium, author string) works.Work {
 		RepresentativeItemID: 1}
 }
 
-// The order of the grid is one function's answer, and this is its table: the
-// bands (shows, films, artist shelves, audio works, books), what sits in
-// each, and the one work that gets no tile at all — an album its artist's
-// shelf already stands for.
+// The order of the library is one function's answer, and this is its table:
+// the bands (tv, movies, music, audiobooks, books), what sits in each, and
+// the one work that gets no tile at all — an album its artist's shelf
+// already stands for. Each want is "band/subject", because the band a shelf
+// lands in is now part of the answer: the home screen draws a row per band.
 func TestLibraryOrder(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
@@ -38,8 +39,8 @@ func TestLibraryOrder(t *testing.T) {
 				wk("show:the-office", "show", model.MediumVideo, ""),
 			},
 			// The album is not here: its artist's shelf is.
-			want: []string{"show:the-office", "movie:frozen", "Radiohead",
-				"audiobook:dune", "book:1984"},
+			want: []string{"tv/show:the-office", "movies/movie:frozen", "music/Radiohead",
+				"audiobooks/audiobook:dune", "books/book:1984"},
 		},
 		{
 			name: "the works' own order holds inside a band",
@@ -49,7 +50,8 @@ func TestLibraryOrder(t *testing.T) {
 				wk("show:atlanta", "show", model.MediumVideo, ""),
 				wk("show:the-office", "show", model.MediumVideo, ""),
 			},
-			want: []string{"show:atlanta", "show:the-office", "movie:arrival", "movie:frozen"},
+			want: []string{"tv/show:atlanta", "tv/show:the-office",
+				"movies/movie:arrival", "movies/movie:frozen"},
 		},
 		{
 			name: "an album nobody filed under an artist keeps its own tile",
@@ -57,7 +59,7 @@ func TestLibraryOrder(t *testing.T) {
 				wk("album:untitled", "album", model.MediumAudio, ""),
 				wk("album:kid-a", "album", model.MediumAudio, "Radiohead"),
 			},
-			want: []string{"Radiohead", "album:untitled"},
+			want: []string{"music/Radiohead", "music/album:untitled"},
 		},
 		{
 			name: "a file the path could not place lands by its medium",
@@ -67,7 +69,7 @@ func TestLibraryOrder(t *testing.T) {
 				wk("file:3", "file", model.MediumVideo, ""),
 				wk("show:atlanta", "show", model.MediumVideo, ""),
 			},
-			want: []string{"show:atlanta", "file:3", "file:1", "file:2"},
+			want: []string{"tv/show:atlanta", "movies/file:3", "music/file:1", "books/file:2"},
 		},
 		{name: "an empty library is an empty grid"},
 	} {
@@ -75,10 +77,10 @@ func TestLibraryOrder(t *testing.T) {
 			var got []string
 			for _, sh := range libraryOrder(tc.works, works.Artists(tc.works)) {
 				if sh.Artist != nil {
-					got = append(got, sh.Artist.Name)
+					got = append(got, sh.Band+"/"+sh.Artist.Name)
 					continue
 				}
-				got = append(got, sh.Work.Key)
+				got = append(got, sh.Band+"/"+sh.Work.Key)
 			}
 			if strings.Join(got, ", ") != strings.Join(tc.want, ", ") {
 				t.Errorf("order = [%s], want [%s]", strings.Join(got, ", "), strings.Join(tc.want, ", "))
@@ -205,13 +207,18 @@ type tile struct {
 	Genres   []string `json:"genres"`
 	ItemID   int64    `json:"item_id"`
 	Search   string   `json:"search"`
+	Band     string   `json:"band"`
 	Links    map[string]struct {
 		Href string `json:"href"`
 	} `json:"links"`
 }
 
 type libraryDoc struct {
-	Count         int    `json:"count"`
+	Count int `json:"count"`
+	Bands []struct {
+		Key   string `json:"key"`
+		Title string `json:"title"`
+	} `json:"bands"`
 	Items         []tile `json:"items"`
 	RecentlyAdded []tile `json:"recently_added"`
 	Facets        map[string][]struct {
@@ -231,6 +238,67 @@ func library(t *testing.T, h http.Handler, target string) libraryDoc {
 		t.Fatalf("GET %s: %v (%s)", target, err, w.Body)
 	}
 	return doc
+}
+
+// The document names its rows and every tile names the row it sits in, so a
+// screen can draw headed sections without grouping anything itself. The
+// bands come in the document's own order, and only the ones that hold
+// something are offered.
+func TestLibraryBands(t *testing.T) {
+	_, h := fixtureServer(t)
+	doc := library(t, h, "/api/library?client_id=chris")
+
+	var keys, titles []string
+	for _, b := range doc.Bands {
+		keys = append(keys, b.Key)
+		titles = append(titles, b.Title)
+	}
+	if want := "tv, movies, music, audiobooks, books"; strings.Join(keys, ", ") != want {
+		t.Errorf("bands = [%s], want [%s]", strings.Join(keys, ", "), want)
+	}
+	for i, tl := range titles {
+		if tl == "" {
+			t.Errorf("band %q has no heading", keys[i])
+		}
+	}
+
+	// Every tile lands in a band the document offers, and the tiles come in
+	// band order: a screen renders them section by section without sorting.
+	offered := map[string]int{}
+	for i, k := range keys {
+		offered[k] = i
+	}
+	last := -1
+	for _, tl := range doc.Items {
+		at, ok := offered[tl.Band]
+		if !ok {
+			t.Fatalf("%q is in band %q, which the document does not offer", tl.Title, tl.Band)
+		}
+		if at < last {
+			t.Errorf("%q (band %q) comes after a later band's tile", tl.Title, tl.Band)
+		}
+		last = at
+	}
+
+	// A tile drawn out of its row still says which row it belongs to.
+	for _, tl := range doc.RecentlyAdded {
+		if tl.Band == "" {
+			t.Errorf("the recently-added tile %q names no band", tl.Title)
+		}
+	}
+
+	byTitle := map[string]tile{}
+	for _, tl := range doc.Items {
+		byTitle[tl.Title] = tl
+	}
+	for title, want := range map[string]string{
+		"The Office": "tv", "Frozen": "movies", "Radiohead": "music",
+		"Dune": "audiobooks", "Flatland": "books",
+	} {
+		if got := byTitle[title].Band; got != want {
+			t.Errorf("%q is in band %q, want %q", title, got, want)
+		}
+	}
 }
 
 // Every tile says where it goes and what to draw, and the artist's shelf

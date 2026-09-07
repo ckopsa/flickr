@@ -1,7 +1,7 @@
 // flickr — the renderers: one per document kind, each a PURE FUNCTION of the
 // envelope (docs/hypermedia.md §The client).
 //
-//   library   the grid, its genre chips and the count the header's search filtered
+//   library   the banded rows, their headings and the genre chips
 //   work      the show's episode list, the album's or audiobook's pane, the book's
 //   artist    one name's shelf of records
 //   item      the detail pane
@@ -161,12 +161,46 @@
     return true;
   }
 
+  // One headed row of tiles. A heading with nothing under it is never drawn,
+  // so the caller filters first and only builds a section it has tiles for.
+  function bandSection(heading, tiles, cls, attr) {
+    return '<section class="band"' + (attr || '') + '>' +
+      (heading ? '<h3>' + esc(heading) + '</h3>' : '') +
+      '<div class="' + cls + '">' + tiles.map(t => card(t)).join('') + '</div>' +
+      '</section>';
+  }
+
+  // The library is ROWS, not one wall: what is new, then a section per band
+  // the document names — `bands` is an ordered list of {key, title} and every
+  // tile says which band it sits in, so nothing is grouped or sorted here.
+  // The search box and the genre chip filter INSIDE the sections, and a
+  // section their filter empties is not drawn at all.
   function libraryGrid(doc, state) {
     const tiles = (doc && doc.items) || [];
     if (!tiles.length) return { html: '<div id="empty">No items yet — run a scan.</div>', count: 0 };
     const kept = tiles.filter(t => matches(t, state));
     if (!kept.length) return { html: '<div id="empty">Nothing matches your search.</div>', count: 0 };
-    return { html: kept.map(t => card(t)).join(''), count: kept.length };
+
+    let html = '';
+    // What arrived lately leads: the document's own selection of the same
+    // tiles, drawn as a row rather than a grid.
+    const recent = ((doc && doc.recently_added) || []).filter(t => matches(t, state));
+    if (recent.length) {
+      html += bandSection('Recently added', recent, 'band-row', ' id="recent-row"');
+    }
+    const named = {};
+    for (const b of (doc.bands || [])) {
+      named[b.key] = true;
+      const inBand = kept.filter(t => t.band === b.key);
+      if (inBand.length) {
+        html += bandSection(b.title, inBand, 'band-grid', ' data-band="' + esc(b.key) + '"');
+      }
+    }
+    // A tile whose band the document did not name is still drawn, under no
+    // heading, at the end: no tile is ever invisible because a name moved.
+    const rest = kept.filter(t => !named[t.band]);
+    if (rest.length) html += bandSection('', rest, 'band-grid', ' data-band=""');
+    return { html: html, count: kept.length };
   }
 
   function genreRow(doc, state) {
@@ -179,18 +213,15 @@
     return '<div id="genre-row">' + chips + '</div>';
   }
 
+  // The home screen, top to bottom: the chips, the resume shelf the kernel
+  // fills in (#cw), then the banded sections. There is no tile count any
+  // more — "6 titles" told nobody anything a headed row does not.
   function library(doc, state) {
     const s = state || {};
-    const grid = libraryGrid(doc, s);
     return '<div id="lib-note"' + (s.note ? '' : ' hidden') + '>' + esc(s.note || '') + '</div>' +
       genreRow(doc, s) +
       '<div id="cw" hidden></div>' +
-      // The search box is the header's — it outlives this render, so the count
-      // is all the bar carries.
-      '<div id="lib-bar">' +
-        '<span id="lib-count">' + (grid.count ? esc(grid.count + ' title' + (grid.count === 1 ? '' : 's')) : '') + '</span>' +
-      '</div>' +
-      '<div id="grid">' + grid.html + '</div>';
+      '<div id="grid">' + libraryGrid(doc, s).html + '</div>';
   }
 
   // --- continue ----------------------------------------------------------------

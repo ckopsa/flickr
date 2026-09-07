@@ -4,6 +4,28 @@
   "title": "Library",
   "profile": "chris",
   "count": 6,
+  "bands": [
+    {
+      "key": "tv",
+      "title": "TV"
+    },
+    {
+      "key": "movies",
+      "title": "Movies"
+    },
+    {
+      "key": "music",
+      "title": "Music"
+    },
+    {
+      "key": "audiobooks",
+      "title": "Audiobooks"
+    },
+    {
+      "key": "books",
+      "title": "Books"
+    }
+  ],
   "items": [
     {
       "self": "/api/works/tmdb%3A2316",
@@ -19,6 +41,7 @@
       ],
       "item_id": 8,
       "search": "the office s03e22 - beach games.mkv",
+      "band": "tv",
       "links": {
         "artwork": {
           "href": "/api/items/8/poster"
@@ -48,6 +71,7 @@
       ],
       "item_id": 4,
       "search": "frozen frozen.mkv",
+      "band": "movies",
       "links": {
         "artwork": {
           "href": "/api/items/4/poster"
@@ -70,6 +94,7 @@
       "subtitle": "3 albums",
       "tech": "artist · 1993–1997",
       "search": "radiohead pablo honey ok computer the bends",
+      "band": "music",
       "links": {
         "artwork": {
           "href": "/api/items/10/cover"
@@ -92,6 +117,7 @@
       "tech": "audiobook · aac · 22:20:00",
       "item_id": 1,
       "search": "dune frank herbert 01 - part 1.m4b",
+      "band": "audiobooks",
       "links": {
         "artwork": {
           "href": "/api/items/1/cover"
@@ -114,6 +140,7 @@
       "tech": "text · 3 MB · 400 p.",
       "item_id": 12,
       "search": "flatland edwin a. abbott flatland.pdf",
+      "band": "books",
       "links": {
         "artwork": {
           "href": "/api/items/12/cover"
@@ -136,6 +163,7 @@
       "tech": "text · 1 MB · 8 ch",
       "item_id": 3,
       "search": "the haunting of hill house shirley jackson the haunting of hill house.epub",
+      "band": "books",
       "links": {
         "artwork": {
           "href": "/api/items/3/cover"
@@ -157,6 +185,7 @@
       "subtitle": "3 albums",
       "tech": "artist · 1993–1997",
       "search": "radiohead pablo honey ok computer the bends",
+      "band": "music",
       "links": {
         "artwork": {
           "href": "/api/items/10/cover"
@@ -183,6 +212,7 @@
       ],
       "item_id": 4,
       "search": "frozen frozen.mkv",
+      "band": "movies",
       "links": {
         "artwork": {
           "href": "/api/items/4/poster"
@@ -210,6 +240,7 @@
       ],
       "item_id": 8,
       "search": "the office s03e22 - beach games.mkv",
+      "band": "tv",
       "links": {
         "artwork": {
           "href": "/api/items/8/poster"
@@ -235,6 +266,7 @@
       "tech": "audiobook · aac · 22:20:00",
       "item_id": 1,
       "search": "dune frank herbert 01 - part 1.m4b",
+      "band": "audiobooks",
       "links": {
         "artwork": {
           "href": "/api/items/1/cover"
@@ -257,6 +289,7 @@
       "tech": "text · 1 MB · 8 ch",
       "item_id": 3,
       "search": "the haunting of hill house shirley jackson the haunting of hill house.epub",
+      "band": "books",
       "links": {
         "artwork": {
           "href": "/api/items/3/cover"
@@ -279,6 +312,7 @@
       "tech": "text · 3 MB · 400 p.",
       "item_id": 12,
       "search": "flatland edwin a. abbott flatland.pdf",
+      "band": "books",
       "links": {
         "artwork": {
           "href": "/api/items/12/cover"

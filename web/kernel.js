@@ -146,14 +146,12 @@
   }
 
   // The search box is the header's and outlives every render, so typing in it
-  // repaints the grid in place rather than the whole view.
+  // repaints the banded sections in place rather than the whole view.
   function filterLibrary() {
     const grid = $('grid');
     if (!grid) return; // not on the library: the box is hidden there anyway
     libState.q = $('search').value.trim().toLowerCase();
-    const g = R.libraryGrid(libraryDoc, libState);
-    grid.innerHTML = g.html;
-    $('lib-count').textContent = g.count ? g.count + ' title' + (g.count === 1 ? '' : 's') : '';
+    grid.innerHTML = R.libraryGrid(libraryDoc, libState).html;
   }
 
   function paintContinue() {

@@ -145,12 +145,53 @@ test('a missing action is a control that is not there', () => {
 
 // --- what each view actually draws -------------------------------------------
 
-test('the library draws one card per tile, in the document order', () => {
+// The titles a stretch of HTML draws, in the order it draws them.
+const cardTitles = html => [...html.matchAll(/class="c-title">([^<]*)</g)].map(m => unesc(m[1]));
+
+// The bands are the document's, so the sections are too: one per band the
+// document names, under its own heading, holding the tiles that name it.
+test('the library draws a headed section per band, in the document order', () => {
   const doc = golden('library');
   const html = R.library(doc, {});
-  const titles = [...html.matchAll(/class="c-title">([^<]*)</g)].map(m => unesc(m[1]));
-  assert.deepEqual(titles, doc.items.map(t => R.esc(t.title)).map(unesc));
-  assert.match(html, /6 titles/);
+
+  const headings = [...html.matchAll(/<section class="band"[^>]*>\s*<h3>([^<]*)</g)].map(m => unesc(m[1]));
+  assert.deepEqual(headings, ['Recently added'].concat(doc.bands.map(b => b.title)));
+
+  // Every tile is drawn once per section it belongs to, and the bands
+  // together draw the document's items in the document's own order.
+  const bandsHtml = html.slice(html.indexOf('data-band='));
+  assert.deepEqual(cardTitles(bandsHtml), doc.items.map(t => unesc(R.esc(t.title))));
+  for (const b of doc.bands) {
+    const section = bandsHtml.split('data-band="' + b.key + '"')[1].split('</section>')[0];
+    assert.deepEqual(cardTitles(section),
+      doc.items.filter(t => t.band === b.key).map(t => unesc(R.esc(t.title))));
+  }
+
+  // The count went: a headed row says what "6 titles" was trying to.
+  assert.doesNotMatch(html, /\d+ titles?/);
+});
+
+// What arrived lately leads, and it is the same tiles the bands hold.
+test('recently added is the first row, above the bands', () => {
+  const doc = golden('library');
+  const html = R.library(doc, {});
+  assert.ok(html.indexOf('id="recent-row"') < html.indexOf('data-band='));
+  const row = html.split('id="recent-row"')[1].split('</section>')[0];
+  assert.deepEqual(cardTitles(row), doc.recently_added.map(t => unesc(R.esc(t.title))));
+
+  // A document with nothing new in it draws no row at all.
+  const bare = Object.assign({}, doc, { recently_added: [] });
+  assert.ok(!R.library(bare, {}).includes('id="recent-row"'));
+});
+
+// Search filters INSIDE the sections, and a section it empties disappears
+// rather than standing as a heading over nothing.
+test('a section the search empties is not drawn', () => {
+  const doc = golden('library');
+  const html = R.library(doc, { q: 'dune' });
+  const headings = [...html.matchAll(/<section class="band"[^>]*>\s*<h3>([^<]*)</g)].map(m => unesc(m[1]));
+  assert.deepEqual(headings, ['Recently added', 'Audiobooks']);
+  assert.deepEqual(cardTitles(html.slice(html.indexOf('data-band='))), ['Dune']);
 });
 
 // A tile is a div, so it is reachable only if the renderer says so: the
