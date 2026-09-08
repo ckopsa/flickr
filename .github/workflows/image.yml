@@ -148,9 +148,14 @@ jobs:
           TAG: ${{ steps.tag.outputs.sha }}
         run: |
           set -euo pipefail
+          # The LAN registry has dropped a large upload mid-way twice today
+          # (`tls: bad record MAC`, 2026-09-08). A push is idempotent per
+          # blob — crane skips what the registry already holds — so a
+          # second try costs only the blob that broke.
+          push() { local n; for n in 1 2 3; do "$@" && return 0; echo "push attempt $n failed; retrying in 20s"; sleep 20; done; "$@"; }
           # the layer on the arm64 base, then the config the Dockerfile set:
           # PATH with jellyfin-ffmpeg first, workdir, entrypoint
-          crane --platform linux/arm64 append -b "$BASE" -f layer.tar -t "${IMAGE}:${TAG}"
+          push crane --platform linux/arm64 append -b "$BASE" -f layer.tar -t "${IMAGE}:${TAG}"
           crane --platform linux/arm64 mutate "${IMAGE}:${TAG}" -t "${IMAGE}:${TAG}" \
             --entrypoint /app/server --workdir /app \
             -e PATH=/usr/lib/jellyfin-ffmpeg:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
@@ -306,7 +311,10 @@ jobs:
       - name: Assemble and push ${{ env.TRANSCRIBER_IMAGE }}:${{ needs.build.outputs.tag }}
         run: |
           set -euo pipefail
-          crane --platform linux/amd64 append -b "$TRANSCRIBER_BASE" -f layer.tar -t "${TRANSCRIBER_IMAGE}:${TAG}"
+          # the same retry as the server's push: the whisper base is two
+          # large layers, the very upload the registry has dropped before
+          push() { local n; for n in 1 2 3; do "$@" && return 0; echo "push attempt $n failed; retrying in 20s"; sleep 20; done; "$@"; }
+          push crane --platform linux/amd64 append -b "$TRANSCRIBER_BASE" -f layer.tar -t "${TRANSCRIBER_IMAGE}:${TAG}"
           # the base's entrypoint is `bash -c`; ours is the worker. PATH
           # keeps /app/build/bin first, where the base puts whisper-cli;
           # its runtime stage is ubuntu 24.04 and already carries ffmpeg,
