@@ -10,8 +10,11 @@
 # `http` port. Then three reads: the root document, the library, and the
 # route resolver for `#/`, each with its status and content type, and the
 # root's body so a refusal reads as the sentence it is. The job fails when
-# the root is not a 200 JSON document. Nomad's job status and the task's
-# recent stderr follow, best-effort (the token may not read logs).
+# the root is neither a 200 JSON document nor, behind the sign-in, the 401
+# problem whose remedy names the login door — and, gated or not, when
+# /api/system is not 200, since that is the health check the orchestrator
+# reads. Nomad's job status and the task's recent stderr follow,
+# best-effort (the token may not read logs).
 
 name: probe
 
@@ -110,14 +113,35 @@ jobs:
           if read_one "/api/"; then
             echo "--- root body (first 600 bytes) ---"; head -c 600 body.txt; echo; echo "---"
             status=$(curl -sS -m 15 -o /dev/null -w '%{http_code}' "$URL/api/" || echo 000)
-            if [ "$status" != "200" ] || ! python3 -c 'import json,sys; json.load(open("body.txt"))' 2>/dev/null; then
-              echo "::error::the root is not a 200 JSON document (status $status)"; fail=1
+            # Behind Keycloak the root refuses an anonymous reader in words:
+            # a 401 problem whose remedy is the login door. That is the
+            # server standing, not falling over.
+            cat > root.py <<'PY'
+          import json, sys
+          status = sys.argv[1]
+          d = json.load(open("body.txt"))
+          if status == "200":
+              print("root: open, %s" % d.get("kind"))
+          elif status == "401" and (d.get("remedy") or {}).get("link", {}).get("href", "").startswith("/auth/"):
+              print("root: gated, sign in at %s" % d["remedy"]["link"]["href"])
+          else:
+              sys.exit(1)
+          PY
+            if ! python3 root.py "$status" 2>/dev/null; then
+              echo "::error::the root is neither a 200 document nor a 401 problem with a login remedy (status $status)"; fail=1
             fi
           else
             fail=1
           fi
-          read_one "/api/library" && python3 -c 'import json; d=json.load(open("body.txt")); print("library: %d tiles, bands %s" % (d.get("count",0), [b.get("key") for b in d.get("bands",[])]))' || true
-          read_one "/api/-/route?hash=%23%2F" && python3 -c 'import json; d=json.load(open("body.txt")); print("route: view", d.get("view"))' || true
+          if read_one "/api/system"; then
+            status=$(curl -sS -m 15 -o /dev/null -w '%{http_code}' "$URL/api/system" || echo 000)
+            [ "$status" = "200" ] || { echo "::error::/api/system is $status, and it is the health check"; fail=1; }
+          else
+            fail=1
+          fi
+          read_one "/api/library" && python3 -c 'import json; d=json.load(open("body.txt")); print("library: %d tiles, bands %s" % (d.get("count",0), [b.get("key") for b in d.get("bands",[])]) if "bands" in d else "library: %s" % d.get("title"))' || true
+          read_one "/api/-/route?hash=%23%2F" && python3 -c 'import json; d=json.load(open("body.txt")); print("route: view", d.get("view") or d.get("title"))' || true
+          read_one "/auth/login" || true
           read_one "/" >/dev/null && echo "/: $(head -c 80 body.txt | tr -d '\n')..." || true
           exit $fail
 

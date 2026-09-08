@@ -205,11 +205,13 @@ is the gate's own 401 problem. On success it puts a viewer on the context
 (`device:<sid>`) and dispatches the plain path back onto the mux, which the
 gate lets through because a viewer is already there.
 
-The session document writes four of its addresses that way, and only
-four: `url` (the stream the sender loads), `self` (what goes in the load's
-`customData`, and what the receiver fetches), `links.artwork` (the picture
-the device draws) and `links.telemetry` (where it posts back — named only
-when there is a gate). The rest are the sender's, followed by a browser
-with the household cookie. With no issuer configured there is no relying
-party, nothing is tokened, and every document is byte for byte the one the
-goldens hold.
+The session document writes four of its addresses that way: `url` (the
+stream the sender loads), `self` (what goes in the load's `customData`, and
+what the receiver fetches), `links.artwork` (the picture the device draws)
+and `links.telemetry` (where it posts back — named only when there is a
+gate). It carries the item's subtitle tracks too — the same rows, tokened —
+because the receiver's text tracks are loaded from this one document and
+the item's own addresses are the browser's. The rest are the sender's,
+followed by a browser with the household cookie. With no issuer configured
+there is no relying party, nothing is tokened, and every document is byte
+for byte the one the goldens hold.

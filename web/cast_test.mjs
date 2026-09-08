@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 // through its IIFE, so take the default.
 import cast from './cast.js';
 const { castAbsolute: absolute, sessionEndBound, castSeekOffset, castReceiverBound,
-        castStartTime, castMediaSpec } = cast;
+        castStartTime, castMediaSpec, castSubtitles } = cast;
 
 // A direct-play session document, shaped as cmd/server/session.go writes it.
 const direct = {
@@ -123,4 +123,30 @@ test('a document from an older server still loads', () => {
   const oldDirect = castMediaSpec({ method: 'direct_play', url: 'https://s/x.mp4' }, null, {});
   assert.equal(oldDirect.contentType, 'video/mp4');
   assert.equal(oldDirect.customData, null);
+});
+
+test('the receiver\'s tracks are the session\'s when it carries them', () => {
+  // Behind the gate the session document's hrefs are tokened; the item's
+  // plain ones would be 401 on a device that holds no cookie.
+  const item = {
+    subtitles: [
+      { ordinal: 0, language: 'eng', title: 'English', supported: true, href: '/api/items/8/subtitles/0.vtt' },
+      { ordinal: 1, language: 'eng', title: 'English (full)', supported: false },
+    ],
+  };
+  const gated = {
+    ...direct,
+    subtitles: [
+      { ordinal: 0, language: 'eng', title: 'English', supported: true, href: '/d/tok.mac/api/items/8/subtitles/0.vtt' },
+      { ordinal: 1, language: 'eng', title: 'English (full)', supported: false },
+    ],
+  };
+  assert.deepEqual(castSubtitles(gated, item).map(s => s.href),
+                   ['/d/tok.mac/api/items/8/subtitles/0.vtt']);
+  // An older server sends no such field: the item's list is what is left.
+  assert.deepEqual(castSubtitles(direct, item).map(s => s.href),
+                   ['/api/items/8/subtitles/0.vtt']);
+  // A bitmap track carries no href, and nothing carries none at all.
+  assert.deepEqual(castSubtitles(direct, { subtitles: [{ ordinal: 1, supported: false }] }), []);
+  assert.deepEqual(castSubtitles(null, null), []);
 });

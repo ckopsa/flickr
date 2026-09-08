@@ -13,6 +13,7 @@
 //   passage.ends_at                  the bound to stop at, absolute in the
 //                                    item's timeline
 //   title, links.work, links.artwork what the device shows while it plays
+//   subtitles                        the tracks it loads, addressed for it
 //   self                             the document's own address
 //
 // Both ends of the cast read it the same way: index.html builds the
@@ -91,8 +92,8 @@
 
   // castMediaSpec is the load, described. It is a plain object rather than a
   // chrome.cast.media.MediaInfo so that it can be read in a test without the
-  // Cast SDK; index.html turns it into the SDK's objects and adds the
-  // subtitle tracks, which are the item document's and need its ordinals.
+  // Cast SDK; player.js turns it into the SDK's objects and adds the
+  // subtitle tracks castSubtitles picked.
   //
   // `item` is only a fallback for the title: the session document carries
   // the server's own name for what is playing, and the item is what is left
@@ -126,9 +127,21 @@
     return spec;
   }
 
+  // castSubtitles is which list of subtitle tracks the RECEIVER is loaded
+  // with. Behind the gate the item document's addresses are no use to a cast
+  // device — it holds no cookie — so the session document carries the same
+  // rows with each href written for a device, and those win when they are
+  // there. The item's own are the fallback, for a document from an older
+  // server. A track with no href is a bitmap track nothing can load.
+  function castSubtitles(session, item) {
+    var from = (session && session.subtitles) || (item && item.subtitles) || [];
+    return from.filter(function (s) { return s && s.supported && s.href; });
+  }
+
   var api = { castAbsolute: absolute, sessionEndBound: sessionEndBound,
               castSeekOffset: castSeekOffset, castReceiverBound: castReceiverBound,
-              castStartTime: castStartTime, castMediaSpec: castMediaSpec };
+              castStartTime: castStartTime, castMediaSpec: castMediaSpec,
+              castSubtitles: castSubtitles };
   if (typeof module === 'object' && module.exports) module.exports = api;
   else Object.assign(root, api);
 })(typeof window !== 'undefined' ? window : this);
