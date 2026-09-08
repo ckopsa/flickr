@@ -494,16 +494,16 @@ func (s *server) writeSession(w http.ResponseWriter, r *http.Request, row playSe
 
 // sessionEnvelope is one play as a document.
 //
-// Four of its addresses are written for a DEVICE (device.go): the stream the
+// Some of its addresses are written for a DEVICE (device.go): the stream the
 // sender loads onto the receiver, the document's own `self` — which is what
 // goes in the load's customData and what the receiver fetches — the picture
-// it draws, and where it posts its telemetry. Those are the four a Cast
-// device asks for, and it holds no cookie, so each is prefixed with a signed
-// capability good for this session and this item. The rest — `item`, `work`,
-// `back`, `next` and every action — are the SENDER's: a browser follows them
-// with the household's own cookie, and tokening them would hand a device
-// reach it has no use for. With no gate (s.rp == nil) every one of them is
-// the plain address it always was.
+// it draws, where it posts its telemetry, and the subtitle tracks it loads.
+// Those are the ones a Cast device asks for, and it holds no cookie, so each
+// is prefixed with a signed capability good for this session and this item.
+// The rest — `item`, `work`, `back`, `next` and every action — are the
+// SENDER's: a browser follows them with the household's own cookie, and
+// tokening them would hand a device reach it has no use for. With no gate
+// (s.rp == nil) every one of them is the plain address it always was.
 func (s *server) sessionEnvelope(row playSession, item store.Item, next *store.Item, wk *works.Work) *hyper.Envelope {
 	base := "/api/sessions/" + row.ID
 	device := s.deviceHref(row)
@@ -536,6 +536,18 @@ func (s *server) sessionEnvelope(row playSession, item store.Item, next *store.I
 		// names (skipsIn): the client is TOLD where the titles and the
 		// credits are rather than taught how to find them.
 		Field("skips", skipsIn(item))
+
+	// The subtitle tracks, again. They are the ITEM document's — the same
+	// rows, the same ordinals — copied here with every address written for a
+	// device, because a Cast receiver reads this one document and holds no
+	// cookie: the item's plain hrefs are no use to it. The browser goes on
+	// using the item's own, which it fetches with the household's.
+	if subs := subtitlesOf(item, s.transcriptOf(item.ID)); len(subs) > 0 {
+		for i := range subs {
+			subs[i].Href = device(subs[i].Href)
+		}
+		doc.Field("subtitles", subs)
+	}
 
 	doc.Link("item", itemHref(item.ID), itemTitle(item))
 	// The picture this play is shown by — a Cast device draws it behind the

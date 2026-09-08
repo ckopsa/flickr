@@ -17,6 +17,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -264,6 +265,43 @@ func TestDeviceCapabilityWalk(t *testing.T) {
 	}
 	streamToken := tokenIn(t, streamHref)
 
+	// ── the subtitle tracks the receiver loads ──────────────────────────
+	// They are the ITEM document's rows, copied into the session document
+	// with their addresses written for a device: the item's own are plain,
+	// and a Chromecast holds no cookie to fetch those with.
+	subs, _ := doc["subtitles"].([]any)
+	if len(subs) == 0 {
+		t.Fatalf("the session document carries no subtitle tracks: %v", doc["subtitles"])
+	}
+	var subHref string
+	for _, raw := range subs {
+		row, _ := raw.(map[string]any)
+		h, _ := row["href"].(string)
+		if h == "" {
+			continue // a bitmap track: nothing to fetch, nothing to token
+		}
+		if !strings.HasPrefix(h, "/d/") {
+			t.Errorf("subtitles href = %q, want the device capability in the path", h)
+		}
+		subHref = h
+	}
+	if subHref == "" {
+		t.Fatal("no supported subtitle track on the fixture item")
+	}
+	// The .vtt is served out of its cache when there is one, so the walk
+	// needs neither storage nor ffmpeg to ask the question that matters:
+	// does the door let a device through to it.
+	if err := os.MkdirAll(subsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(subsDir, fmt.Sprintf("%d-0.vtt", idBeach)),
+		[]byte("WEBVTT\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if vtt := ask(t, h, "GET", subHref, nil, nil); vtt.Code != http.StatusOK {
+		t.Fatalf("GET %s with no credential = %d: %s", subHref, vtt.Code, vtt.Body)
+	}
+
 	// ── and what a capability does NOT reach ────────────────────────────
 	for _, tc := range []struct{ name, target string }{
 		{"a touched token", "/d/" + tamper(token) + "/api/sessions/" + sid},
@@ -316,5 +354,11 @@ func TestSessionDocumentIsPlainWithoutAGate(t *testing.T) {
 	}
 	if has(doc, "links", "telemetry") {
 		t.Error("links.telemetry is for a device that cannot get through a gate; there is none")
+	}
+	// And the tracks are the item document's, row for row: with no gate the
+	// device rewrite is the identity, so the two lists are one list.
+	item := decode(t, ask(t, h, "GET", itemHref(idBeach), nil, nil))
+	if !reflect.DeepEqual(doc["subtitles"], item["subtitles"]) {
+		t.Errorf("session subtitles %v, item subtitles %v", doc["subtitles"], item["subtitles"])
 	}
 }

@@ -65,6 +65,17 @@
       "label": "Skip credits"
     }
   ],
+  "subtitles": [
+    {
+      "ordinal": 0,
+      "language": "eng",
+      "title": "English",
+      "codec": "subrip",
+      "supported": true,
+      "external": true,
+      "href": "/api/items/8/subtitles/0.vtt"
+    }
+  ],
   "links": {
     "artwork": {
       "href": "/api/items/8/still"

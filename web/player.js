@@ -1996,8 +1996,10 @@
   // The receiver is handed the SESSION DOCUMENT, not a pile of fields this
   // page composed for it: castMediaSpec (web/cast.js) reads the url, the media
   // type, the segment format the decision negotiated, where to start and what
-  // to show off the one object the play answered. The subtitle tracks stay
-  // here: they are the ITEM document's, by ordinal, with their own addresses.
+  // to show off the one object the play answered. Its subtitle tracks too —
+  // castSubtitles takes the session's, addressed for a device with no cookie,
+  // and falls back to the item's. The in-page <track> elements stay on the
+  // item's own: this browser has the household's cookie.
   async function castLoad() {
     castEndSuppressed = true;
     const spec = root.castMediaSpec(session, item, { baseUrl });
@@ -2016,7 +2018,7 @@
     if (spec.images.length) media.metadata.images = spec.images.map(u => new root.chrome.cast.Image(u));
     if (spec.customData) media.customData = spec.customData;
 
-    const ok = supportedSubs();
+    const ok = root.castSubtitles(session, item);
     if (ok.length) {
       // A cast track id is a number of the load's own making, so it is the
       // track's PLACE in this list — an ordinal may be a word.
