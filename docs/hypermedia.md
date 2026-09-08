@@ -65,6 +65,20 @@ The package is `internal/hyper`: `Envelope`, `Link`, `Action`,
 `Problem`, and a `Doc` builder that every handler uses. Handlers stop
 writing bare maps.
 
+**The sign-in is a remedy like any other.** Read by nobody, a gated
+address answers `401 application/problem+json`, `type:
+unauthenticated`, whose remedy is the door: `{"text": "Sign in with the
+household account.", "link": {"href": "/auth/login", "title": "Sign
+in"}}`. The client is taught no rule by it — it follows a remedy, as it
+does for every other refusal. The href carries no `return_to`, because
+where the viewer was standing is a HASH (`#/item/2090?t=142`) and a hash
+never reaches a server: the client appends it (`?return_to=` + path +
+search + hash) and the callback comes back to that very place. The root
+document says the other half — `viewer` and `links.logout` when
+somebody is signed in, `links.login` when nobody is — so the account row
+is drawn from a document too, and a server with no issuer configured
+carries neither and has no account row at all.
+
 ## The documents
 
 | Document | Address | Carries | Actions |
@@ -169,3 +183,33 @@ client's clock) and the server keeps the marks on the session;
 
 Each step ships on its own, green, behind the existing routes until the
 client is switched; the old JSON shapes are removed only in step 6.
+
+## Device capabilities
+
+A Chromecast holds no cookie, and a cast load has nowhere to put an
+`Authorization` header. So behind the sign-in a play hands the device a
+signed capability in the **path**: `/d/{token}/<the plain path>`. In the
+path rather than the query because an HLS playlist names its segments
+relatively — a player resolves each against the playlist's own URL, so the
+prefix is inherited by every segment for free, where a query string is
+dropped at the first hop.
+
+The token is `auth.Sign` over `{"sid", "item", "exp"}` — which session,
+which item, until when (24 hours; the reaper ends an idle session long
+before). What it reaches is not written into it: the door at `/d/{token}/`
+(`cmd/server/device.go`) checks the MAC and the clock, then that the plain
+path is one this capability covers — this session's `/streams/{sid}/…` and
+`/api/sessions/{sid}` and below, this item's `subtitles/…`, `poster`,
+`still`, `backdrop` and `cover`, and `POST /api/telemetry`. Anything else
+is the gate's own 401 problem. On success it puts a viewer on the context
+(`device:<sid>`) and dispatches the plain path back onto the mux, which the
+gate lets through because a viewer is already there.
+
+The session document writes four of its addresses that way, and only
+four: `url` (the stream the sender loads), `self` (what goes in the load's
+`customData`, and what the receiver fetches), `links.artwork` (the picture
+the device draws) and `links.telemetry` (where it posts back — named only
+when there is a gate). The rest are the sender's, followed by a browser
+with the household cookie. With no issuer configured there is no relying
+party, nothing is tokened, and every document is byte for byte the one the
+goldens hold.

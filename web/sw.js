@@ -54,7 +54,7 @@
 // the CI check in .github/workflows/tests.yml now insists on.
 // v19: the readers' dark page; v20: the book's own choice about its
 // pictures (session.display), the 🖼 button in both panes.
-const CACHE = 'flickr-shell-v30';
+const CACHE = 'flickr-shell-v31';
 const SHELL = ['/', '/index.html', '/passage.js', '/focus.js', '/cast.js', '/audio.css',
                '/renderers.js', '/player.js', '/kernel.js',
                '/reader.js', '/pdfreader.js',
@@ -62,10 +62,29 @@ const SHELL = ['/', '/index.html', '/passage.js', '/focus.js', '/cast.js', '/aud
                '/vendor/pdf.min.mjs', '/vendor/pdf.worker.min.mjs',
                '/manifest.json', '/icon-192.png', '/icon-512.png'];
 
+// The one answer worth keeping: a 200 that IS the file asked for. A redirect
+// followed to a 200 is a fine response and a poisonous cache entry — behind a
+// sign-in service every shell request answers 302 to the login page, and
+// stored under /index.html that page is the app for as long as the cache
+// lives. addAll does not make this check (it only refuses a non-ok), so the
+// shell is fetched a request at a time below and this is the gate each answer
+// passes.
+function good(resp) {
+  return resp.ok && !resp.redirected && resp.type !== 'opaqueredirect';
+}
+
 self.addEventListener('install', (e) => {
   e.waitUntil(
     caches.open(CACHE)
-      .then((c) => c.addAll(SHELL.map((u) => new Request(u, { cache: 'reload' }))))
+      // One bad answer fails the whole install, which is what addAll did: half
+      // a shell in the cache is worse than none.
+      .then((c) => Promise.all(SHELL.map((u) => {
+        const req = new Request(u, { cache: 'reload' });
+        return fetch(req).then((resp) => {
+          if (!good(resp)) throw new TypeError('shell: ' + u + ' answered ' + resp.status);
+          return c.put(req, resp);
+        });
+      })))
       .then(() => self.skipWaiting())
   );
 });
@@ -91,7 +110,7 @@ self.addEventListener('fetch', (e) => {
   e.respondWith(
     caches.match(req).then(
       (hit) => hit || fetch(new Request(req, { cache: 'reload' })).then((resp) => {
-        if (resp.ok) {
+        if (good(resp)) {
           const copy = resp.clone();
           caches.open(CACHE).then((c) => c.put(req, copy));
         }

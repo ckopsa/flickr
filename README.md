@@ -346,6 +346,13 @@ Requires `ffmpeg`/`ffprobe` on PATH. Media files are read straight from MinIO
 via presigned URLs — both for probing and as FFmpeg input; nothing is copied
 locally except HLS segments in `data/streams/`.
 
+`MINIO_PUBLIC_ENDPOINT` (a URL with a scheme, e.g. `https://minio.kopsa.info`)
+is for a server reached from off the LAN: a presigned URL is signed for the
+host it names, so one signed for `MINIO_ENDPOINT`'s `192.168.1.40:9000` is
+unfetchable on a phone's LTE. Set it and the server keeps scanning, probing
+and reading over `MINIO_ENDPOINT` but signs playback URLs for the public host
+(signing is arithmetic, nothing is dialled). Unset, it signs as before.
+
 ## Deploy
 
 A merge to `master` that touches `cmd/`, `internal/`, `web/` or the Go
@@ -361,6 +368,71 @@ job, the variable's ACLs and the by-hand and rollback recipes live in
 `terraform/docs/flickr-stream/RUNBOOK.md`). Without the `NOMAD_ADDR` /
 `NOMAD_TOKEN` repository secrets the workflow pushes the image and
 leaves the variable write to a person.
+
+## Signing in
+
+Served publicly, flickr stands behind the household's Keycloak. The
+**household** signs in — once, one account, a signed cookie good for thirty
+days — and flickr's own profiles live under that: the sign-in says which
+household the box belongs to, the profile gate says who is on the sofa. The
+relying party is `cmd/server/auth.go` over `internal/auth`: authorization
+code + PKCE, the session signed rather than stored, an RS256 id_token checked
+against the issuer's JWKS.
+
+It is **off unless `OIDC_ISSUER` is set** — a box on its own LAN keeps every
+address exactly as it was, and so does every test and every golden. With an
+issuer set and something else missing the server refuses to start: a
+half-configured gate is worse than none.
+
+| Variable | Default | What it is |
+|---|---|---|
+| `OIDC_ISSUER` | empty — **sign-in off** | The realm, e.g. `https://auth.kopsa.info/realms/domestic-realm`. Discovery is fetched once, at boot: a box that cannot reach its issuer does not start. |
+| `OIDC_CLIENT_ID` | — (required with an issuer) | The Keycloak client: `flickr`. |
+| `OIDC_CLIENT_SECRET` | empty | The confidential client's secret, sent with the code exchange. |
+| `OIDC_APP_URL` | `ADVERTISE_URL` | The **public** origin the callback is under; the redirect URI is this + `/auth/callback`. It is where a browser is sent, not where a cast device fetches from. |
+| `OIDC_SESSION_SECRET` | — (required, 32+ bytes) | Signs the session and login cookies. `openssl rand -base64 48`. |
+| `OIDC_REQUIRE_AUTH` | `1` | `0` offers sign-in and gates nothing — the staged rollout. |
+| `OIDC_DELEGATE_CLIENTS` | empty | Comma-separated extra audiences a bearer token may carry: an agent's own client id, the MCP surface's. |
+| `MINIO_PUBLIC_ENDPOINT` | empty — sign for `MINIO_ENDPOINT` | The public MinIO host playback URLs are signed for (*Run*, above). A URL signed for a LAN address is unfetchable on a phone's LTE, so a public flickr needs this as much as it needs the gate. |
+
+**The Keycloak client.** In `ckopsa/home-infrastructure` (issue #11 §4):
+`POST /admin/realms/domestic-realm/clients` with `clientId` `flickr`,
+`protocol` `openid-connect`, `publicClient` false, `standardFlowEnabled`
+true, `directAccessGrantsEnabled` and `serviceAccountsEnabled` false,
+`rootUrl` `https://stream.kopsa.info`, `redirectUris`
+`["https://stream.kopsa.info/auth/callback"]`, `webOrigins`
+`["https://stream.kopsa.info"]` and the attribute
+`post.logout.redirect.uris` `https://stream.kopsa.info/*`. Then read the
+client secret back and put it, with a fresh `OIDC_SESSION_SECRET` (48 random
+bytes, base64), into the `nomad/jobs/flickr` variable the job templates from.
+
+**What a person sees.** A gated address read by nobody answers `401
+application/problem+json`, `type: unauthenticated`, whose remedy names the
+door. The client follows it, appending where it was — hash and all, because
+the hash never reaches the server — and comes back to that very place. The
+gear's settings panel then says *Signed in as …* with a Sign out link, both
+drawn from the root document (`viewer`, `links.logout`, `links.login`).
+
+**How an agent speaks.** `Authorization: Bearer <token>`, no cookie and no
+redirect: a token from the same issuer whose audience is `OIDC_CLIENT_ID` or
+one of `OIDC_DELEGATE_CLIENTS`. It is a viewer like any other — the household,
+not a second kind of caller — so every document answers it the same.
+
+**What is open.** `GET /api/system` (the Nomad health check has no cookie,
+and a job that cannot answer "am I up" is restarted for ever), `/auth/*`
+themselves, and the shell — `index.html`, its scripts, `receiver.html`,
+`sw.js`, the manifest and the icons — which reveal nothing and have to load
+for there to be anything to sign in with. Gated: `/api/`, `/streams/`, `/s/`
+and `/d/`. A `/s/` share page is a **navigation** — somebody tapped it in a
+chat window — so it is redirected to the door rather than handed a problem
+document, and comes back to the passage it named.
+
+**A device holds no cookie.** A Chromecast is handed a URL and fetches it
+with nothing of the browser's: no session, no way to follow a login. The
+design is a **signed capability in the path** — `/d/{token}/…` — minted for
+one cast session and good for exactly that session's playlist, its segments,
+the session document, its subtitles and its artwork, and nothing else. The
+gate already treats `/d/` as gated, so the door is there for it to land in.
 
 ## The documents
 
@@ -987,6 +1059,10 @@ film, a record playing on under the mini-player, both readers, search, a
 phone viewport and a kids profile — failing on any JavaScript error. It needs
 Playwright and its Chromium, which is why it is not in the gate; run it
 before a pull request that touches `web/`.
+`SMOKE_OIDC=1 node scripts/browser-smoke.mjs` walks the same screens behind
+the fake Keycloak of `cmd/server/fakeissuer_test.go`, with one step first:
+anonymous is refused in words, the door leads to the provider and back to the
+hash it left, and Sign out lands at the door again (*Signing in*, above).
 
 CI runs both suites, parses every `web/*.js`, and on a pull request fails when
 a SHELL file changed without a `CACHE` bump in `web/sw.js`

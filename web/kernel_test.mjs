@@ -12,6 +12,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
 
 import R from './renderers.js';
@@ -244,4 +245,85 @@ test('every golden the client renders is the one the server writes', () => {
                    'session-play', 'session-read', 'session-read-pdf', 'route-text-passage']) {
     assert.ok(names.includes(n + '.json'), `${n}.json is not shared with the client`);
   }
+});
+
+// --- the sign-in door ---------------------------------------------------------
+//
+// The one test here that RUNS the kernel rather than reading it: kernel.js is
+// written against `window`, so it is given one — a sandbox with the few
+// globals the file touches as it loads, and a fetch answering what a server
+// with nobody signed in answers. Nothing is mounted; api() is the surface.
+function loadKernel(over) {
+  const sandbox = Object.assign({
+    Render: R,
+    Player: {},
+    console: console,
+    document: { getElementById: () => null, addEventListener() {}, cookie: '' },
+    localStorage: {},
+    matchMedia: () => ({ matches: false }),
+    navigator: { userAgent: '' },
+    location: { pathname: '/', search: '', hash: '#/item/8', assign() {} },
+    fetch: () => Promise.reject(new Error('no fetch in this test')),
+  }, over || {});
+  sandbox.window = sandbox;
+  vm.runInNewContext(read('kernel.js'), sandbox, { filename: 'kernel.js' });
+  return sandbox.Kernel;
+}
+
+// What the server answers an anonymous read with: the sentence, and the door.
+const UNAUTHENTICATED = {
+  type: 'unauthenticated',
+  title: 'Sign in to use flickr',
+  status: 401,
+  detail: 'This address answers a signed-in household member.',
+  remedy: {
+    text: 'Sign in with the household account.',
+    link: { href: '/auth/login', title: 'Sign in' },
+  },
+};
+
+function refusal(body) {
+  return {
+    status: 401, ok: false, statusText: 'Unauthorized',
+    json: () => Promise.resolve(body),
+  };
+}
+
+test('a 401 with a remedy sends the browser to sign in, once, carrying where it was', async () => {
+  const K = loadKernel({ fetch: () => Promise.resolve(refusal(UNAUTHENTICATED)) });
+  const went = [];
+  K.leave = href => went.push(href);
+
+  // The refusal is still an answer: it is thrown, and the remedy reads as the
+  // server's own sentence (Remedy is {text, link}).
+  const e = await K.api('/api/').then(() => null, x => x);
+  assert.ok(e instanceof K.Problem);
+  assert.equal(e.status, 401);
+  assert.equal(e.remedyText, 'Sign in with the household account.');
+
+  // Where it was includes the HASH, which is the place — added to the server's
+  // own href, which carries none because the server cannot see one.
+  assert.deepEqual(went, ['/auth/login?return_to=' + encodeURIComponent('/#/item/8')]);
+
+  // Twice is a loop. A second 401 refuses as before and goes nowhere.
+  await K.api('/api/').then(() => null, x => x);
+  assert.equal(went.length, 1, 'the door was opened twice');
+});
+
+test('a best-effort request fails quietly rather than taking the page away', async () => {
+  const K = loadKernel({ fetch: () => Promise.resolve(refusal(UNAUTHENTICATED)) });
+  const went = [];
+  K.leave = href => went.push(href);
+  await K.api('/api/', { method: 'POST', quiet: true }).then(() => null, x => x);
+  await K.api('/api/', { method: 'POST', keepalive: true }).then(() => null, x => x);
+  assert.deepEqual(went, [], 'a beacon took the page out from under the viewer');
+});
+
+test('a 401 with no remedy is a refusal like any other', async () => {
+  const K = loadKernel({ fetch: () => Promise.resolve(refusal({ title: 'No.', status: 401 })) });
+  const went = [];
+  K.leave = href => went.push(href);
+  const e = await K.api('/api/').then(() => null, x => x);
+  assert.equal(e.status, 401);
+  assert.deepEqual(went, []);
 });

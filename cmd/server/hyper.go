@@ -53,6 +53,13 @@ func profileOf(r *http.Request) string {
 	return ""
 }
 
+// viewerDoc is the root document's `viewer`: the signed-in household member,
+// spelled the same way /auth/me spells them.
+type viewerDoc struct {
+	Subject string `json:"subject"`
+	Name    string `json:"name"`
+}
+
 // ── the root ────────────────────────────────────────────────────────────
 
 // handleRootDoc is GET /api/ — the one address the client knows by heart.
@@ -62,6 +69,18 @@ func (s *server) handleRootDoc(w http.ResponseWriter, r *http.Request) {
 	doc := hyper.Doc("/api/", "root", "flickr")
 	if profile != "" {
 		doc.Field("profile", profile)
+	}
+	// Who is SIGNED IN, which is not who is watching: the household signs in
+	// once with Keycloak and the profiles live under it (auth.go). Both the
+	// field and the sign-out are absent with no sign-in configured, which is
+	// why the goldens are unchanged.
+	if v, ok := viewerFrom(r.Context()); ok {
+		doc.Field("viewer", viewerDoc{Subject: v.Subject, Name: v.Name}).
+			Link("logout", "/auth/logout", "Sign out")
+	} else if s.rp != nil {
+		// Configured, and nobody signed in: only possible with
+		// OIDC_REQUIRE_AUTH=0, where sign-in is offered and nothing gated.
+		doc.Link("login", "/auth/login", "Sign in")
 	}
 	// The faces the gate offers a new profile to pick from. The list is the
 	// SERVER's — the same one it assigns from when a create names none — so

@@ -56,7 +56,11 @@ type server struct {
 	plays    playSessions
 	enricher *tmdb.Enricher // nil = TMDB enrichment disabled
 	s3       *minio.Client
-	bucket   string
+	// presigner is the client every presigned URL is signed with: s3 itself,
+	// or a second client made for MINIO_PUBLIC_ENDPOINT — a URL is signed for
+	// the host it names, so a device off the LAN needs the public host.
+	presigner *minio.Client
+	bucket    string
 	// presign, when set, stands in for the S3 presigner — the seam a test
 	// stands the play routes up through without MinIO.
 	presign func(ctx context.Context, objectKey string) (string, error)
@@ -77,6 +81,10 @@ type server struct {
 	// transcribeBusy guards it the way trickplayBusy guards sprite sheets:
 	// one item at a time, one pass at a time.
 	transcribeBusy atomic.Bool
+	// rp is the OpenID Connect relying party (auth.go), nil when OIDC_ISSUER
+	// is unset: no sign-in, no /auth/ routes, no gate. A household on its own
+	// LAN runs with it nil.
+	rp *relyingParty
 }
 
 // trickplayDir is where per-item sprite-sheet sets live (data/trickplay/<id>/).
@@ -113,12 +121,28 @@ func main() {
 		log.Fatal("MINIO_ACCESS_KEY and MINIO_SECRET_KEY must be set (env or .env file)")
 	}
 
-	s3, err := minio.New(endpoint, &minio.Options{
-		Creds:  credentials.NewStaticV4(accessKey, secretKey, ""),
-		Secure: false,
-	})
+	creds := credentials.NewStaticV4(accessKey, secretKey, "")
+	s3, err := minio.New(endpoint, &minio.Options{Creds: creds, Secure: false})
 	if err != nil {
 		log.Fatal(err)
+	}
+
+	// Reads, probes and scans keep going through MINIO_ENDPOINT on the LAN,
+	// but a presigned URL is bound to the host it was signed for, and a phone
+	// on LTE cannot reach 192.168.x. MINIO_PUBLIC_ENDPOINT names the host the
+	// same bucket answers on publicly; signing is local arithmetic, so this
+	// second client never contacts it.
+	presigner := s3
+	if public := os.Getenv("MINIO_PUBLIC_ENDPOINT"); public != "" {
+		host, opts, err := presignEndpoint(public, creds)
+		if err != nil {
+			log.Fatalf("bad MINIO_PUBLIC_ENDPOINT %q: %v", public, err)
+		}
+		presigner, err = minio.New(host, opts)
+		if err != nil {
+			log.Fatalf("bad MINIO_PUBLIC_ENDPOINT %q: %v", public, err)
+		}
+		log.Printf("presigning playback URLs against %s", public)
 	}
 
 	if err := os.MkdirAll("data/streams", 0o755); err != nil {
@@ -153,12 +177,13 @@ func main() {
 			Client: s3, Bucket: bucket, Library: library, Workers: 2,
 			Yield: func() bool { return sessions.ActiveCount() > 0 },
 		},
-		sessions: sessions,
-		s3:       s3,
-		bucket:   bucket,
-		policy:   model.DefaultPolicy(),
-		hw:       hw,
-		baseURL:  envOr("ADVERTISE_URL", lanBaseURL(endpoint, addr)),
+		sessions:  sessions,
+		s3:        s3,
+		presigner: presigner,
+		bucket:    bucket,
+		policy:    model.DefaultPolicy(),
+		hw:        hw,
+		baseURL:   envOr("ADVERTISE_URL", lanBaseURL(endpoint, addr)),
 	}
 	srv.trickplayWindow, err = parseClockWindow(os.Getenv("TRICKPLAY_WINDOW"))
 	if err != nil {
@@ -187,7 +212,26 @@ func main() {
 		log.Printf("TMDB enrichment disabled (TMDB_API_KEY not set)")
 	}
 
-	mux := srv.routes()
+	// The household's sign-in (auth.go). Off unless OIDC_ISSUER is set; when
+	// it IS set, a missing secret or an unreachable issuer stops the server
+	// rather than serving the library to the public internet.
+	authCfg, err := authConfigFromEnv(srv.baseURL)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if authCfg != nil {
+		srv.rp, err = newRelyingParty(context.Background(), *authCfg, nil)
+		if err != nil {
+			log.Fatalf("OIDC discovery failed for %s: %v", authCfg.Issuer, err)
+		}
+		log.Printf("sign-in via %s as client %q, callback %s (gate %s)",
+			authCfg.Issuer, authCfg.ClientID, srv.rp.redirectURI(),
+			map[bool]string{true: "on", false: "off (OIDC_REQUIRE_AUTH=0)"}[authCfg.RequireAuth])
+	} else {
+		log.Printf("sign-in disabled (OIDC_ISSUER not set)")
+	}
+
+	gated := srv.guarded(srv.routes())
 
 	// Permissive CORS: the Cast receiver fetches playlists/segments from a
 	// different origin and preflights Range requests.
@@ -199,7 +243,7 @@ func main() {
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
-		mux.ServeHTTP(w, r)
+		gated.ServeHTTP(w, r)
 	})
 
 	// Session reaper: a vanished client (closed tab, unplugged cast device)
@@ -339,10 +383,20 @@ func (s *server) routes() *http.ServeMux {
 	mux.HandleFunc("GET /api/users", s.handleListUsers)
 	mux.HandleFunc("POST /api/users", s.handleCreateUser)
 	mux.HandleFunc("POST /api/telemetry", s.handleTelemetry)
+	// The sign-in's four open doors (auth.go), registered only when there is
+	// an issuer to sign in with: with none, /auth/login is a 404 like any
+	// other address flickr does not have.
+	if s.rp != nil {
+		s.authRoutes(mux)
+	}
 	// The share page (share.go): the hash grammar said as a path, so a
 	// passage link pasted into a chat has something to unfurl. A subtree,
 	// because "#" + whatever follows /s is the hash it stands for.
 	mux.HandleFunc("GET /s/", s.handleShare)
+	// The device door (device.go): a signed capability in the path, so a
+	// cast device holding no cookie can still fetch the stream, the session
+	// document and the picture the play handed it.
+	s.deviceRoutes(mux)
 	// Log stream fetches: which client asked for which segment with what
 	// Range — a poor man's receiver-side network tab.
 	streamFiles := http.StripPrefix("/streams/", http.FileServer(http.Dir("data/streams")))
@@ -771,7 +825,7 @@ func (s *server) runTrickplay(ctx context.Context) {
 
 // generateTrickplay produces the sprite-sheet set for one item.
 func (s *server) generateTrickplay(ctx context.Context, item *store.Item) error {
-	u, err := s.s3.PresignedGetObject(ctx, s.bucket, item.ObjectKey, 6*time.Hour, url.Values{})
+	u, err := s.presigner.PresignedGetObject(ctx, s.bucket, item.ObjectKey, 6*time.Hour, url.Values{})
 	if err != nil {
 		return err
 	}
@@ -1125,7 +1179,7 @@ func (s *server) handleSubtitle(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		} else {
-			u, err := s.s3.PresignedGetObject(r.Context(), s.bucket, item.ObjectKey, time.Hour, url.Values{})
+			u, err := s.presigner.PresignedGetObject(r.Context(), s.bucket, item.ObjectKey, time.Hour, url.Values{})
 			if err != nil {
 				httpErr(w, 500, err)
 				return
@@ -1156,7 +1210,7 @@ func (s *server) cacheExternalSubtitle(ctx context.Context, track *model.Subtitl
 		defer obj.Close()
 		return writeFileAtomic(cachePath, obj)
 	}
-	u, err := s.s3.PresignedGetObject(ctx, s.bucket, track.ObjectKey, time.Hour, url.Values{})
+	u, err := s.presigner.PresignedGetObject(ctx, s.bucket, track.ObjectKey, time.Hour, url.Values{})
 	if err != nil {
 		return err
 	}
@@ -1356,7 +1410,7 @@ func (s *server) ensureCover(ctx context.Context, id int64) bool {
 	}
 	switch item.MediaInfo.MediumOrVideo() {
 	case model.MediumAudio:
-		u, err := s.s3.PresignedGetObject(ctx, s.bucket, item.ObjectKey, time.Hour, url.Values{})
+		u, err := s.presigner.PresignedGetObject(ctx, s.bucket, item.ObjectKey, time.Hour, url.Values{})
 		if err != nil {
 			log.Printf("cover: item %d: presign: %v", id, err)
 			return false
@@ -1543,6 +1597,31 @@ func httpErr(w http.ResponseWriter, code int, err error) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
 	json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+}
+
+// presignEndpoint turns a MINIO_PUBLIC_ENDPOINT URL into the host and options
+// minio.New wants. The scheme is what says whether to sign for https, so a
+// bare host is a refusal rather than a guess, and a path would be prefixed
+// onto every signed object key.
+func presignEndpoint(raw string, creds *credentials.Credentials) (string, *minio.Options, error) {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "", nil, err
+	}
+	switch u.Scheme {
+	case "http", "https":
+	case "":
+		return "", nil, fmt.Errorf("no scheme: want http:// or https://")
+	default:
+		return "", nil, fmt.Errorf("scheme %q: want http:// or https://", u.Scheme)
+	}
+	if u.Host == "" {
+		return "", nil, fmt.Errorf("no host")
+	}
+	if u.Path != "" && u.Path != "/" {
+		return "", nil, fmt.Errorf("path %q: want an origin, not a path", u.Path)
+	}
+	return u.Host, &minio.Options{Creds: creds, Secure: u.Scheme == "https"}, nil
 }
 
 // lanBaseURL finds this machine's LAN-facing address by asking the kernel

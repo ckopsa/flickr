@@ -19,6 +19,10 @@ package main
 //     direct-plays (mp4 / h264 / aac, flac) and six seconds long, the length
 //     of the files served — a transcode would need the ffmpeg this box lacks.
 //
+// With SMOKE_OIDC set it also stands up the fake Keycloak of
+// fakeissuer_test.go and puts the household gate in front of the library, so
+// the same walk can be made through the sign-in door.
+//
 // Without SMOKE_ADDR the test skips, and without the build tag it does not
 // exist, so `go test ./...` never sees it.
 
@@ -61,6 +65,32 @@ func TestSmokeServe(t *testing.T) {
 		return base + "/smoke/media/film.webm", nil
 	}
 
+	// SMOKE_OIDC puts the household sign-in in front of all of it: the fake
+	// Keycloak of fakeissuer_test.go on a port of its own, and the same gate
+	// main() wraps the mux in. The routing table is rebuilt because the four
+	// /auth/ doors are registered only when there is a relying party. The
+	// issuer's address is logged: the node side reads it back to assert that
+	// an anonymous page really did leave for the provider.
+	if os.Getenv("SMOKE_OIDC") != "" {
+		iss := newFakeIssuer(t)
+		rp, err := newRelyingParty(context.Background(), authConfig{
+			Issuer:        iss.URL(),
+			ClientID:      iss.ClientID,
+			ClientSecret:  iss.ClientSecret,
+			AppURL:        base,
+			SessionSecret: []byte("a smoke session secret, 32 bytes and more"),
+			RequireAuth:   true,
+		}, iss.srv.Client())
+		if err != nil {
+			t.Fatalf("newRelyingParty: %v", err)
+		}
+		srv.rp = rp
+		mux = srv.routes()
+		t.Logf("smoke issuer on %s", iss.URL())
+	}
+	// The gate stands where main() puts it: inside CORS, outside the mux.
+	gated := srv.guarded(mux)
+
 	// routes() serves the shell from ./web, relative to the working
 	// directory, and `go test` runs in cmd/server.
 	if err := os.Chdir(filepath.Join("..", "..")); err != nil {
@@ -85,7 +115,7 @@ func TestSmokeServe(t *testing.T) {
 			w.Header().Set("Content-Type", "application/pdf")
 			http.ServeContent(w, r, "book.pdf", time.Time{}, bytes.NewReader(pdf))
 		default:
-			mux.ServeHTTP(w, r)
+			gated.ServeHTTP(w, r)
 		}
 	})
 

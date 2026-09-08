@@ -1198,6 +1198,27 @@
       '</div>';
   }
 
+  // --- who is signed in --------------------------------------------------------
+  //
+  // The root says it: `viewer` is the household member the server read this
+  // page as, and links.logout / links.login are the two doors. A server with
+  // no auth configured carries neither, and then the panel says nothing about
+  // accounts at all — there is no account.
+  //
+  // Both doors are plain <a>s rather than buttons: the server answers them
+  // with a redirect to Keycloak, which is a navigation, not a fetch. The
+  // sign-in door takes `returnTo` — where the browser was, hash and all —
+  // because the server cannot see a hash and the hash is the place.
+  function account(doc, returnTo) {
+    const viewer = doc && doc.viewer;
+    const out = link(doc, viewer ? 'logout' : 'login');
+    if (!out) return viewer ? '<span class="acct-who">Signed in as ' + esc(viewer.name || '') + '</span>' : '';
+    const href = viewer ? out.href : out.href + '?return_to=' + encodeURIComponent(returnTo || '');
+    return (viewer ? '<span class="acct-who">Signed in as ' + esc(viewer.name || '') + '</span>' : '') +
+      '<a class="acct-link" href="' + esc(href) + '">' +
+      esc(out.title || (viewer ? 'Sign out' : 'Sign in')) + '</a>';
+  }
+
   // --- the trace ---------------------------------------------------------------
   // Not a document kind of its own: the decision the session document carries,
   // drawn for the system panel under the player. The badge line stays out in
@@ -1241,6 +1262,7 @@
   const api = {
     library, libraryGrid, hero, work, artist, item, session, miniPlayer, continueShelf, search,
     lines,
+    account,
     card, memberRow, control, watchedControl, bookmarkControl, restControls, trace, identityForm,
     esc, fmtTime, fmtRuntime, hashFor, itemHash, showHash, artistHash, searchHash,
     idIn,

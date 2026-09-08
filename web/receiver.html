@@ -59,6 +59,11 @@
   var playerManager = context.getPlayerManager();
 
   // --- telemetry: compact events to the same-origin media server ----------
+  // The address is the session document's when it names one (links.telemetry,
+  // which behind a sign-in carries the device capability this receiver has no
+  // cookie for) — copied, never composed. The plain one is the fallback for a
+  // load with no document, and for a house with no gate.
+  var telemetryHref = '/api/telemetry';
   var lastPost = 0;
   var mediaTitle = '';
   function telemetry(event, extra, force) {
@@ -74,7 +79,7 @@
     };
     if (extra) for (var k in extra) payload[k] = extra[k];
     try {
-      fetch('/api/telemetry', {
+      fetch(telemetryHref, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
@@ -119,6 +124,8 @@
         // on the first tick would be a stopped player, not a passage.
         endArmed = endsAt != null && endsAt > 0;
         nextTitle = (doc.links && doc.links.next && doc.links.next.title) || '';
+        var tel = doc.links && doc.links.telemetry;
+        if (tel && tel.href) telemetryHref = tel.href;
         telemetry('session_read', {
           session: doc.id || null,
           ends_at: endsAt,

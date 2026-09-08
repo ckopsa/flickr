@@ -74,6 +74,7 @@ go build ./...
 go test -count=1 ./...
 node --test web/*_test.mjs   # the client's suites: no npm, no browser
 node scripts/browser-smoke.mjs   # the page in a real Chromium: needs Playwright
+SMOKE_OIDC=1 node scripts/browser-smoke.mjs   # ...the same walk, behind a sign-in
 ```
 
 The browser smoke is the one check that opens the page: it builds
@@ -82,6 +83,11 @@ fixture library on a port with generated media, an EPUB and a PDF, then
 walks the gate, home, settings, a show, a film, a record under the
 mini-player, both readers, search, a phone viewport and a kids profile,
 failing on any JavaScript error. Run it before a PR that touches `web/`.
+`SMOKE_OIDC=1` stands the fake Keycloak of `cmd/server/fakeissuer_test.go`
+in front of the same library and adds one step first: anonymous is
+refused in words, the door leads to the provider and back to the hash it
+left, the settings panel says who is signed in, and Sign out lands at the
+door again. Run it both ways after touching the gate (README "Signing in").
 
 CI (`.github/workflows/tests.yml`) runs those four steps on every push
 to `master`, every pull request and on demand, then the client's own:

@@ -237,12 +237,14 @@ func newSessionID() string {
 
 // presignedURL is the item's bytes, addressed so a device can fetch them
 // directly. It is a field on the server rather than a bare call so a test
-// can stand the play routes up without MinIO.
+// can stand the play routes up without MinIO. Six hours because such a URL
+// is bearer-style once it leaves the LAN — anyone holding it can fetch the
+// file until it expires — and nothing longer than a film is needed.
 func (s *server) presignedURL(ctx context.Context, objectKey string) (string, error) {
 	if s.presign != nil {
 		return s.presign(ctx, objectKey)
 	}
-	u, err := s.s3.PresignedGetObject(ctx, s.bucket, objectKey, 6*time.Hour, url.Values{})
+	u, err := s.presigner.PresignedGetObject(ctx, s.bucket, objectKey, 6*time.Hour, url.Values{})
 	if err != nil {
 		return "", err
 	}
@@ -491,16 +493,28 @@ func (s *server) writeSession(w http.ResponseWriter, r *http.Request, row playSe
 }
 
 // sessionEnvelope is one play as a document.
+//
+// Four of its addresses are written for a DEVICE (device.go): the stream the
+// sender loads onto the receiver, the document's own `self` — which is what
+// goes in the load's customData and what the receiver fetches — the picture
+// it draws, and where it posts its telemetry. Those are the four a Cast
+// device asks for, and it holds no cookie, so each is prefixed with a signed
+// capability good for this session and this item. The rest — `item`, `work`,
+// `back`, `next` and every action — are the SENDER's: a browser follows them
+// with the household's own cookie, and tokening them would hand a device
+// reach it has no use for. With no gate (s.rp == nil) every one of them is
+// the plain address it always was.
 func (s *server) sessionEnvelope(row playSession, item store.Item, next *store.Item, wk *works.Work) *hyper.Envelope {
 	base := "/api/sessions/" + row.ID
-	doc := hyper.Doc(base, "session", itemTitle(item)).
+	device := s.deviceHref(row)
+	doc := hyper.Doc(device(base), "session", itemTitle(item)).
 		Field("id", row.ID).
 		Field("item_id", row.ItemID)
 	if row.ClientID != "" {
 		doc.Field("profile", row.ClientID)
 	}
 	doc.Field("method", row.Method).
-		Field("url", row.URL).
+		Field("url", device(row.URL)).
 		// What the bytes at `url` ARE, in the words a media element and a
 		// Cast receiver both take. The client was guessing "video/mp4" for
 		// every direct play; the server probed the container and knows.
@@ -527,7 +541,13 @@ func (s *server) sessionEnvelope(row playSession, item store.Item, next *store.I
 	// The picture this play is shown by — a Cast device draws it behind the
 	// title, and it is the server that knows which route has one.
 	if href := sessionArtwork(item); href != "" {
-		doc.Link("artwork", href, "")
+		doc.Link("artwork", device(href), "")
+	}
+	// Where the receiver posts what it did with the bytes. It is named only
+	// when there is a gate: without one the receiver's own /api/telemetry is
+	// open, and a link nobody needs is a document that grew for nothing.
+	if s.rp != nil {
+		doc.Link("telemetry", device("/api/telemetry"), "Playback telemetry")
 	}
 	// `back` is where the end-of-the-passage panel goes when the person is
 	// done: the item's own page, the same address the item relation names,

@@ -76,6 +76,10 @@
   .act-part { color: var(--muted); }
   .act-how { flex: 0 0 auto; color: var(--muted); font-variant-numeric: tabular-nums; }
   .act-none { color: var(--muted); }
+  /* who is signed in, and the door out: a sentence and a link, not a button —
+     the server answers it with a redirect to the sign-in service. */
+  .acct-who { font-size: 12px; color: var(--muted); }
+  .acct-link { margin-left: auto; color: var(--accent); font-size: 12px; }
   #scan-status { font-size: 12px; color: var(--muted); }
   #hw { font-size: 11px; padding: 2px 8px; border-radius: 10px; background: #1e2c42; color: var(--accent); cursor: help; }
 
@@ -869,6 +873,11 @@
       <span class="set-label">Activity</span>
       <div id="settings-activity"></div>
     </div>
+    <!-- who the server read this page as, and the door in or out: the root
+         carries `viewer` and links.logout (or links.login), R.account draws
+         them and kernel.js fills the box. A server with no auth in front of
+         it says nothing here, because there is no account. -->
+    <div class="set-row" id="settings-account" hidden></div>
     <div class="set-row end">
       <button id="settings-close">Close</button>
     </div>
