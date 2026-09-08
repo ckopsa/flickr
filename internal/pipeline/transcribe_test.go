@@ -34,15 +34,19 @@ func TestWhisperArgs(t *testing.T) {
 	cases := []struct {
 		name     string
 		language string
+		threads  int
 		want     string
+		absent   string
 	}{
-		{"an empty language is auto-detected", "", "-l auto"},
-		{"auto stays auto", "auto", "-l auto"},
-		{"a named language is passed through", "de", "-l de"},
+		{name: "an empty language is auto-detected", want: "-l auto"},
+		{name: "auto stays auto", language: "auto", want: "-l auto"},
+		{name: "a named language is passed through", language: "de", want: "-l de"},
+		{name: "no threads leaves whisper its own default", want: "-l auto", absent: "-t "},
+		{name: "a thread count is passed through", threads: 12, want: "-t 12"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			s := strings.Join(WhisperArgs("/m/ggml-base.bin", "/t/audio.wav", c.language, "/t/transcript"), " ")
+			s := strings.Join(WhisperArgs("/m/ggml-base.bin", "/t/audio.wav", c.language, "/t/transcript", c.threads), " ")
 			for _, want := range []string{
 				"-m /m/ggml-base.bin",
 				"-f /t/audio.wav",
@@ -53,6 +57,9 @@ func TestWhisperArgs(t *testing.T) {
 				if !strings.Contains(s, want) {
 					t.Errorf("missing %q in: %s", want, s)
 				}
+			}
+			if c.absent != "" && strings.Contains(s, c.absent) {
+				t.Errorf("unwanted %q in: %s", c.absent, s)
 			}
 		})
 	}

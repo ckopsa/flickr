@@ -258,6 +258,21 @@ a handful of architectural decisions (see design notes below):
    `POST /api/items/{id}/transcript` that brings the WebVTT back, leased for
    an hour so two GPUs do not hear the same film — and a delivery writes the
    file, the row and the cues exactly as the local stage does.
+
+   *Transcribing on another box.* The hours are CPU or GPU the server may not
+   have, so `cmd/transcriber` runs the same whisper wherever the card is: it
+   reads `FLICKR_URL`'s root, follows `links.transcripts` to the queue flickr
+   leases work from, transcribes one entry at a time under `WORK_DIR` and
+   POSTs the WebVTT back to that entry's own `transcript` action with the etag
+   it was handed — a 409 means the file changed and the transcript is dropped
+   — sleeping `IDLE_SLEEP` whenever the queue is empty. It signs in with
+   `OIDC_ISSUER` + `TRANSCRIBER_CLIENT_ID` + `TRANSCRIBER_CLIENT_SECRET` (or a
+   static `FLICKR_TOKEN`, or nothing at all on a LAN with no gate) and runs
+   `WHISPER_BIN` over `WHISPER_MODEL` with `WHISPER_LANGUAGE` and
+   `WHISPER_THREADS`. Where `MINIO_ENDPOINT`, its two keys and `MINIO_BUCKET`
+   are set it signs its own URL for the audio against that LAN address rather
+   than using the queue's, which is signed for the public host; the job that
+   runs the binary is the cluster's.
 19. **Find the line, land on the scene** — a transcript is the only place the
    WORDS of a film are written down, so at transcript time the WebVTT is
    parsed back into cues (`pipeline.ParseVTT`, pure) and stored in `library.db`
