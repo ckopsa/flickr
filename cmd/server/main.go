@@ -81,6 +81,10 @@ type server struct {
 	// transcribeBusy guards it the way trickplayBusy guards sprite sheets:
 	// one item at a time, one pass at a time.
 	transcribeBusy atomic.Bool
+	// rp is the OpenID Connect relying party (auth.go), nil when OIDC_ISSUER
+	// is unset: no sign-in, no /auth/ routes, no gate. A household on its own
+	// LAN runs with it nil.
+	rp *relyingParty
 }
 
 // trickplayDir is where per-item sprite-sheet sets live (data/trickplay/<id>/).
@@ -208,7 +212,26 @@ func main() {
 		log.Printf("TMDB enrichment disabled (TMDB_API_KEY not set)")
 	}
 
-	mux := srv.routes()
+	// The household's sign-in (auth.go). Off unless OIDC_ISSUER is set; when
+	// it IS set, a missing secret or an unreachable issuer stops the server
+	// rather than serving the library to the public internet.
+	authCfg, err := authConfigFromEnv(srv.baseURL)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if authCfg != nil {
+		srv.rp, err = newRelyingParty(context.Background(), *authCfg, nil)
+		if err != nil {
+			log.Fatalf("OIDC discovery failed for %s: %v", authCfg.Issuer, err)
+		}
+		log.Printf("sign-in via %s as client %q, callback %s (gate %s)",
+			authCfg.Issuer, authCfg.ClientID, srv.rp.redirectURI(),
+			map[bool]string{true: "on", false: "off (OIDC_REQUIRE_AUTH=0)"}[authCfg.RequireAuth])
+	} else {
+		log.Printf("sign-in disabled (OIDC_ISSUER not set)")
+	}
+
+	gated := srv.guarded(srv.routes())
 
 	// Permissive CORS: the Cast receiver fetches playlists/segments from a
 	// different origin and preflights Range requests.
@@ -220,7 +243,7 @@ func main() {
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
-		mux.ServeHTTP(w, r)
+		gated.ServeHTTP(w, r)
 	})
 
 	// Session reaper: a vanished client (closed tab, unplugged cast device)
@@ -360,6 +383,12 @@ func (s *server) routes() *http.ServeMux {
 	mux.HandleFunc("GET /api/users", s.handleListUsers)
 	mux.HandleFunc("POST /api/users", s.handleCreateUser)
 	mux.HandleFunc("POST /api/telemetry", s.handleTelemetry)
+	// The sign-in's four open doors (auth.go), registered only when there is
+	// an issuer to sign in with: with none, /auth/login is a 404 like any
+	// other address flickr does not have.
+	if s.rp != nil {
+		s.authRoutes(mux)
+	}
 	// The share page (share.go): the hash grammar said as a path, so a
 	// passage link pasted into a chat has something to unfurl. A subtree,
 	// because "#" + whatever follows /s is the hash it stands for.
