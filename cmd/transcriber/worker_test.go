@@ -6,10 +6,13 @@ package main
 // ffmpeg, no whisper, no Keycloak.
 
 import (
+	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -112,29 +115,48 @@ func entry(id int64, title string) queueItem {
 	}
 }
 
+// device is what a Vulkan build prints when it loads the model — the lines
+// the start-up probe exists to catch.
+const device = "ggml_vulkan: found 1 Vulkan devices:\nVulkan0: Fake GPU (RADV) | uma: 0 | fp16: 1\n"
+
 // seam is the exec seam of internal/pipeline: ffmpeg writes a wav, whisper
-// writes the cues at <prefix>.vtt and says what it heard.
+// writes the cues at <prefix>.vtt and says what it heard. The start-up probe
+// comes through here too, over the silence the worker generated itself.
 func seam(_ context.Context, name string, args []string) ([]byte, error) {
 	if name == "ffmpeg" {
 		return nil, os.WriteFile(args[len(args)-1], []byte("RIFF"), 0o644)
 	}
-	prefix := ""
+	prefix, wav := "", ""
 	for i, a := range args {
-		if a == "-of" && i+1 < len(args) {
+		if i+1 >= len(args) {
+			break
+		}
+		switch a {
+		case "-of":
 			prefix = args[i+1]
+		case "-f":
+			wav = args[i+1]
 		}
 	}
 	vtt := "WEBVTT\n\n00:00:01.000 --> 00:00:03.000\nHe took the job in New York.\n"
 	if err := os.WriteFile(prefix+".vtt", []byte(vtt), 0o644); err != nil {
 		return nil, err
 	}
-	return []byte("auto-detected language: en (p = 0.98)\n"), nil
+	if strings.HasSuffix(wav, "silence.wav") {
+		return []byte(device), nil // the probe: the card, and nothing heard
+	}
+	return []byte(device + "auto-detected language: en (p = 0.98)\n"), nil
 }
 
 // pass runs one worker over the fake flickr and returns when the queue is
-// empty: the test's sleep cancels the context instead of waiting.
-func pass(t *testing.T, f *fakeFlickr) (*httptest.Server, []time.Duration) {
+// empty: the test's sleep cancels the context instead of waiting. What the
+// worker logged comes back with it — the start-up probe answers in the log
+// and nowhere else.
+func pass(t *testing.T, f *fakeFlickr) (*httptest.Server, []time.Duration, string) {
 	t.Helper()
+	var logs bytes.Buffer
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
 	srv := httptest.NewServer(f.handler())
 	t.Cleanup(srv.Close)
 
@@ -166,12 +188,12 @@ func pass(t *testing.T, f *fakeFlickr) (*httptest.Server, []time.Duration) {
 	if len(entries) != 0 {
 		t.Errorf("the work dir kept %d directories, want none", len(entries))
 	}
-	return srv, slept
+	return srv, slept, logs.String()
 }
 
 func TestRunDeliversEveryItem(t *testing.T) {
 	f := &fakeFlickr{t: t, entries: []queueItem{entry(12, "Heat"), entry(13, "The Insider")}}
-	_, slept := pass(t, f)
+	_, slept, logs := pass(t, f)
 
 	if len(f.deliveries) != 2 {
 		t.Fatalf("%d deliveries, want 2: %+v", len(f.deliveries), f.deliveries)
@@ -211,6 +233,73 @@ func TestRunDeliversEveryItem(t *testing.T) {
 	// An empty queue ends the pass with exactly one idle sleep.
 	if len(slept) != 1 || slept[0] != 5*time.Minute {
 		t.Errorf("slept %v, want one IDLE_SLEEP", slept)
+	}
+	// The card whisper loaded the model onto is said once, at start-up, and
+	// not again while it stays the same card.
+	if !strings.Contains(logs, "whisper backend: ") || !strings.Contains(logs, "Fake GPU") {
+		t.Errorf("the log never named the GPU whisper found:\n%s", logs)
+	}
+	if n := strings.Count(logs, "whisper backend: "); n != 1 {
+		t.Errorf("said the backend %d times over two items, want once", n)
+	}
+}
+
+// The probe writes its own audio: half a second of silence, in the format
+// whisper reads, with the 44-byte header ffmpeg would have written.
+func TestSilentWAV(t *testing.T) {
+	b := silentWAV()
+	data := 16000 // 0.5 s of 16 kHz mono at 2 bytes a sample
+	if len(b) != 44+data {
+		t.Fatalf("wav is %d bytes, want %d", len(b), 44+data)
+	}
+	for _, c := range []struct {
+		name string
+		got  string
+		want string
+	}{
+		{"RIFF", string(b[0:4]), "RIFF"},
+		{"WAVE", string(b[8:12]), "WAVE"},
+		{"fmt ", string(b[12:16]), "fmt "},
+		{"data", string(b[36:40]), "data"},
+	} {
+		if c.got != c.want {
+			t.Errorf("%s field = %q, want %q", c.name, c.got, c.want)
+		}
+	}
+	for _, c := range []struct {
+		name string
+		got  uint32
+		want uint32
+	}{
+		{"riff size", binary.LittleEndian.Uint32(b[4:8]), uint32(36 + data)},
+		{"fmt size", binary.LittleEndian.Uint32(b[16:20]), 16},
+		{"sample rate", binary.LittleEndian.Uint32(b[24:28]), 16000},
+		{"byte rate", binary.LittleEndian.Uint32(b[28:32]), 32000},
+		{"data size", binary.LittleEndian.Uint32(b[40:44]), uint32(data)},
+	} {
+		if c.got != c.want {
+			t.Errorf("%s = %d, want %d", c.name, c.got, c.want)
+		}
+	}
+	for _, c := range []struct {
+		name string
+		got  uint16
+		want uint16
+	}{
+		{"format", binary.LittleEndian.Uint16(b[20:22]), 1}, // uncompressed PCM
+		{"channels", binary.LittleEndian.Uint16(b[22:24]), 1},
+		{"block align", binary.LittleEndian.Uint16(b[32:34]), 2},
+		{"bits a sample", binary.LittleEndian.Uint16(b[34:36]), 16},
+	} {
+		if c.got != c.want {
+			t.Errorf("%s = %d, want %d", c.name, c.got, c.want)
+		}
+	}
+	// Silence, so whisper hears nothing and spends no time on it.
+	for i, v := range b[44:] {
+		if v != 0 {
+			t.Fatalf("sample byte %d = %d, want silence", i, v)
+		}
 	}
 }
 

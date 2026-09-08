@@ -79,6 +79,49 @@ func DetectedLanguage(out []byte) string {
 	return string(m[1])
 }
 
+// vulkanFound and cudaFound match the line whisper's GPU backend prints when
+// it enumerates devices; vulkanDevice and cudaDevice match the per-device
+// lines under it. Vulkan has printed two shapes of device line over the years
+// ("Vulkan0: <name>" and "ggml_vulkan: 0 = <name>"), so both are read.
+var (
+	vulkanFound  = regexp.MustCompile(`(?i)^ggml_vulkan: found \d+ vulkan device`)
+	vulkanDevice = regexp.MustCompile(`(?i)^(vulkan\d+:|ggml_vulkan: \d+ =)`)
+	cudaFound    = regexp.MustCompile(`(?i)^ggml_cuda_init: found \d+ cuda device`)
+	cudaDevice   = regexp.MustCompile(`(?i)^device \d+:`)
+)
+
+// WhisperBackend is the GPU whisper says it found, in the words it used, or
+// "" when it said nothing — which is what a CPU-only build prints. Whisper
+// writes these lines when it LOADS A MODEL and never on --help, so a job log
+// that wants to say whether the card is live must read a real run's output.
+func WhisperBackend(out []byte) string {
+	if s := deviceSummary(out, vulkanFound, vulkanDevice); s != "" {
+		return s
+	}
+	return deviceSummary(out, cudaFound, cudaDevice)
+}
+
+// deviceSummary joins the "found N devices" line and the device lines under
+// it with "; ". The block ends at the first line that is not a device: what
+// follows is whisper's own progress, not hardware.
+func deviceSummary(out []byte, found, device *regexp.Regexp) string {
+	var lines []string
+	for _, raw := range strings.Split(string(out), "\n") {
+		line := strings.TrimSpace(raw)
+		if len(lines) == 0 {
+			if found.MatchString(line) {
+				lines = append(lines, line)
+			}
+			continue
+		}
+		if !device.MatchString(line) {
+			break
+		}
+		lines = append(lines, line)
+	}
+	return strings.Join(lines, "; ")
+}
+
 // Transcriber runs whisper.cpp over one file's audio. Bin and Model are the
 // TRANSCRIBE and WHISPER_MODEL settings; a zero Transcriber is not usable,
 // which is the point — without the two settings there is no stage.
@@ -90,6 +133,20 @@ type Transcriber struct {
 	// Run is the exec seam. Nil means really run the command; a test
 	// substitutes it and never shells out.
 	Run func(ctx context.Context, name string, args []string) ([]byte, error)
+	// LastOutput is what whisper printed on the run that just finished, kept
+	// so the caller can read the device lines back (WhisperBackend) without
+	// spending a second model load. One item runs at a time.
+	LastOutput []byte
+}
+
+// Whisper runs whisper.cpp over a wav already on disk, writing
+// <outPrefix>.vtt, and answers what it printed. Transcribe is the whole job;
+// this is the one step of it, for a caller that holds the audio already —
+// the worker's start-up probe, which wants only a model load's banner.
+func (t *Transcriber) Whisper(ctx context.Context, wav, outPrefix string) ([]byte, error) {
+	out, err := t.run(ctx, t.Bin, WhisperArgs(t.Model, wav, t.Language, outPrefix, t.Threads))
+	t.LastOutput = out // kept either way: a failing run names the card too
+	return out, err
 }
 
 func (t *Transcriber) run(ctx context.Context, name string, args []string) ([]byte, error) {
@@ -120,7 +177,7 @@ func (t *Transcriber) Transcribe(ctx context.Context, inputURL, destPath string)
 		return "", fmt.Errorf("ffmpeg transcribe extract: %v: %s", err, tail(out, 500))
 	}
 	prefix := filepath.Join(tmp, "transcript")
-	out, err := t.run(ctx, t.Bin, WhisperArgs(t.Model, wav, t.Language, prefix, t.Threads))
+	out, err := t.Whisper(ctx, wav, prefix)
 	if err != nil {
 		return "", fmt.Errorf("whisper: %v: %s", err, tail(out, 500))
 	}

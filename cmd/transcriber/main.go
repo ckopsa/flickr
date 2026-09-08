@@ -188,7 +188,9 @@ func presigner(cfg config) func(context.Context, string) (string, error) {
 
 // announce prints the settings (never a secret) and says which whisper it
 // found. A missing binary is not fatal here: the first item fails loudly with
-// the real error, which is more use than a guess at start-up.
+// the real error, which is more use than a guess at start-up. --help says
+// nothing about hardware, so the GPU line comes after this one, from the
+// model load run() probes with (probe.go).
 func announce(ctx context.Context, cfg config) {
 	log.Printf("transcriber: flickr %s, model %s, language %s, work dir %s, idle sleep %s",
 		cfg.FlickrURL, cfg.WhisperModel, envOr("WHISPER_LANGUAGE", "auto"), cfg.WorkDir, cfg.IdleSleep)
