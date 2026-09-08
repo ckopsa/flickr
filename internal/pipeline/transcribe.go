@@ -45,18 +45,23 @@ func TranscribeAudioArgs(inputURL, outWav string) []string {
 
 // WhisperArgs is pure: model + wav -> whisper.cpp argv (sans binary) that
 // writes <outPrefix>.vtt. An empty language means auto-detect, which is what
-// a library of files in no particular language wants.
-func WhisperArgs(model, wav, language, outPrefix string) []string {
+// a library of files in no particular language wants. Zero threads is
+// whisper's own default; a box that transcribes for a living names its own.
+func WhisperArgs(model, wav, language, outPrefix string, threads int) []string {
 	if language == "" {
 		language = "auto"
 	}
-	return []string{
+	args := []string{
 		"-m", model,
 		"-f", wav,
 		"-l", language,
 		"-ovtt",
 		"-of", outPrefix,
 	}
+	if threads > 0 {
+		args = append(args, "-t", strconv.Itoa(threads))
+	}
+	return args
 }
 
 // detectedLang matches the line whisper.cpp prints when it has worked the
@@ -81,6 +86,7 @@ type Transcriber struct {
 	Bin      string // the whisper.cpp CLI (whisper-cli)
 	Model    string // a ggml model file
 	Language string // "" or "auto": let whisper decide
+	Threads  int    // 0: whisper's own default
 	// Run is the exec seam. Nil means really run the command; a test
 	// substitutes it and never shells out.
 	Run func(ctx context.Context, name string, args []string) ([]byte, error)
@@ -114,7 +120,7 @@ func (t *Transcriber) Transcribe(ctx context.Context, inputURL, destPath string)
 		return "", fmt.Errorf("ffmpeg transcribe extract: %v: %s", err, tail(out, 500))
 	}
 	prefix := filepath.Join(tmp, "transcript")
-	out, err := t.run(ctx, t.Bin, WhisperArgs(t.Model, wav, t.Language, prefix))
+	out, err := t.run(ctx, t.Bin, WhisperArgs(t.Model, wav, t.Language, prefix, t.Threads))
 	if err != nil {
 		return "", fmt.Errorf("whisper: %v: %s", err, tail(out, 500))
 	}

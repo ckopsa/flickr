@@ -25,6 +25,31 @@
 #
 # THE TAG IS THE SHORT SHA, and `:latest` follows it, so a laptop's
 # build.sh (TAG=<sha>) and this workflow name the same image.
+#
+# A SECOND IMAGE, docker.kopsa.info/flickr-transcriber, carries the
+# whisper worker: cmd/transcriber cross-compiled for amd64 and appended
+# the same COPY-only way to ghcr.io/ggml-org/whisper.cpp:main-vulkan.
+# The Vulkan build is the cross-vendor one — big-colt is an amd64 SteamOS
+# box with an AMD GPU, and Vulkan reaches it without ROCm or a vendor
+# runtime. Its runtime stage is ubuntu 24.04 and already carries ffmpeg
+# and whisper-cli (under /app/build/bin, which its PATH names), so the
+# layer is one binary and the config keeps that PATH.
+#
+# THE LAN SIDE (terraform/nomad-jobs/flickr.hcl in
+# ckopsa/home-infrastructure): the transcriber group is pinned to
+# big-colt, reads `transcriber_tag` from the same
+# nomad/jobs/flickr/deploy variable, passes /dev/dri through to the
+# container and mounts the whisper model from a host path. The worker
+# reads env and nothing else — FLICKR_URL, OIDC_ISSUER,
+# TRANSCRIBER_CLIENT_ID and TRANSCRIBER_CLIENT_SECRET (its own Keycloak
+# service-account client), WHISPER_MODEL (the mounted model's path) and
+# the MINIO_* the server uses.
+#
+# ONE VARIABLE, TWO KEYS. `nomad var put` REPLACES the variable, so every
+# write carries both. The server's deploy goes first and writes back
+# whatever transcriber_tag is already there, so a ghcr outage cannot hold
+# the server back; the transcriber job writes both again with its own sha
+# once its image is pushed, and its failure is its own.
 
 name: image
 
@@ -52,6 +77,8 @@ env:
   REGISTRY: docker.kopsa.info
   IMAGE: docker.kopsa.info/flickr
   BASE: jellyfin/jellyfin:latest
+  TRANSCRIBER_IMAGE: docker.kopsa.info/flickr-transcriber
+  TRANSCRIBER_BASE: ghcr.io/ggml-org/whisper.cpp:main-vulkan
   CRANE_VERSION: v0.20.3
 
 jobs:
@@ -145,6 +172,9 @@ jobs:
   # Writing the var is the whole deploy. Skipped, with a notice, until the
   # NOMAD_ADDR / NOMAD_TOKEN secrets exist — the image is pushed either
   # way, and RUNBOOK.md's by-hand write deploys it.
+  #
+  # `needs: build` and NOT the transcriber, on purpose: a whisper base
+  # ghcr will not serve must never keep the server's image off the box.
   deploy:
     needs: build
     runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
@@ -170,8 +200,14 @@ jobs:
         if: steps.gate.outputs.go == 'true'
         run: |
           set -euo pipefail
-          nomad var put -force nomad/jobs/flickr/deploy image_tag="$TAG" >/dev/null
-          echo "deploying ${IMAGE}:${TAG}"
+          # `put` REPLACES the variable, so read the worker's tag back and
+          # carry it through; the transcriber job writes it again when its
+          # own image lands. Empty — the first write, before the key
+          # exists — means this sha: one commit, both images.
+          keep=$(nomad var get -item transcriber_tag nomad/jobs/flickr/deploy 2>/dev/null || true)
+          [ -n "$keep" ] || keep="$TAG"
+          nomad var put -force nomad/jobs/flickr/deploy image_tag="$TAG" transcriber_tag="$keep" >/dev/null
+          echo "deploying ${IMAGE}:${TAG} (transcriber_tag kept at ${keep})"
 
       - name: Watch the restart land
         if: steps.gate.outputs.go == 'true'
@@ -204,3 +240,114 @@ jobs:
           done
           echo "::error::no running server task started after the deploy write within 4 minutes — the tag is written; check \`nomad job status flickr\` (a bad image restarts in a loop; roll back with an older tag from the registry)."
           exit 1
+
+  # The whisper worker's image: the same COPY-only assembly, on the Vulkan
+  # whisper.cpp base, for big-colt's amd64 AMD GPU. It reuses the server
+  # build's tag, so one commit names one pair of images.
+  transcriber:
+    needs: build
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    env:
+      NOMAD_ADDR: ${{ secrets.NOMAD_ADDR }}
+      NOMAD_TOKEN: ${{ secrets.NOMAD_TOKEN }}
+      TAG: ${{ needs.build.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: The registry is on the LAN
+        run: |
+          set -euo pipefail
+          code=$(curl -sS -o /dev/null -w '%{http_code}' "https://${REGISTRY}/v2/" || true)
+          if [ "$code" != "200" ]; then
+            echo "::error::https://${REGISTRY}/v2/ answered ${code}: this runner is not on the LAN (CI_RUNNER unset, or the registry allowlist changed). Nothing pushed."
+            exit 1
+          fi
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      # the build job's key, deliberately: the module cache and most of
+      # the build cache are shared, so this cross-compile starts warm.
+      - name: Cache Go modules, build cache and crane
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+            ~/go/bin/crane
+          key: image-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('go.sum') }}-${{ env.CRANE_VERSION }}
+          restore-keys: |
+            image-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Cross-compile the worker (linux/amd64, pure Go)
+        run: |
+          set -euo pipefail
+          mkdir -p out/app
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+            go build -trimpath -ldflags='-s -w' -o out/app/transcriber ./cmd/transcriber
+          # one layer, one file. /app is the base's OWN directory — its
+          # models/ and its build/bin/whisper-cli live there — so the
+          # layer sets a binary down beside them and touches nothing else.
+          # The mtime is the COMMIT's, like the server's layer.
+          tar --sort=name --owner=0 --group=0 --numeric-owner --mtime="@$(git log -1 --format=%ct)" \
+              -C out -cf layer.tar app/transcriber
+          ls -l layer.tar
+
+      - name: crane
+        run: |
+          set -euo pipefail
+          if [ ! -x ~/go/bin/crane ] || [ "$(~/go/bin/crane version)" != "${CRANE_VERSION#v}" ]; then
+            go install "github.com/google/go-containerregistry/cmd/crane@${CRANE_VERSION}"
+          fi
+          echo "$HOME/go/bin" >> "$GITHUB_PATH"
+
+      - name: Assemble and push ${{ env.TRANSCRIBER_IMAGE }}:${{ needs.build.outputs.tag }}
+        run: |
+          set -euo pipefail
+          crane --platform linux/amd64 append -b "$TRANSCRIBER_BASE" -f layer.tar -t "${TRANSCRIBER_IMAGE}:${TAG}"
+          # the base's entrypoint is `bash -c`; ours is the worker. PATH
+          # keeps /app/build/bin first, where the base puts whisper-cli;
+          # its runtime stage is ubuntu 24.04 and already carries ffmpeg,
+          # so no other layer is appended.
+          crane --platform linux/amd64 mutate "${TRANSCRIBER_IMAGE}:${TAG}" -t "${TRANSCRIBER_IMAGE}:${TAG}" \
+            --entrypoint /app/transcriber --workdir /app \
+            -e PATH=/app/build/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+          # prove the config before anything points at it
+          crane --platform linux/amd64 config "${TRANSCRIBER_IMAGE}:${TAG}" > config.json
+          python3 - <<'PY'
+          import json
+          c = json.load(open("config.json"))
+          cfg = c["config"]
+          assert c["architecture"] == "amd64", c["architecture"]
+          assert cfg.get("Entrypoint") == ["/app/transcriber"], cfg.get("Entrypoint")
+          assert cfg.get("WorkingDir") == "/app", cfg.get("WorkingDir")
+          assert any(e.startswith("PATH=/app/build/bin:") for e in cfg.get("Env", [])), cfg.get("Env")
+          print("cmd inherited from the base (the worker reads env, not arguments):", cfg.get("Cmd"))
+          PY
+          crane tag "${TRANSCRIBER_IMAGE}:${TAG}" latest
+          echo "pushed ${TRANSCRIBER_IMAGE}:${TAG} and :latest"
+
+      - name: Secrets present?
+        id: gate
+        run: |
+          if [ -z "${NOMAD_ADDR}" ] || [ -z "${NOMAD_TOKEN}" ]; then
+            echo "::notice::NOMAD_ADDR / NOMAD_TOKEN are not set on this repository; worker image pushed, transcriber_tag left to the RUNBOOK's by-hand write."
+            echo "go=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "go=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: hashicorp/setup-nomad@v1.0.0
+        if: steps.gate.outputs.go == 'true'
+
+      - name: Point the worker at the new image
+        if: steps.gate.outputs.go == 'true'
+        run: |
+          set -euo pipefail
+          # both keys again, because `put` replaces. The sha is the server
+          # deploy's own, so image_tag comes back exactly as that job left
+          # it however the two are ordered.
+          nomad var put -force nomad/jobs/flickr/deploy image_tag="$TAG" transcriber_tag="$TAG" >/dev/null
+          echo "deploying ${TRANSCRIBER_IMAGE}:${TAG}"

@@ -1,0 +1,205 @@
+{
+  "self": "/api/transcripts",
+  "kind": "transcripts",
+  "title": "Transcription queue",
+  "queue": [
+    {
+      "id": 1,
+      "object_key": "Audiobooks/Frank Herbert/Dune (1965)/01 - Part 1.m4b",
+      "etag": "e1",
+      "medium": "audio",
+      "duration_seconds": 41400,
+      "title": "Part 1",
+      "url": "https://storage.test/Audiobooks/Frank Herbert/Dune (1965)/01 - Part 1.m4b?signed",
+      "links": {
+        "item": {
+          "href": "/api/items/1",
+          "title": "Part 1"
+        }
+      },
+      "actions": {
+        "transcript": {
+          "method": "POST",
+          "href": "/api/items/1/transcript",
+          "input": {
+            "etag": "e1",
+            "language": "string?",
+            "model": "string?"
+          },
+          "label": "Deliver the transcript"
+        }
+      }
+    },
+    {
+      "id": 2,
+      "object_key": "Audiobooks/Frank Herbert/Dune (1965)/02 - Part 2.m4b",
+      "etag": "e2",
+      "medium": "audio",
+      "duration_seconds": 39000,
+      "title": "Part 2",
+      "url": "https://storage.test/Audiobooks/Frank Herbert/Dune (1965)/02 - Part 2.m4b?signed",
+      "links": {
+        "item": {
+          "href": "/api/items/2",
+          "title": "Part 2"
+        }
+      },
+      "actions": {
+        "transcript": {
+          "method": "POST",
+          "href": "/api/items/2/transcript",
+          "input": {
+            "etag": "e2",
+            "language": "string?",
+            "model": "string?"
+          },
+          "label": "Deliver the transcript"
+        }
+      }
+    },
+    {
+      "id": 5,
+      "object_key": "Music/Radiohead/OK Computer (1997)/01 Airbag.flac",
+      "etag": "e5",
+      "medium": "audio",
+      "duration_seconds": 284,
+      "title": "Airbag",
+      "url": "https://storage.test/Music/Radiohead/OK Computer (1997)/01 Airbag.flac?signed",
+      "links": {
+        "item": {
+          "href": "/api/items/5",
+          "title": "Airbag"
+        }
+      },
+      "actions": {
+        "transcript": {
+          "method": "POST",
+          "href": "/api/items/5/transcript",
+          "input": {
+            "etag": "e5",
+            "language": "string?",
+            "model": "string?"
+          },
+          "label": "Deliver the transcript"
+        }
+      }
+    },
+    {
+      "id": 6,
+      "object_key": "Music/Radiohead/OK Computer (1997)/02 Paranoid Android.flac",
+      "etag": "e6",
+      "medium": "audio",
+      "duration_seconds": 383,
+      "title": "Paranoid Android",
+      "url": "https://storage.test/Music/Radiohead/OK Computer (1997)/02 Paranoid Android.flac?signed",
+      "links": {
+        "item": {
+          "href": "/api/items/6",
+          "title": "Paranoid Android"
+        }
+      },
+      "actions": {
+        "transcript": {
+          "method": "POST",
+          "href": "/api/items/6/transcript",
+          "input": {
+            "etag": "e6",
+            "language": "string?",
+            "model": "string?"
+          },
+          "label": "Deliver the transcript"
+        }
+      }
+    },
+    {
+      "id": 7,
+      "object_key": "Shows/The Office (2005)/Featurettes/Deleted Scenes.mkv",
+      "etag": "e7",
+      "medium": "video",
+      "duration_seconds": 900,
+      "title": "Deleted Scenes",
+      "url": "https://storage.test/Shows/The Office (2005)/Featurettes/Deleted Scenes.mkv?signed",
+      "links": {
+        "item": {
+          "href": "/api/items/7",
+          "title": "Deleted Scenes"
+        }
+      },
+      "actions": {
+        "transcript": {
+          "method": "POST",
+          "href": "/api/items/7/transcript",
+          "input": {
+            "etag": "e7",
+            "language": "string?",
+            "model": "string?"
+          },
+          "label": "Deliver the transcript"
+        }
+      }
+    },
+    {
+      "id": 10,
+      "object_key": "Music/Radiohead/Pablo Honey (1993)/01 You.flac",
+      "etag": "e10",
+      "medium": "audio",
+      "duration_seconds": 208,
+      "title": "You",
+      "url": "https://storage.test/Music/Radiohead/Pablo Honey (1993)/01 You.flac?signed",
+      "links": {
+        "item": {
+          "href": "/api/items/10",
+          "title": "You"
+        }
+      },
+      "actions": {
+        "transcript": {
+          "method": "POST",
+          "href": "/api/items/10/transcript",
+          "input": {
+            "etag": "e10",
+            "language": "string?",
+            "model": "string?"
+          },
+          "label": "Deliver the transcript"
+        }
+      }
+    },
+    {
+      "id": 11,
+      "object_key": "Music/Radiohead/The Bends/01 Planet Telex.flac",
+      "etag": "e11",
+      "medium": "audio",
+      "duration_seconds": 259,
+      "title": "Planet Telex",
+      "url": "https://storage.test/Music/Radiohead/The Bends/01 Planet Telex.flac?signed",
+      "links": {
+        "item": {
+          "href": "/api/items/11",
+          "title": "Planet Telex"
+        }
+      },
+      "actions": {
+        "transcript": {
+          "method": "POST",
+          "href": "/api/items/11/transcript",
+          "input": {
+            "etag": "e11",
+            "language": "string?",
+            "model": "string?"
+          },
+          "label": "Deliver the transcript"
+        }
+      }
+    }
+  ],
+  "count": 7,
+  "leased": 7,
+  "links": {
+    "root": {
+      "href": "/api/",
+      "title": "flickr"
+    }
+  }
+}
+
