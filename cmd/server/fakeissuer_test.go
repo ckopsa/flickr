@@ -16,6 +16,8 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
+	"html"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -62,9 +64,7 @@ func newFakeIssuer(t *testing.T) *fakeIssuer {
 	mux.HandleFunc("GET /jwks", f.handleJWKS)
 	mux.HandleFunc("GET /authorize", f.handleAuthorize)
 	mux.HandleFunc("POST /token", f.handleToken)
-	mux.HandleFunc("GET /logout", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	})
+	mux.HandleFunc("GET /logout", f.handleLogout)
 	f.srv = httptest.NewServer(mux)
 	t.Cleanup(f.srv.Close)
 	return f
@@ -92,6 +92,12 @@ func (f *fakeIssuer) handleJWKS(w http.ResponseWriter, r *http.Request) {
 // handleAuthorize is the sign-in page a person would see, minus the person:
 // it remembers the challenge and the nonce, and sends the browser back to
 // the redirect_uri with a code.
+//
+// A REAL browser — the smoke's Chromium, which asks for HTML — is given the
+// page instead, with one button on it. An immediate redirect would be a door
+// nobody can be seen walking through: the smoke needs somewhere to stand and
+// something to press. Anything else, the unit test's client included, sends
+// no Accept and gets the redirect it always got.
 func (f *fakeIssuer) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	f.mu.Lock()
@@ -110,7 +116,28 @@ func (f *fakeIssuer) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 	rq.Set("code", code)
 	rq.Set("state", q.Get("state"))
 	back.RawQuery = rq.Encode()
+	if strings.Contains(r.Header.Get("Accept"), "text/html") {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		fmt.Fprintf(w, `<!doctype html><html><head><meta charset="utf-8"><title>Sign in</title></head>
+<body style="font:16px sans-serif;padding:40px">
+<h1>The household account</h1>
+<a id="approve" href="%s">Sign in as Chris</a>
+</body></html>`, html.EscapeString(back.String()))
+		return
+	}
 	http.Redirect(w, r, back.String(), http.StatusFound)
+}
+
+// handleLogout is the end-session endpoint: the SSO session goes (there is
+// none to keep here), and the browser goes back where the caller asked, as
+// Keycloak's does. With nowhere named it is a blank page — which is what
+// flickr's own logout works around by sending the browser home itself.
+func (f *fakeIssuer) handleLogout(w http.ResponseWriter, r *http.Request) {
+	if back := r.URL.Query().Get("post_logout_redirect_uri"); back != "" {
+		http.Redirect(w, r, back, http.StatusFound)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
 }
 
 // handleToken trades a code for an id_token, and refuses everything a real

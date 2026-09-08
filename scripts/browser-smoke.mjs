@@ -7,6 +7,14 @@
 //
 //   node scripts/browser-smoke.mjs            # headless, prints a report
 //   SMOKE_OUT=/tmp/smoke node scripts/...     # keep screenshots there
+//   SMOKE_OIDC=1 node scripts/...             # ...behind a fake Keycloak
+//
+// SMOKE_OIDC puts the household sign-in in front of the library (the server
+// half stands up the fake issuer of cmd/server/fakeissuer_test.go) and adds
+// one step before the walk: anonymous is refused in words, the door leads to
+// the provider and back to the hash it left, and Sign out lands at the door
+// again. Every step after it runs signed in, and reads exactly as it does
+// without the gate.
 //
 // Needs: go, node, and Playwright with its Chromium (the web environment has
 // them; locally `npm i -g playwright && npx playwright install chromium`).
@@ -86,13 +94,27 @@ async function startServer(bin) {
   child.stderr.on('data', d => { log += d; });
   for (let i = 0; i < 100; i++) {
     try {
-      const r = await fetch(base + '/api/');
+      // /api/system is the health check, which is open on both sides of the
+      // gate: with SMOKE_OIDC on, /api/ answers a 401 to a probe like this.
+      const r = await fetch(base + '/api/system');
       if (r.ok) return { child, log: () => log };
     } catch (e) { /* not up yet */ }
     if (child.exitCode != null) throw new Error('server exited early:\n' + log);
     await new Promise(r => setTimeout(r, 100));
   }
   throw new Error('server did not come up:\n' + log);
+}
+
+// Where the fake Keycloak listens, as the server logged it. The port is its
+// own, so the walk can say "the browser left for the provider" by looking at
+// an origin rather than at a URL it composed.
+async function issuerOf(server) {
+  for (let i = 0; i < 100; i++) {
+    const m = /smoke issuer on (\S+)/.exec(server.log());
+    if (m) return m[1];
+    await new Promise(r => setTimeout(r, 100));
+  }
+  throw new Error('the server never logged its issuer:\n' + server.log());
 }
 
 // --- the walk ------------------------------------------------------------------
@@ -129,7 +151,58 @@ async function snap(page, name) {
   await page.screenshot({ path: join(out, name) });
 }
 
-async function walk(page) {
+// The household sign-in, walked once before everything else (SMOKE_OIDC).
+// The gate is the server's; what is proved here is the client's half of it:
+// a 401 is a door, and the door comes back to the hash the viewer was on.
+async function signIn(page, issuer) {
+  await step(page, 'door: anonymous is refused, signs in, out, and in again', async () => {
+    // The refusal in words, before a browser is involved — and the health
+    // check, which is open because Nomad carries no cookie.
+    const refused = await page.request.get(base + '/api/library');
+    if (refused.status() !== 401) throw new Error('anonymous /api/library is ' + refused.status() + ', want 401');
+    const ct = refused.headers()['content-type'] || '';
+    if (!/^application\/problem\+json/.test(ct)) throw new Error('the refusal is ' + ct);
+    const health = await page.request.get(base + '/api/system');
+    if (health.status() !== 200) throw new Error('/api/system is ' + health.status() + ', want 200');
+
+    // The kernel reads the remedy and leaves for the provider.
+    await page.goto(base + '/#/');
+    await page.waitForFunction(o => location.origin === o, issuer, { timeout: 15000 })
+      .catch(() => { throw new Error('anonymous stayed on ' + page.url() + ', want the issuer'); });
+    await snap(page, 'signin.png');
+
+    // ...and comes back where it was: the return_to carried the hash, which
+    // is the only side that knows it.
+    await page.click('#approve');
+    await page.waitForFunction(o => location.origin === o && location.hash === '#/', base, { timeout: 15000 })
+      .catch(() => { throw new Error('the callback landed on ' + page.url() + ', want #/'); });
+    await page.waitForFunction(() => document.querySelector('section.band .card'), null, { timeout: 15000 })
+      .catch(() => { throw new Error('signed in, but the library did not draw'); });
+
+    // Who the server read the page as. The profile gate is a panel over
+    // everything until somebody picks a face, and this step is about the
+    // household rather than who is watching, so the gear and the door out
+    // are pressed through the elements themselves.
+    await page.locator('#gear').dispatchEvent('click');
+    await expectVisible(page, '#settings-account', 'the account row');
+    const who = (await page.textContent('#settings-account')) || '';
+    if (!/Signed in as Chris/.test(who)) throw new Error('the account row reads ' + who);
+    await page.locator('#settings-account .acct-link').dispatchEvent('click');
+
+    // Signed out: the session cookie is gone, so the shell bounces off the
+    // gate to the door again and the documents refuse as they did at first.
+    await page.waitForFunction(o => location.origin === o, issuer, { timeout: 15000 })
+      .catch(() => { throw new Error('sign out landed on ' + page.url() + ', want the door'); });
+    const after = await page.request.get(base + '/api/library');
+    if (after.status() !== 401) throw new Error('signed out, /api/library is ' + after.status());
+
+    // And in again, so every step after this one runs signed in.
+    await page.click('#approve');
+    await page.waitForFunction(o => location.origin === o, base, { timeout: 15000 });
+  });
+}
+
+async function walk(page, issuer) {
   page.on('pageerror', e => jsErrors.push('pageerror: ' + e.message));
   page.on('console', m => {
     if (m.type() !== 'error') return;
@@ -140,6 +213,8 @@ async function walk(page) {
   page.on('response', r => {
     if (r.status() >= 500) jsErrors.push(`HTTP ${r.status()} ${r.url()}`);
   });
+
+  if (issuer) await signIn(page, issuer);
 
   await step(page, 'boot: the gate asks who is watching', async () => {
     await page.goto(base + '/');
@@ -370,10 +445,12 @@ try {
   const bin = buildServer();
   server = await startServer(bin);
   console.log('smoke: server on ' + base);
+  const issuer = process.env.SMOKE_OIDC ? await issuerOf(server) : null;
+  if (issuer) console.log('smoke: signing in via ' + issuer);
   const browser = await chromium.launch({ args: ['--autoplay-policy=no-user-gesture-required'] });
   const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 } });
   const page = await ctx.newPage();
-  await walk(page);
+  await walk(page, issuer);
   await browser.close();
 } catch (e) {
   failures.push({ name: 'harness', error: String(e && e.stack || e) });

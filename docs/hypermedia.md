@@ -65,6 +65,20 @@ The package is `internal/hyper`: `Envelope`, `Link`, `Action`,
 `Problem`, and a `Doc` builder that every handler uses. Handlers stop
 writing bare maps.
 
+**The sign-in is a remedy like any other.** Read by nobody, a gated
+address answers `401 application/problem+json`, `type:
+unauthenticated`, whose remedy is the door: `{"text": "Sign in with the
+household account.", "link": {"href": "/auth/login", "title": "Sign
+in"}}`. The client is taught no rule by it — it follows a remedy, as it
+does for every other refusal. The href carries no `return_to`, because
+where the viewer was standing is a HASH (`#/item/2090?t=142`) and a hash
+never reaches a server: the client appends it (`?return_to=` + path +
+search + hash) and the callback comes back to that very place. The root
+document says the other half — `viewer` and `links.logout` when
+somebody is signed in, `links.login` when nobody is — so the account row
+is drawn from a document too, and a server with no issuer configured
+carries neither and has no account row at all.
+
 ## The documents
 
 | Document | Address | Carries | Actions |
