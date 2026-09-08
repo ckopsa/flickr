@@ -99,6 +99,11 @@ func run(ctx context.Context, cfg config, d deps) error {
 		}()
 	}
 
+	// Once, before any work: which card whisper loads the model onto. After
+	// this it is only said again when it CHANGES, so a steady worker stays
+	// one line an item.
+	backend := probeBackend(ctx, cfg, d)
+
 	backoff := time.Duration(0)
 	for {
 		if stopping(ctx, d.Stopping) {
@@ -125,6 +130,10 @@ func run(ctx context.Context, cfg config, d deps) error {
 				return nil
 			}
 			d.do(ctx, cfg, it)
+			if b := pipeline.WhisperBackend(d.Trans.LastOutput); b != "" && b != backend {
+				log.Printf("whisper backend: %s", b)
+				backend = b
+			}
 		}
 	}
 }

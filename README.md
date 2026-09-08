@@ -269,10 +269,14 @@ a handful of architectural decisions (see design notes below):
    `OIDC_ISSUER` + `TRANSCRIBER_CLIENT_ID` + `TRANSCRIBER_CLIENT_SECRET` (or a
    static `FLICKR_TOKEN`, or nothing at all on a LAN with no gate) and runs
    `WHISPER_BIN` over `WHISPER_MODEL` with `WHISPER_LANGUAGE` and
-   `WHISPER_THREADS`. Where `MINIO_ENDPOINT`, its two keys and `MINIO_BUCKET`
-   are set it signs its own URL for the audio against that LAN address rather
-   than using the queue's, which is signed for the public host; the job that
-   runs the binary is the cluster's.
+   `WHISPER_THREADS`. At start-up it loads the model once over half a second
+   of silence it generates itself and logs the GPU whisper found — the
+   `ggml_vulkan` / `ggml_cuda_init` device lines, which whisper prints on a
+   model load and never on `--help` — so the job log says whether the card is
+   in use, and says it again only when it changes. Where `MINIO_ENDPOINT`, its
+   two keys and `MINIO_BUCKET` are set it signs its own URL for the audio
+   against that LAN address rather than using the queue's, which is signed for
+   the public host; the job that runs the binary is the cluster's.
 19. **Find the line, land on the scene** — a transcript is the only place the
    WORDS of a film are written down, so at transcript time the WebVTT is
    parsed back into cues (`pipeline.ParseVTT`, pure) and stored in `library.db`

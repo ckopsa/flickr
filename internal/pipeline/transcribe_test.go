@@ -78,6 +78,35 @@ func TestDetectedLanguage(t *testing.T) {
 	}
 }
 
+// The device lines whisper prints when it loads a model: a Vulkan build, a
+// CUDA one, and the CPU build that prints none.
+func TestWhisperBackend(t *testing.T) {
+	vulkan := `whisper_init_from_file_with_params_no_state: loading model from '/m/ggml-large-v3.bin'
+WARNING: radv is not a conformant Vulkan implementation, testing use only.
+ggml_vulkan: Found 1 Vulkan devices:
+Vulkan0: AMD Radeon RX 9070 XT (RADV GFX1201) | uma: 0 | fp16: 1 | warp size: 64
+whisper_model_load: Vulkan0 total size =  3094.36 MB
+`
+	cuda := `ggml_cuda_init: GGML_CUDA_FORCE_MMQ:    no
+ggml_cuda_init: found 2 CUDA devices:
+  Device 0: NVIDIA GeForce RTX 3090, compute capability 8.6, VMM: yes
+  Device 1: NVIDIA GeForce RTX 3090, compute capability 8.6, VMM: yes
+whisper_model_load: loading model
+`
+	cases := []struct{ name, out, want string }{
+		{"vulkan", vulkan, "ggml_vulkan: Found 1 Vulkan devices:; Vulkan0: AMD Radeon RX 9070 XT (RADV GFX1201) | uma: 0 | fp16: 1 | warp size: 64"},
+		{"cuda", cuda, "ggml_cuda_init: found 2 CUDA devices:; Device 0: NVIDIA GeForce RTX 3090, compute capability 8.6, VMM: yes; Device 1: NVIDIA GeForce RTX 3090, compute capability 8.6, VMM: yes"},
+		{"cpu says nothing", "whisper_model_load: model ctx = 2951.27 MB\n", ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := WhisperBackend([]byte(c.out)); got != c.want {
+				t.Errorf("WhisperBackend = %q, want %q", got, c.want)
+			}
+		})
+	}
+}
+
 // The whole flow over the exec seam: two commands in order, the wav handed
 // from the first to the second, and only a complete transcript at destPath.
 func TestTranscribeRunsBothCommands(t *testing.T) {
@@ -150,6 +179,11 @@ func TestTranscribeLeavesNothingOnFailure(t *testing.T) {
 	entries, _ := os.ReadDir(dir)
 	if len(entries) != 0 {
 		t.Errorf("a failed run left %d files behind", len(entries))
+	}
+	// What whisper said is kept either way: a run that died still named the
+	// card it loaded the model onto.
+	if !strings.Contains(string(tr.LastOutput), "out of memory") {
+		t.Errorf("LastOutput = %q, want what the failed whisper printed", tr.LastOutput)
 	}
 }
 
