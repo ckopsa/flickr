@@ -113,6 +113,10 @@ func (s *server) handleRootDoc(w http.ResponseWriter, r *http.Request) {
 		Link("items", "/api/items", "Items").
 		Link("scan", "/api/scan", "Scan status").
 		Link("system", "/api/system", "System").
+		// The files with nothing to read yet, and the write that brings one
+		// back: this is how a worker on another node finds its work
+		// (transcripts.go).
+		Link("transcripts", transcriptsHref, "Transcription queue").
 		Link("profiles", "/api/users", "Profiles").
 		Action("scan", hyper.Action{
 			Method: "POST", Href: "/api/scan", Label: "Scan the library",

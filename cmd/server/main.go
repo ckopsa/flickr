@@ -81,6 +81,9 @@ type server struct {
 	// transcribeBusy guards it the way trickplayBusy guards sprite sheets:
 	// one item at a time, one pass at a time.
 	transcribeBusy atomic.Bool
+	// leases is the transcription queue's memory of what it has handed to a
+	// worker elsewhere (transcripts.go). Its zero value is usable.
+	leases transcriptLeases
 	// rp is the OpenID Connect relying party (auth.go), nil when OIDC_ISSUER
 	// is unset: no sign-in, no /auth/ routes, no gate. A household on its own
 	// LAN runs with it nil.
@@ -360,6 +363,10 @@ func (s *server) routes() *http.ServeMux {
 	mux.HandleFunc("GET /api/items/{id}/trickplay.json", s.handleTrickplayIndex)
 	mux.HandleFunc("GET /api/items/{id}/trickplay/{file}", s.handleTrickplaySheet)
 	mux.HandleFunc("POST /api/items/{id}/trickplay", s.handleGenerateTrickplay)
+	// Transcription handed out: the queue a worker elsewhere reads, and the
+	// WebVTT it posts back (transcripts.go).
+	mux.HandleFunc("GET /api/transcripts", s.handleTranscriptQueue)
+	mux.HandleFunc("POST /api/items/{id}/transcript", s.handleDeliverTranscript)
 	mux.HandleFunc("POST /api/scan", s.handleScan)
 	mux.HandleFunc("GET /api/scan", s.handleScanStatus)
 	mux.HandleFunc("GET /api/system", s.handleSystem)
@@ -920,13 +927,22 @@ func (s *server) transcribe(ctx context.Context, item *store.Item) error {
 	if err != nil {
 		return err
 	}
+	return s.recordTranscript(item.ID, item.ETag, lang, filepath.Base(s.transcriber.Model))
+}
+
+// recordTranscript is the tail both halves of transcription share: the row
+// that says this file has been heard, and the cues behind the dialogue
+// search. The local stage calls it with what whisper reported here; the
+// delivery route (transcripts.go) calls it with what a worker elsewhere sent.
+// The WebVTT is already at transcriptPath(id) either way.
+func (s *server) recordTranscript(id int64, etag, language, model string) error {
 	if err := s.library.SetTranscript(store.Transcript{
-		ItemID: item.ID, ETag: item.ETag, Language: lang,
-		Model: filepath.Base(s.transcriber.Model), GeneratedAt: time.Now(),
+		ItemID: id, ETag: etag, Language: language,
+		Model: model, GeneratedAt: time.Now(),
 	}); err != nil {
 		return err
 	}
-	return s.indexCues(item.ID)
+	return s.indexCues(id)
 }
 
 // indexCues reads the WebVTT just written back into the lines it holds and

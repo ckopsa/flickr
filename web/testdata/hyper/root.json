@@ -58,6 +58,10 @@
       "href": "/api/system",
       "title": "System"
     },
+    "transcripts": {
+      "href": "/api/transcripts",
+      "title": "Transcription queue"
+    },
     "works": {
       "href": "/api/works",
       "title": "Works"
