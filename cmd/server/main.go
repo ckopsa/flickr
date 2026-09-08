@@ -393,6 +393,10 @@ func (s *server) routes() *http.ServeMux {
 	// passage link pasted into a chat has something to unfurl. A subtree,
 	// because "#" + whatever follows /s is the hash it stands for.
 	mux.HandleFunc("GET /s/", s.handleShare)
+	// The device door (device.go): a signed capability in the path, so a
+	// cast device holding no cookie can still fetch the stream, the session
+	// document and the picture the play handed it.
+	s.deviceRoutes(mux)
 	// Log stream fetches: which client asked for which segment with what
 	// Range — a poor man's receiver-side network tab.
 	streamFiles := http.StripPrefix("/streams/", http.FileServer(http.Dir("data/streams")))

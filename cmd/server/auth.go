@@ -371,10 +371,10 @@ func unauthenticated() hyper.Problem {
 }
 
 // gatedPath is what the household's sign-in stands in front of: the
-// documents, the streams, the share pages and the device doors. Everything
-// else is the shell — index.html, its scripts, receiver.html, sw.js, the
-// manifest and the icons — which are public files that reveal nothing, and
-// which have to load for there to be anything to sign in with.
+// documents, the streams and the share pages. Everything else is the shell —
+// index.html, its scripts, receiver.html, sw.js, the manifest and the icons —
+// which are public files that reveal nothing, and which have to load for
+// there to be anything to sign in with.
 func gatedPath(p string) bool {
 	// /api/system is the Nomad health check: the orchestrator has no cookie
 	// and no token, and a job that cannot answer "am I up" is restarted for
@@ -387,7 +387,14 @@ func gatedPath(p string) bool {
 	if strings.HasPrefix(p, "/auth/") {
 		return false
 	}
-	for _, prefix := range []string{"/api/", "/streams/", "/s/", "/d/"} {
+	// The device door carries its own lock: /d/{token}/… is checked by
+	// device.go, which refuses with this same problem and otherwise puts a
+	// viewer on the context. Gating it here would 401 every cast device
+	// before it could show what it holds.
+	if strings.HasPrefix(p, "/d/") {
+		return false
+	}
+	for _, prefix := range []string{"/api/", "/streams/", "/s/"} {
 		if strings.HasPrefix(p, prefix) {
 			return true
 		}
