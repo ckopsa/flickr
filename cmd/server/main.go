@@ -56,7 +56,11 @@ type server struct {
 	plays    playSessions
 	enricher *tmdb.Enricher // nil = TMDB enrichment disabled
 	s3       *minio.Client
-	bucket   string
+	// presigner is the client every presigned URL is signed with: s3 itself,
+	// or a second client made for MINIO_PUBLIC_ENDPOINT — a URL is signed for
+	// the host it names, so a device off the LAN needs the public host.
+	presigner *minio.Client
+	bucket    string
 	// presign, when set, stands in for the S3 presigner — the seam a test
 	// stands the play routes up through without MinIO.
 	presign func(ctx context.Context, objectKey string) (string, error)
@@ -113,12 +117,28 @@ func main() {
 		log.Fatal("MINIO_ACCESS_KEY and MINIO_SECRET_KEY must be set (env or .env file)")
 	}
 
-	s3, err := minio.New(endpoint, &minio.Options{
-		Creds:  credentials.NewStaticV4(accessKey, secretKey, ""),
-		Secure: false,
-	})
+	creds := credentials.NewStaticV4(accessKey, secretKey, "")
+	s3, err := minio.New(endpoint, &minio.Options{Creds: creds, Secure: false})
 	if err != nil {
 		log.Fatal(err)
+	}
+
+	// Reads, probes and scans keep going through MINIO_ENDPOINT on the LAN,
+	// but a presigned URL is bound to the host it was signed for, and a phone
+	// on LTE cannot reach 192.168.x. MINIO_PUBLIC_ENDPOINT names the host the
+	// same bucket answers on publicly; signing is local arithmetic, so this
+	// second client never contacts it.
+	presigner := s3
+	if public := os.Getenv("MINIO_PUBLIC_ENDPOINT"); public != "" {
+		host, opts, err := presignEndpoint(public, creds)
+		if err != nil {
+			log.Fatalf("bad MINIO_PUBLIC_ENDPOINT %q: %v", public, err)
+		}
+		presigner, err = minio.New(host, opts)
+		if err != nil {
+			log.Fatalf("bad MINIO_PUBLIC_ENDPOINT %q: %v", public, err)
+		}
+		log.Printf("presigning playback URLs against %s", public)
 	}
 
 	if err := os.MkdirAll("data/streams", 0o755); err != nil {
@@ -153,12 +173,13 @@ func main() {
 			Client: s3, Bucket: bucket, Library: library, Workers: 2,
 			Yield: func() bool { return sessions.ActiveCount() > 0 },
 		},
-		sessions: sessions,
-		s3:       s3,
-		bucket:   bucket,
-		policy:   model.DefaultPolicy(),
-		hw:       hw,
-		baseURL:  envOr("ADVERTISE_URL", lanBaseURL(endpoint, addr)),
+		sessions:  sessions,
+		s3:        s3,
+		presigner: presigner,
+		bucket:    bucket,
+		policy:    model.DefaultPolicy(),
+		hw:        hw,
+		baseURL:   envOr("ADVERTISE_URL", lanBaseURL(endpoint, addr)),
 	}
 	srv.trickplayWindow, err = parseClockWindow(os.Getenv("TRICKPLAY_WINDOW"))
 	if err != nil {
@@ -771,7 +792,7 @@ func (s *server) runTrickplay(ctx context.Context) {
 
 // generateTrickplay produces the sprite-sheet set for one item.
 func (s *server) generateTrickplay(ctx context.Context, item *store.Item) error {
-	u, err := s.s3.PresignedGetObject(ctx, s.bucket, item.ObjectKey, 6*time.Hour, url.Values{})
+	u, err := s.presigner.PresignedGetObject(ctx, s.bucket, item.ObjectKey, 6*time.Hour, url.Values{})
 	if err != nil {
 		return err
 	}
@@ -1125,7 +1146,7 @@ func (s *server) handleSubtitle(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		} else {
-			u, err := s.s3.PresignedGetObject(r.Context(), s.bucket, item.ObjectKey, time.Hour, url.Values{})
+			u, err := s.presigner.PresignedGetObject(r.Context(), s.bucket, item.ObjectKey, time.Hour, url.Values{})
 			if err != nil {
 				httpErr(w, 500, err)
 				return
@@ -1156,7 +1177,7 @@ func (s *server) cacheExternalSubtitle(ctx context.Context, track *model.Subtitl
 		defer obj.Close()
 		return writeFileAtomic(cachePath, obj)
 	}
-	u, err := s.s3.PresignedGetObject(ctx, s.bucket, track.ObjectKey, time.Hour, url.Values{})
+	u, err := s.presigner.PresignedGetObject(ctx, s.bucket, track.ObjectKey, time.Hour, url.Values{})
 	if err != nil {
 		return err
 	}
@@ -1356,7 +1377,7 @@ func (s *server) ensureCover(ctx context.Context, id int64) bool {
 	}
 	switch item.MediaInfo.MediumOrVideo() {
 	case model.MediumAudio:
-		u, err := s.s3.PresignedGetObject(ctx, s.bucket, item.ObjectKey, time.Hour, url.Values{})
+		u, err := s.presigner.PresignedGetObject(ctx, s.bucket, item.ObjectKey, time.Hour, url.Values{})
 		if err != nil {
 			log.Printf("cover: item %d: presign: %v", id, err)
 			return false
@@ -1543,6 +1564,31 @@ func httpErr(w http.ResponseWriter, code int, err error) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
 	json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+}
+
+// presignEndpoint turns a MINIO_PUBLIC_ENDPOINT URL into the host and options
+// minio.New wants. The scheme is what says whether to sign for https, so a
+// bare host is a refusal rather than a guess, and a path would be prefixed
+// onto every signed object key.
+func presignEndpoint(raw string, creds *credentials.Credentials) (string, *minio.Options, error) {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "", nil, err
+	}
+	switch u.Scheme {
+	case "http", "https":
+	case "":
+		return "", nil, fmt.Errorf("no scheme: want http:// or https://")
+	default:
+		return "", nil, fmt.Errorf("scheme %q: want http:// or https://", u.Scheme)
+	}
+	if u.Host == "" {
+		return "", nil, fmt.Errorf("no host")
+	}
+	if u.Path != "" && u.Path != "/" {
+		return "", nil, fmt.Errorf("path %q: want an origin, not a path", u.Path)
+	}
+	return u.Host, &minio.Options{Creds: creds, Secure: u.Scheme == "https"}, nil
 }
 
 // lanBaseURL finds this machine's LAN-facing address by asking the kernel

@@ -346,6 +346,13 @@ Requires `ffmpeg`/`ffprobe` on PATH. Media files are read straight from MinIO
 via presigned URLs — both for probing and as FFmpeg input; nothing is copied
 locally except HLS segments in `data/streams/`.
 
+`MINIO_PUBLIC_ENDPOINT` (a URL with a scheme, e.g. `https://minio.kopsa.info`)
+is for a server reached from off the LAN: a presigned URL is signed for the
+host it names, so one signed for `MINIO_ENDPOINT`'s `192.168.1.40:9000` is
+unfetchable on a phone's LTE. Set it and the server keeps scanning, probing
+and reading over `MINIO_ENDPOINT` but signs playback URLs for the public host
+(signing is arithmetic, nothing is dialled). Unset, it signs as before.
+
 ## Deploy
 
 A merge to `master` that touches `cmd/`, `internal/`, `web/` or the Go

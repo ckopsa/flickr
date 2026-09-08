@@ -237,12 +237,14 @@ func newSessionID() string {
 
 // presignedURL is the item's bytes, addressed so a device can fetch them
 // directly. It is a field on the server rather than a bare call so a test
-// can stand the play routes up without MinIO.
+// can stand the play routes up without MinIO. Six hours because such a URL
+// is bearer-style once it leaves the LAN — anyone holding it can fetch the
+// file until it expires — and nothing longer than a film is needed.
 func (s *server) presignedURL(ctx context.Context, objectKey string) (string, error) {
 	if s.presign != nil {
 		return s.presign(ctx, objectKey)
 	}
-	u, err := s.s3.PresignedGetObject(ctx, s.bucket, objectKey, 6*time.Hour, url.Values{})
+	u, err := s.presigner.PresignedGetObject(ctx, s.bucket, objectKey, 6*time.Hour, url.Values{})
 	if err != nil {
 		return "", err
 	}
