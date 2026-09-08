@@ -46,12 +46,35 @@
       this.detail = b.detail || b.title || b.error || this.message;
       this.remedy = b.remedy || null;
     }
-    // The remedy in one sentence, for a screen that has room for it.
+    // The remedy in one sentence, for a screen that has room for it. `text`
+    // is what the server's Remedy calls it; the other two are older spellings.
     get remedyText() {
       const r = this.remedy;
       if (!r) return '';
-      return typeof r === 'string' ? r : (r.action || r.detail || '');
+      return typeof r === 'string' ? r : (r.text || r.action || r.detail || '');
     }
+  }
+
+  // --- the sign-in door --------------------------------------------------------
+  //
+  // A 401 whose remedy names a link is not a refusal to show: it is the door,
+  // and the browser goes through it. The remedy's href carries no `return_to`
+  // on purpose — the server never sees the hash, and the hash is where the
+  // viewer was — so it is added here.
+  //
+  // Once per page load. A door that answers 401 again would otherwise be a
+  // loop, and a loop is worse than an error message. A best-effort request —
+  // a beacon, a heartbeat, anything opts.quiet or keepalive marks — never
+  // opens it either: those fail quietly, as they always did.
+  let leaving = false;
+  function signIn(p, opts) {
+    if (leaving || (opts && (opts.quiet || opts.keepalive))) return;
+    const l = p && p.remedy && p.remedy.link;
+    if (!l || !l.href) return;
+    leaving = true;
+    forget();   // what was read as nobody is not worth keeping
+    kernel.leave(l.href + '?return_to=' +
+      encodeURIComponent(location.pathname + location.search + location.hash));
   }
 
   // api follows one href. It never builds one.
@@ -59,7 +82,10 @@
     const r = await fetch(href, opts);
     if (r.status === 204) return null;
     const body = await r.json().catch(() => null);
-    if (!r.ok) throw new Problem(r.status, body, r.statusText);
+    if (!r.ok) {
+      if (r.status === 401) signIn(body, opts);
+      throw new Problem(r.status, body, r.statusText);
+    }
     return body;
   }
 
@@ -799,10 +825,22 @@
     $('settings-autoplay').textContent =
       'Autoplay next: ' + (root.Player.autoplay() ? 'on' : 'off');
   }
+  // Who the server read this page as, and the door in or out — the root's own
+  // words (`viewer`, links.logout / links.login), drawn by R.account. The
+  // return_to is where the browser is standing, hash and all: a renderer
+  // cannot read a location, so it is handed one.
+  function paintAccount() {
+    const box = $('settings-account');
+    if (!box) return;
+    box.innerHTML = R.account(rootDoc, location.pathname + location.search + location.hash);
+    box.hidden = !box.innerHTML;
+  }
+
   function openSettings() {
     paintAutoplay();
     paintTenFoot();
     paintCues();
+    paintAccount();
     $('settings').hidden = false;
     watchActivity(true);
   }
@@ -1492,6 +1530,11 @@
   const kernel = {
     api, Problem, doc, remember, forget,
     boot, applyRoute, navigate, replaceHash, itemHash,
+    // Leaving the page for another address altogether — the sign-in door, which
+    // is a navigation and not a hash. It is a property rather than a call to
+    // location so a test can stand in for it: the kernel's own suite runs under
+    // node, where there is nowhere to go.
+    leave: href => location.assign(href),
     profile: who, showStage, renderSession, closeStage, loadContinue, mint, share,
     currentRoute: () => currentRoute,
     collapsed: () => collapsed,

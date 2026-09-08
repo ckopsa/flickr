@@ -931,6 +931,45 @@ test('the chapter list names each chapter, its time, and the frame it starts on'
   assert.ok(!R.item(bare, { trickplay: INDEX }).includes('id="detail-chapters"'));
 });
 
+// Who is signed in, drawn from the root. The goldens are written by a server
+// with no auth in front of it, so the three roots are written out here: signed
+// in, signed out but offered a door, and a LAN server that has no accounts at
+// all.
+test('the panel says who is signed in, and draws the door the root offers', () => {
+  const signedIn = {
+    kind: 'root', self: '/api/',
+    viewer: { subject: 'a1b2', name: 'Colton' },
+    links: { logout: { href: '/auth/logout', title: 'Sign out' } },
+  };
+  const html = R.account(signedIn, '/#/item/8');
+  assert.ok(html.includes('Signed in as Colton'), 'the panel does not say who: ' + html);
+  assert.ok(html.includes('href="/auth/logout"'), 'the way out is the document\'s own href');
+  assert.ok(html.includes('>Sign out<'), 'the link wears the document\'s own title');
+  // Signing out is a navigation the server answers with a redirect, not a
+  // fetch: a plain link, with nothing for the kernel's click listener to act on.
+  assert.ok(html.includes('<a '), 'the door is not a link');
+  assert.ok(!html.includes('data-act'), 'the door was drawn as an action to POST');
+  assert.ok(!html.includes('return_to'), 'signing out has nowhere to come back to');
+});
+
+test('a signed-out root offers the way in, and it carries where the browser was', () => {
+  const signedOut = {
+    kind: 'root', self: '/api/',
+    links: { login: { href: '/auth/login', title: 'Sign in' } },
+  };
+  const html = R.account(signedOut, '/#/item/8?t=90');
+  assert.ok(!html.includes('Signed in as'), 'nobody is signed in: ' + html);
+  assert.ok(html.includes('>Sign in<'));
+  assert.ok(html.includes('href="/auth/login?return_to=' + R.esc(encodeURIComponent('/#/item/8?t=90')) + '"'),
+    'the door does not carry the place back: ' + html);
+});
+
+test('a server with no accounts says nothing about accounts', () => {
+  assert.equal(R.account(golden('root'), '/#/'), '',
+    'the golden root is written by a server with no auth in front of it');
+  assert.equal(R.account(null, '/#/'), '');
+});
+
 test('a tile is the frame that moment falls on, in the sheet that holds it', () => {
   // One frame every 10s, ten by ten to a sheet: 0s is the first tile of the
   // first sheet, and 1100s — frame 110 — the first of the second row of the
