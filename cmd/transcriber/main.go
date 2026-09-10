@@ -23,6 +23,7 @@ import (
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
 
+	"flickr/internal/bearer"
 	"flickr/internal/pipeline"
 )
 
@@ -143,21 +144,21 @@ func readConfig() config {
 }
 
 // tokens picks the shape of the gate this worker is behind.
-func tokens(cfg config) tokenSource {
+func tokens(cfg config) bearer.Source {
 	switch {
 	case cfg.ClientID != "":
 		log.Printf("transcriber: signing in to %s as %s", cfg.Issuer, cfg.ClientID)
-		return &clientCredentials{
+		return &bearer.ClientCredentials{
 			HTTP:     &http.Client{Timeout: 30 * time.Second},
-			TokenURL: tokenURL(cfg.Issuer),
+			TokenURL: bearer.TokenURL(cfg.Issuer),
 			ID:       cfg.ClientID, Secret: cfg.ClientSecret,
 		}
 	case cfg.StaticToken != "":
 		log.Printf("transcriber: using the bearer in FLICKR_TOKEN")
-		return staticToken(cfg.StaticToken)
+		return bearer.Static(cfg.StaticToken)
 	default:
 		log.Printf("transcriber: no token configured, asking anonymously")
-		return noToken{}
+		return bearer.None{}
 	}
 }
 

@@ -291,6 +291,39 @@ a handful of architectural decisions (see design notes below):
    page draws a *Find in dialogue* box over the same rows. A file nobody has
    transcribed offers no relation, so the box is never drawn over nothing, and
    a cue whose file this profile may not see is not a result.
+20. **Convert once, direct-play forever** — half the library (1073 of 2233
+   video files, 2026-09-09) was already what every device in the house
+   direct-plays: MP4, H.264 8-bit at up to 1080p, an AAC stereo track first.
+   The other half — MKV containers, HEVC and AV1 pictures, 5.1 first tracks,
+   TrueHD and DTS — cost the orangepi's one encoder every time somebody
+   pressed play. `cmd/converter` is the worker that rewrites those files ONCE,
+   on whichever box has a card, into the shape everything plays, and puts
+   them back where the originals were. It composes one address, `/api/`, and
+   follows `links.items` for the library and `actions.scan` to tell flickr
+   afterwards; per file, `pipeline.ConvertPlan` (pure, over the scanner's own
+   probe) decides skip / remux / encode and `pipeline.ConvertArgs` (pure)
+   says the argv: the video is copied when it is H.264 and re-encoded with
+   `h264_vaapi` otherwise (decoded on the card where the card can, in
+   software and uploaded where it cannot — the worker falls back on a refused
+   decode), the first audio stream becomes AAC stereo with its surround
+   original kept second (copied where MP4 carries it, E-AC-3 where it does
+   not), text subtitles ride along as `mov_text`, bitmap ones cannot and are
+   counted in the plan, and 4K and HDR files are left exactly as they are.
+   The result is ffprobed and refused (`pipeline.Verify`) unless it is the
+   file the plan promised — H.264, AAC stereo first, every mapped stream
+   present, the source's duration — and only then uploaded to the same
+   folder as `<name>.mp4`, the original removed (`KEEP_ORIGINAL=1` leaves it),
+   a scan requested. Before touching a file it checks the object's etag
+   against the row's: a key that is gone was converted on an earlier pass, an
+   etag that moved is a file somebody replaced, and both are left for the
+   next scan. It STARTS IN `DRY_RUN` and logs the plan for the whole library
+   with its totals; `DRY_RUN=0` is the decision to convert. Env, like the
+   transcriber's: `FLICKR_URL`, the gate (`OIDC_ISSUER` +
+   `CONVERTER_CLIENT_ID` + `CONVERTER_CLIENT_SECRET`, or `FLICKR_TOKEN`, or
+   nothing), all four `MINIO_*` (it writes the bucket), `WORK_DIR`,
+   `IDLE_SLEEP` (30m), `VAAPI_DEVICE` (`/dev/dri/renderD128`). What a replaced
+   file forgets: playback positions and a generated transcript key on the
+   item id, and a new object is a new item — see flickr-6sy.
 
 ## Library layout
 
@@ -388,9 +421,14 @@ crane — no docker daemon — and pushed to `docker.kopsa.info/flickr:<short
 sha>` and `:latest`. Then one Nomad variable is written,
 `nomad/jobs/flickr/deploy image_tag=<short sha>`; the job's template
 restarts the task on the change and `force_pull` fetches the tag. The
-job, the variable's ACLs and the by-hand and rollback recipes live in
-`ckopsa/home-infrastructure` (`terraform/nomad-jobs/flickr.hcl`,
-`terraform/docs/flickr-stream/RUNBOOK.md`). Without the `NOMAD_ADDR` /
+same run assembles the two workers' images for big-colt —
+`flickr-transcriber` on whisper.cpp's Vulkan base, `flickr-converter` on
+the jellyfin base's amd64 side — and writes `transcriber_tag` and
+`converter_tag` into that one variable; every writer carries all three
+keys, because a put replaces the variable. The jobs, the variable's ACLs
+and the by-hand and rollback recipes live in `ckopsa/home-infrastructure`
+(`terraform/nomad-jobs/flickr.hcl`, `flickr-transcriber.hcl`,
+`flickr-converter.hcl`, `terraform/docs/flickr-stream/RUNBOOK.md`). Without the `NOMAD_ADDR` /
 `NOMAD_TOKEN` repository secrets the workflow pushes the image and
 leaves the variable write to a person.
 
