@@ -295,9 +295,10 @@ func TestRunConvertsWhatNeedsIt(t *testing.T) {
 	if !strings.Contains(order[1], "-hwaccel vaapi") || strings.Contains(order[2], "-hwaccel") || !strings.Contains(order[2], "hwupload") {
 		t.Errorf("the second try must decode in software: %v", order[1:])
 	}
-	// One scan, with the bearer, after the pass.
-	if len(f.scans) != 1 || f.scans[0] != "Bearer gpu-token" {
-		t.Errorf("scans = %v, want one with the bearer", f.scans)
+	// A scan, with the bearer, as soon as the first file lands (the clock
+	// starts long past the last one), and one more for what landed after.
+	if len(f.scans) != 2 || f.scans[0] != "Bearer gpu-token" || f.scans[1] != "Bearer gpu-token" {
+		t.Errorf("scans = %v, want two with the bearer", f.scans)
 	}
 	for _, want := range []string{
 		"h264_vaapi on /dev/dri/renderD128 is live",
@@ -307,7 +308,7 @@ func TestRunConvertsWhatNeedsIt(t *testing.T) {
 		`remux item 2 "2.mkv": 2.mkv → 2.mp4`,
 		`encode item 3 "3.mkv": 3.mkv → 3.mp4`,
 		"15.0x realtime",
-		"2 file(s) converted, scan requested",
+		"1 file(s) converted, scan requested",
 	} {
 		if !strings.Contains(logs, want) {
 			t.Errorf("log lacks %q:\n%s", want, logs)

@@ -313,7 +313,9 @@ a handful of architectural decisions (see design notes below):
    file the plan promised — H.264, AAC stereo first, every mapped stream
    present, the source's duration — and only then uploaded to the same
    folder as `<name>.mp4`, the original removed (`KEEP_ORIGINAL=1` leaves it),
-   a scan requested. Before touching a file it checks the object's etag
+   and a scan requested — every fifteen minutes while files are landing and
+   once more when the pass ends, since a pass is a day of the card and
+   flickr's own scans are twelve hours apart. Before touching a file it checks the object's etag
    against the row's: a key that is gone was converted on an earlier pass, an
    etag that moved is a file somebody replaced, and both are left for the
    next scan. It STARTS IN `DRY_RUN` and logs the plan for the whole library

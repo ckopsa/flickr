@@ -43,6 +43,13 @@ const (
 	backoffMax   = 15 * time.Minute
 )
 
+// scanEvery is how long converted files wait to be seen: a pass over the
+// library is a day of the card, an original is gone the moment its
+// replacement is up, and flickr's own scan is twelve hours apart — so a
+// scan is asked for this often while files are landing, and once more when
+// the pass ends. The scan is incremental (list, diff etags), so it is cheap.
+const scanEvery = 15 * time.Minute
+
 // deps is the world.
 type deps struct {
 	HTTP     *http.Client
@@ -156,7 +163,18 @@ func run(ctx context.Context, cfg config, d deps) error {
 			continue
 		}
 
-		changed := 0
+		// unseen counts the files converted since flickr was last asked to
+		// look; lastScan is when that was.
+		unseen := 0
+		var lastScan time.Time
+		ask := func() {
+			if err := d.scan(ctx, cfg.FlickrURL, root); err != nil {
+				log.Printf("converter: asking for a scan after %d file(s): %v", unseen, err)
+				return
+			}
+			log.Printf("converter: %d file(s) converted, scan requested", unseen)
+			unseen, lastScan = 0, d.Now()
+		}
 		for _, j := range jobs {
 			if stopping(ctx, d.Stopping) {
 				break
@@ -166,17 +184,14 @@ func run(ctx context.Context, cfg config, d deps) error {
 				continue
 			}
 			if d.convert(ctx, cfg, j) {
-				changed++
+				unseen++
+				if d.Now().Sub(lastScan) >= scanEvery {
+					ask()
+				}
 			}
 		}
-		if changed > 0 {
-			// flickr sees the bucket on its own schedule; a pass that
-			// changed it should not wait for that.
-			if err := d.scan(ctx, cfg.FlickrURL, root); err != nil {
-				log.Printf("converter: asking for a scan after %d file(s): %v", changed, err)
-			} else {
-				log.Printf("converter: %d file(s) converted, scan requested", changed)
-			}
+		if unseen > 0 {
+			ask()
 		}
 		if stopping(ctx, d.Stopping) {
 			return nil
