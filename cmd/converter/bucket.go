@@ -28,7 +28,7 @@ type bucket interface {
 	Presign(ctx context.Context, key string) (string, error)
 	// Stat answers the object's etag, or errGone.
 	Stat(ctx context.Context, key string) (string, error)
-	Put(ctx context.Context, key, path string) error
+	Put(ctx context.Context, key, path, contentType string) error
 	Remove(ctx context.Context, key string) error
 }
 
@@ -67,8 +67,8 @@ func (b *minioBucket) Stat(ctx context.Context, key string) (string, error) {
 	return strings.Trim(info.ETag, `"`), nil
 }
 
-func (b *minioBucket) Put(ctx context.Context, key, path string) error {
-	_, err := b.c.FPutObject(ctx, b.bucket, key, path, minio.PutObjectOptions{ContentType: "video/mp4"})
+func (b *minioBucket) Put(ctx context.Context, key, path, contentType string) error {
+	_, err := b.c.FPutObject(ctx, b.bucket, key, path, minio.PutObjectOptions{ContentType: contentType})
 	return err
 }
 

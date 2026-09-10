@@ -47,10 +47,12 @@
 #
 # A THIRD IMAGE, docker.kopsa.info/flickr-converter, carries the
 # conversion worker: cmd/converter cross-compiled for amd64 and appended
-# to the SAME jellyfin base as the server, on its amd64 side — the one
-# image whose ffmpeg carries Mesa's radeonsi VA-API driver new enough for
-# big-colt's RX 9070 XT (probed 2026-09-09: 10-bit HEVC in, H.264 out,
-# 12-15x realtime). The job pins it to big-colt with /dev/dri, reads
+# to flickr-converter-base — the jellyfin base on its amd64 side (the
+# one image whose ffmpeg carries Mesa's radeonsi VA-API driver new enough
+# for big-colt's RX 9070 XT; probed 2026-09-09: 10-bit HEVC in, H.264
+# out, 12-15x realtime) plus the OCR the picture subtitles need
+# (tesseract, mkvtoolnix, pgsrip, subtile-ocr), built by hand in
+# home-infrastructure. The job pins it to big-colt with /dev/dri, reads
 # `converter_tag` from the deploy variable, and starts in DRY_RUN.
 #
 # ONE VARIABLE, THREE KEYS. `nomad var put` REPLACES the variable, so
@@ -89,6 +91,11 @@ env:
   TRANSCRIBER_IMAGE: docker.kopsa.info/flickr-transcriber
   TRANSCRIBER_BASE: ghcr.io/ggml-org/whisper.cpp:main-vulkan
   CONVERTER_IMAGE: docker.kopsa.info/flickr-converter
+  # the jellyfin base plus tesseract, mkvtoolnix, pgsrip and subtile-ocr,
+  # built by hand on big-colt (home-infrastructure
+  # terraform/docker/flickr-converter-base/build.sh); a rebuild is a new
+  # date tag here
+  CONVERTER_BASE: docker.kopsa.info/flickr-converter-base:20260909-1
   CRANE_VERSION: v0.20.3
 
 jobs:
@@ -437,9 +444,9 @@ jobs:
         run: |
           set -euo pipefail
           push() { local n; for n in 1 2 3; do "$@" && return 0; echo "push attempt $n failed; retrying in 20s"; sleep 20; done; "$@"; }
-          # the same base as the server, its amd64 side: jellyfin-ffmpeg
-          # with the VA-API drivers under /usr/lib/jellyfin-ffmpeg/lib/dri
-          push crane --platform linux/amd64 append -b "$BASE" -f layer.tar -t "${CONVERTER_IMAGE}:${TAG}"
+          # the hand-built base: the server's jellyfin base on its amd64
+          # side (jellyfin-ffmpeg with the VA-API drivers) plus the OCR tools
+          push crane --platform linux/amd64 append -b "$CONVERTER_BASE" -f layer.tar -t "${CONVERTER_IMAGE}:${TAG}"
           crane --platform linux/amd64 mutate "${CONVERTER_IMAGE}:${TAG}" -t "${CONVERTER_IMAGE}:${TAG}" \
             --entrypoint /app/converter --workdir /app \
             -e PATH=/usr/lib/jellyfin-ffmpeg:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin

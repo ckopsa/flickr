@@ -67,9 +67,17 @@ type Plan struct {
 	Detelecine bool    // soft telecine: re-time to FPS in software before the upload
 	FPS        float64 // the film rate the detelecine re-times to
 
-	Audio            []AudioPlan
-	Subtitles        []int // embedded text tracks carried as mov_text, by ordinal
-	DroppedSubtitles int   // embedded bitmap tracks MP4 cannot carry
+	Audio     []AudioPlan
+	Subtitles []int // embedded text tracks carried as mov_text, by ordinal
+	// Bitmap is the embedded picture tracks (PGS, VobSub) MP4 cannot carry:
+	// each is OCR'd to a .srt sidecar beside the file BEFORE the conversion
+	// (ocr.go), and a track that will not OCR leaves the file unconverted.
+	// Only English (or unlabelled, taken as English) tracks: the OCR speaks
+	// one language.
+	Bitmap []model.SubtitleTrack
+	// DroppedSubtitles counts the bitmap tracks in another language, which
+	// are lost with the container. Said in the plan so a dry run shows it.
+	DroppedSubtitles int
 }
 
 // mp4Audio is what rides in MP4 and plays where it lands: the browser
@@ -83,6 +91,9 @@ var stereoAudio = map[string]bool{"aac": true, "mp3": true}
 // textSubtitle is a subtitle codec ffmpeg turns into mov_text; everything
 // else embedded is a picture (PGS, VobSub) and cannot ride in MP4.
 var textSubtitle = map[string]bool{"subrip": true, "srt": true, "ass": true, "ssa": true, "mov_text": true, "webvtt": true, "text": true}
+
+// bitmapSubtitle is a picture track: Blu-ray PGS and DVD VobSub.
+var bitmapSubtitle = map[string]bool{"hdmv_pgs_subtitle": true, "dvd_subtitle": true}
 
 // hwDecodable is what VCN decodes: the card's own list, not ffmpeg's.
 var hwDecodable = map[string]bool{"h264": true, "hevc": true, "av1": true, "vp9": true}
@@ -155,14 +166,18 @@ func ConvertPlan(objectKey string, mi *model.MediaInfo) Plan {
 		}
 	}
 
-	// The subtitles: text rides along, pictures cannot.
+	// The subtitles: text rides along; pictures are read into text first,
+	// where the OCR can read them.
 	for _, s := range mi.Subtitles {
 		if s.External {
 			continue // a sidecar stays a sidecar, beside the new file as it was beside the old
 		}
-		if textSubtitle[s.Codec] {
+		switch {
+		case textSubtitle[s.Codec]:
 			p.Subtitles = append(p.Subtitles, s.Ordinal)
-		} else {
+		case bitmapSubtitle[s.Codec] && ocrLanguage(s.Language) != "":
+			p.Bitmap = append(p.Bitmap, s)
+		default:
 			p.DroppedSubtitles++
 		}
 	}
@@ -187,8 +202,11 @@ func ConvertPlan(objectKey string, mi *model.MediaInfo) Plan {
 	if p.Detelecine {
 		changes = append(changes, fmt.Sprintf("inverse telecine to %.3f fps", p.FPS))
 	}
+	if len(p.Bitmap) > 0 {
+		changes = append(changes, fmt.Sprintf("%d bitmap subtitle track(s) OCR'd to sidecars", len(p.Bitmap)))
+	}
 	if p.DroppedSubtitles > 0 {
-		changes = append(changes, fmt.Sprintf("%d bitmap subtitle track(s) dropped", p.DroppedSubtitles))
+		changes = append(changes, fmt.Sprintf("%d bitmap subtitle track(s) in another language dropped", p.DroppedSubtitles))
 	}
 	p.Reason = strings.Join(changes, ", ")
 	return p

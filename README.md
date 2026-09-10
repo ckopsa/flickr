@@ -307,8 +307,17 @@ a handful of architectural decisions (see design notes below):
    software and uploaded where it cannot — the worker falls back on a refused
    decode), the first audio stream becomes AAC stereo with its surround
    original kept second (copied where MP4 carries it, E-AC-3 where it does
-   not), text subtitles ride along as `mov_text`, bitmap ones cannot and are
-   counted in the plan, and 4K and HDR files are left exactly as they are.
+   not), text subtitles ride along as `mov_text`, and 4K and HDR files are
+   left exactly as they are. A picture subtitle (Blu-ray PGS, DVD VobSub)
+   cannot ride in MP4 and is not a word a `<track>` can show, so BEFORE a
+   file is touched each English one is read into a `.srt` sidecar in the
+   scanner's own grammar (`Movie.eng.srt`, `Movie.eng.2.srt`) and uploaded
+   beside it: ffmpeg pulls the picture tracks out of the source into a small
+   MKV, `mkvextract` splits them, `pgsrip` reads PGS and `subtile-ocr` reads
+   VobSub, both over tesseract (`internal/pipeline/ocr.go`, pure argvs; the
+   tools live in the hand-built `flickr-converter-base` image). A track that
+   reads into no cue leaves the file unconverted, subtitles and all; a track
+   in a language the OCR does not speak is counted in the plan as lost.
    The result is ffprobed and refused (`pipeline.Verify`) unless it is the
    file the plan promised — H.264, AAC stereo first, every mapped stream
    present, the source's duration — and only then uploaded to the same
