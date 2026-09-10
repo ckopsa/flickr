@@ -90,16 +90,64 @@ func TestConvertPlanSubtitles(t *testing.T) {
 	mi := video("mkv", "h264", "aac", 2)
 	mi.Subtitles = []model.SubtitleTrack{
 		{Ordinal: 0, Codec: "subrip", Language: "en"},
-		{Ordinal: 1, Codec: "hdmv_pgs_subtitle", Language: "en"},
+		{Ordinal: 1, Codec: "hdmv_pgs_subtitle", Language: "eng"},
 		{Ordinal: 2, Codec: "ass", Language: "ja"},
+		{Ordinal: 3, Codec: "hdmv_pgs_subtitle", Language: "jpn"},
+		{Ordinal: 4, Codec: "dvd_subtitle"},
 		{Ordinal: 0, Codec: "subrip", External: true, ObjectKey: "Movies/A/A.en.srt"},
 	}
 	p := ConvertPlan("Movies/A/A.mkv", mi)
 	if len(p.Subtitles) != 2 || p.Subtitles[0] != 0 || p.Subtitles[1] != 2 {
 		t.Errorf("text tracks carried = %v, want [0 2]", p.Subtitles)
 	}
-	if p.DroppedSubtitles != 1 || !strings.Contains(p.Reason, "1 bitmap subtitle") {
-		t.Errorf("dropped = %d (%s), want the PGS track counted and said", p.DroppedSubtitles, p.Reason)
+	// The English PGS and the unlabelled VobSub are read; the Japanese
+	// PGS is not, since only English is installed, and is said to be lost.
+	if len(p.Bitmap) != 2 || p.Bitmap[0].Ordinal != 1 || p.Bitmap[1].Ordinal != 4 {
+		t.Errorf("bitmap tracks to OCR = %+v, want ordinals 1 and 4", p.Bitmap)
+	}
+	if p.DroppedSubtitles != 1 || !strings.Contains(p.Reason, "2 bitmap subtitle track(s) OCR'd") || !strings.Contains(p.Reason, "1 bitmap subtitle track(s) in another language dropped") {
+		t.Errorf("dropped = %d (%s)", p.DroppedSubtitles, p.Reason)
+	}
+}
+
+func TestOCRArgs(t *testing.T) {
+	tracks := []model.SubtitleTrack{
+		{Ordinal: 1, Codec: "hdmv_pgs_subtitle", Language: "eng"},
+		{Ordinal: 4, Codec: "dvd_subtitle"},
+		{Ordinal: 5, Codec: "hdmv_pgs_subtitle", Language: "en", Title: "SDH"},
+	}
+	s := strings.Join(ExtractSubsArgs("http://x/in.mkv", tracks, "/w/subs.mkv"), " ")
+	for _, want := range []string{"-i http://x/in.mkv", "-vn -an -dn", "-map 0:s:1 -map 0:s:4 -map 0:s:5", "-c:s copy -f matroska /w/subs.mkv"} {
+		if !strings.Contains(s, want) {
+			t.Errorf("missing %q in: %s", want, s)
+		}
+	}
+	s = strings.Join(MKVExtractArgs("/w/subs.mkv", "/w", tracks), " ")
+	if s != "tracks /w/subs.mkv 0:/w/track0.en.sup 1:/w/track1.idx 2:/w/track2.en.sup" {
+		t.Errorf("mkvextract argv = %s", s)
+	}
+	if SRTFile("/w/track0.en.sup") != "/w/track0.en.srt" || SRTFile("/w/track1.idx") != "/w/track1.srt" {
+		t.Errorf("srt names: %s, %s", SRTFile("/w/track0.en.sup"), SRTFile("/w/track1.idx"))
+	}
+	name, args := OCRCommand(tracks[0], "/w/track0.en.sup", "/w/track0.en.srt")
+	if name != "pgsrip" || strings.Join(args, " ") != "-l en --force /w/track0.en.sup" {
+		t.Errorf("pgs: %s %v", name, args)
+	}
+	// The palette line as mkvextract wrote it for a real disc, and as
+	// subtile-ocr will read it.
+	idx := "# VobSub index file, v7\nsize: 720x480\npalette: 20D620, 35C7EF, 000000, FDFDFD,D50ECA, 00E000\ntimestamp: 00:00:03:237, filepos: 000000000\n"
+	wantIDX := "# VobSub index file, v7\nsize: 720x480\npalette: 20D620, 35C7EF, 000000, FDFDFD, D50ECA, 00E000\ntimestamp: 00:00:03:237, filepos: 000000000\n"
+	if got := string(NormalizeIDX([]byte(idx))); got != wantIDX {
+		t.Errorf("NormalizeIDX =\n%s\nwant\n%s", got, wantIDX)
+	}
+	name, args = OCRCommand(tracks[1], "/w/track1.idx", "/w/track1.srt")
+	if name != "subtile-ocr" || strings.Join(args, " ") != "-l eng -o /w/track1.srt /w/track1.idx" {
+		t.Errorf("vobsub: %s %v", name, args)
+	}
+	keys := SidecarKeys("Movies/A (1999)/A.mkv", tracks)
+	want := []string{"Movies/A (1999)/A.eng.srt", "Movies/A (1999)/A.eng.2.srt", "Movies/A (1999)/A.eng.3.srt"}
+	if strings.Join(keys, ",") != strings.Join(want, ",") {
+		t.Errorf("sidecar keys = %v, want %v", keys, want)
 	}
 }
 

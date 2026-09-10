@@ -287,6 +287,15 @@ func (d deps) convert(ctx context.Context, cfg config, j job) bool {
 		log.Printf("converter: item %d (%s): %v", it.ID, it.ObjectKey, err)
 		return false
 	}
+	// The picture subtitles first: read into sidecars and uploaded before
+	// the file they belong to changes, so a file that cannot be read stays
+	// exactly as it was, subtitles and all.
+	if len(p.Bitmap) > 0 {
+		if err := d.ocr(ctx, cfg, it, p, dir, src); err != nil {
+			log.Printf("converter: item %d (%s): subtitles not read, file left as it is: %v", it.ID, it.ObjectKey, err)
+			return false
+		}
+	}
 	started := d.Now()
 	if err := d.ffmpeg(ctx, cfg, p, src, out); err != nil {
 		log.Printf("converter: item %d (%s): %v", it.ID, it.ObjectKey, err)
@@ -308,7 +317,7 @@ func (d deps) convert(ctx context.Context, cfg config, j job) bool {
 		return false
 	}
 
-	if err := d.Bucket.Put(ctx, p.OutKey, out); err != nil {
+	if err := d.Bucket.Put(ctx, p.OutKey, out, "video/mp4"); err != nil {
 		log.Printf("converter: item %d (%s): uploading %s: %v", it.ID, it.ObjectKey, p.OutKey, err)
 		return false
 	}
@@ -323,6 +332,62 @@ func (d deps) convert(ctx context.Context, cfg config, j job) bool {
 		p.Action, it.ID, it.title(), path.Base(it.ObjectKey), path.Base(p.OutKey),
 		wall.Round(time.Second), realtime(it.seconds(), wall), gb(it.Size), gb(st.Size()))
 	return true
+}
+
+// ocr turns every picture track of the plan into a .srt sidecar in the
+// bucket. Nothing is uploaded until every track has read into at least one
+// cue: half a file's subtitles is not a result, it is a file to look at.
+func (d deps) ocr(ctx context.Context, cfg config, it item, p pipeline.Plan, dir, src string) error {
+	mkv := filepath.Join(dir, "subs.mkv")
+	if out, err := d.Run(ctx, cfg.FFmpeg, pipeline.ExtractSubsArgs(src, p.Bitmap, mkv)); err != nil {
+		return fmt.Errorf("extracting the picture tracks: %v: %s", err, tail(out))
+	}
+	if out, err := d.Run(ctx, "mkvextract", pipeline.MKVExtractArgs(mkv, dir, p.Bitmap)); err != nil {
+		return fmt.Errorf("mkvextract: %v: %s", err, tail(out))
+	}
+	keys := pipeline.SidecarKeys(it.ObjectKey, p.Bitmap)
+	srts := make([]string, len(p.Bitmap))
+	for n, t := range p.Bitmap {
+		in := pipeline.BitmapFile(dir, n, t)
+		srts[n] = pipeline.SRTFile(in)
+		if t.Codec == "dvd_subtitle" {
+			idx, err := os.ReadFile(in)
+			if err != nil {
+				return fmt.Errorf("mkvextract wrote no idx for track %d: %v", t.Ordinal, err)
+			}
+			if err := os.WriteFile(in, pipeline.NormalizeIDX(idx), 0o644); err != nil {
+				return err
+			}
+		}
+		name, args := pipeline.OCRCommand(t, in, srts[n])
+		started := d.Now()
+		if out, err := d.Run(ctx, name, args); err != nil {
+			return fmt.Errorf("%s on track %d: %v: %s", name, t.Ordinal, err, tail(out))
+		}
+		b, err := os.ReadFile(srts[n])
+		if err != nil {
+			return fmt.Errorf("%s on track %d wrote no srt: %v", name, t.Ordinal, err)
+		}
+		cues := strings.Count(string(b), "-->")
+		if cues == 0 {
+			return fmt.Errorf("%s on track %d read no cues", name, t.Ordinal)
+		}
+		log.Printf("converter: item %d track %d (%s%s): %d cues read in %s → %s",
+			it.ID, t.Ordinal, t.Codec, langSuffix(t.Language), cues, d.Now().Sub(started).Round(time.Second), path.Base(keys[n]))
+	}
+	for n := range p.Bitmap {
+		if err := d.Bucket.Put(ctx, keys[n], srts[n], "application/x-subrip"); err != nil {
+			return fmt.Errorf("uploading %s: %v", keys[n], err)
+		}
+	}
+	return nil
+}
+
+func langSuffix(lang string) string {
+	if lang == "" {
+		return ""
+	}
+	return " " + lang
 }
 
 // ffmpeg runs the plan, on the card first. A card that refuses the DECODE —

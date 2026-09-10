@@ -91,7 +91,7 @@ func (b *fakeBucket) Stat(_ context.Context, key string) (string, error) {
 	return e, nil
 }
 
-func (b *fakeBucket) Put(_ context.Context, key, p string) error {
+func (b *fakeBucket) Put(_ context.Context, key, p, _ string) error {
 	st, err := os.Stat(p)
 	if err != nil {
 		return err
@@ -109,6 +109,16 @@ func (b *fakeBucket) Remove(_ context.Context, key string) error {
 	delete(b.etags, key)
 	b.removed = append(b.removed, key)
 	return nil
+}
+
+// withBitmap gives an item an English PGS track and an unlabelled VobSub
+// track: two sidecars to read before it is touched.
+func withBitmap(it item) item {
+	it.MediaInfo.Subtitles = []model.SubtitleTrack{
+		{Ordinal: 0, Codec: "hdmv_pgs_subtitle", Language: "eng"},
+		{Ordinal: 1, Codec: "dvd_subtitle"},
+	}
+	return it
 }
 
 func video(id int64, key, container, vc, ac string, ch int) item {
@@ -144,6 +154,9 @@ func (s *seam) run(_ context.Context, name string, args []string) ([]byte, error
 			return nil, nil // the card probe
 		}
 		out := args[len(args)-1]
+		if strings.Contains(line, "-f matroska") {
+			return nil, os.WriteFile(out, []byte("mkv"), 0o644) // the picture tracks, pulled out
+		}
 		if strings.Contains(line, "-hwaccel vaapi") && strings.Contains(line, "/3.mkv") {
 			s.mu.Lock()
 			s.refusals++
@@ -157,6 +170,37 @@ func (s *seam) run(_ context.Context, name string, args []string) ([]byte, error
 		s.made[out] = args
 		s.mu.Unlock()
 		return nil, os.WriteFile(out, bytes.Repeat([]byte("mp4!"), 250), 0o644)
+	case "mkvextract":
+		for _, a := range args[2:] {
+			if i := strings.Index(a, ":"); i > 0 {
+				body := "pictures"
+				if strings.HasSuffix(a, ".idx") {
+					body = "palette: 20D620,35C7EF\n"
+				}
+				if err := os.WriteFile(a[i+1:], []byte(body), 0o644); err != nil {
+					return nil, err
+				}
+			}
+		}
+		return nil, nil
+	case "pgsrip":
+		in := args[len(args)-1]
+		if strings.Contains(in, "/6/") {
+			return []byte("0 PGS subtitles ripped"), nil // reads nothing: the file must be left alone
+		}
+		return nil, os.WriteFile(strings.TrimSuffix(in, ".en.sup")+".en.srt", []byte("1\n00:00:01,000 --> 00:00:02,000\nHi.\n\n2\n00:00:03,000 --> 00:00:04,000\nBye.\n"), 0o644)
+	case "subtile-ocr":
+		var out string
+		for i, a := range args {
+			if a == "-o" {
+				out = args[i+1]
+			}
+		}
+		// the idx reached the tool with its palette spaced the way it reads
+		if idx, err := os.ReadFile(args[len(args)-1]); err != nil || !strings.Contains(string(idx), "palette: 20D620, 35C7EF") {
+			return []byte("error during palette parsing"), errors.New("exit status 1")
+		}
+		return nil, os.WriteFile(out, []byte("1\n00:00:01,000 --> 00:00:02,000\nHi.\n"), 0o644)
 	case "ffprobe":
 		out := args[len(args)-1]
 		s.mu.Lock()
@@ -234,15 +278,18 @@ func pass(t *testing.T, f *fakeFlickr, b *fakeBucket, s *seam, dryRun bool) stri
 
 func library() ([]item, *fakeBucket) {
 	items := []item{
-		video(1, "Movies/One (2001)/1.mp4", "mp4", "h264", "aac", 2),     // already fine
-		video(2, "Movies/Two (2002)/2.mkv", "mkv", "h264", "aac", 2),     // a remux
-		video(3, "Shows/Three/Season 1/3.mkv", "mkv", "hevc", "eac3", 6), // an encode, card refuses the decode once
-		video(4, "Movies/Four (2004)/4.mkv", "mkv", "hevc", "aac", 2),    // replaced since the scan
-		video(5, "Movies/Five (2005)/5.mkv", "mkv", "av1", "opus", 6),    // converted on an earlier pass: gone
+		video(1, "Movies/One (2001)/1.mp4", "mp4", "h264", "aac", 2),                // already fine
+		video(2, "Movies/Two (2002)/2.mkv", "mkv", "h264", "aac", 2),                // a remux
+		video(3, "Shows/Three/Season 1/3.mkv", "mkv", "hevc", "eac3", 6),            // an encode, card refuses the decode once
+		video(4, "Movies/Four (2004)/4.mkv", "mkv", "hevc", "aac", 2),               // replaced since the scan
+		video(5, "Movies/Five (2005)/5.mkv", "mkv", "av1", "opus", 6),               // converted on an earlier pass: gone
+		withBitmap(video(6, "Movies/Six (2006)/6.mkv", "mkv", "h264", "aac", 2)),    // OCR reads nothing: left alone
+		withBitmap(video(7, "Shows/Seven/Season 1/7.mkv", "mkv", "h264", "ac3", 6)), // OCR'd, then remuxed
 	}
 	b := &fakeBucket{etags: map[string]string{
 		"Movies/One (2001)/1.mp4": "etag-1", "Movies/Two (2002)/2.mkv": "etag-2",
 		"Shows/Three/Season 1/3.mkv": "etag-3", "Movies/Four (2004)/4.mkv": "someone-replaced-it",
+		"Movies/Six (2006)/6.mkv": "etag-6", "Shows/Seven/Season 1/7.mkv": "etag-7",
 	}, puts: map[string]int64{}}
 	return items, b
 }
@@ -258,13 +305,21 @@ func TestRunConvertsWhatNeedsIt(t *testing.T) {
 		put = append(put, k)
 	}
 	sort.Strings(put)
-	want := []string{"Movies/Two (2002)/2.mp4", "Shows/Three/Season 1/3.mp4"}
+	want := []string{"Movies/Two (2002)/2.mp4", "Shows/Seven/Season 1/7.eng.2.srt", "Shows/Seven/Season 1/7.eng.srt", "Shows/Seven/Season 1/7.mp4", "Shows/Three/Season 1/3.mp4"}
 	if strings.Join(put, ",") != strings.Join(want, ",") {
 		t.Errorf("uploaded %v, want %v\n%s", put, want, logs)
 	}
 	sort.Strings(b.removed)
-	if strings.Join(b.removed, ",") != "Movies/Two (2002)/2.mkv,Shows/Three/Season 1/3.mkv" {
-		t.Errorf("removed %v, want the two originals", b.removed)
+	if strings.Join(b.removed, ",") != "Movies/Two (2002)/2.mkv,Shows/Seven/Season 1/7.mkv,Shows/Three/Season 1/3.mkv" {
+		t.Errorf("removed %v, want the three originals", b.removed)
+	}
+	// The file whose subtitles would not read is exactly as it was, and
+	// says why; the one that read has its two sidecars up before its mp4.
+	if b.etags["Movies/Six (2006)/6.mkv"] != "etag-6" || !strings.Contains(logs, "item 6 (Movies/Six (2006)/6.mkv): subtitles not read, file left as it is: pgsrip on track 0 wrote no srt") {
+		t.Errorf("the unreadable file:\n%s", logs)
+	}
+	if !strings.Contains(logs, "item 7 track 0 (hdmv_pgs_subtitle eng): 2 cues read") || !strings.Contains(logs, "item 7 track 1 (dvd_subtitle): 1 cues read") {
+		t.Errorf("the read tracks were not said:\n%s", logs)
 	}
 	if _, ok := b.etags["Movies/One (2001)/1.mp4"]; !ok {
 		t.Error("the file that was already fine was touched")
@@ -285,30 +340,37 @@ func TestRunConvertsWhatNeedsIt(t *testing.T) {
 	}
 	var order []string
 	for _, c := range s.calls {
-		if strings.HasPrefix(c, "ffmpeg") && strings.Contains(c, "-i http") {
+		if strings.HasPrefix(c, "ffmpeg") && strings.Contains(c, "-i http") && !strings.Contains(c, "-f matroska") {
 			order = append(order, c)
 		}
 	}
-	if len(order) != 3 || !strings.Contains(order[0], "/2.mkv") || !strings.Contains(order[1], "/3.mkv") || !strings.Contains(order[2], "/3.mkv") {
+	// Remuxes by size (2, then 6 whose subtitles fail before its ffmpeg, then 7), then the encode: card, then software.
+	if len(order) != 4 || !strings.Contains(order[0], "/2.mkv") || !strings.Contains(order[1], "/7.mkv") || !strings.Contains(order[2], "/3.mkv") || !strings.Contains(order[3], "/3.mkv") {
 		t.Errorf("ffmpeg ran %d times: %v", len(order), order)
 	}
-	if !strings.Contains(order[1], "-hwaccel vaapi") || strings.Contains(order[2], "-hwaccel") || !strings.Contains(order[2], "hwupload") {
-		t.Errorf("the second try must decode in software: %v", order[1:])
+	if !strings.Contains(order[2], "-hwaccel vaapi") || strings.Contains(order[3], "-hwaccel") || !strings.Contains(order[3], "hwupload") {
+		t.Errorf("the second try must decode in software: %v", order[2:])
 	}
 	// A scan, with the bearer, as soon as the first file lands (the clock
-	// starts long past the last one), and one more for what landed after.
-	if len(f.scans) != 2 || f.scans[0] != "Bearer gpu-token" || f.scans[1] != "Bearer gpu-token" {
-		t.Errorf("scans = %v, want two with the bearer", f.scans)
+	// starts long past the last one), then every quarter hour of the fake
+	// clock, and once more for what landed after.
+	if len(f.scans) < 2 {
+		t.Errorf("scans = %v, want at least two", f.scans)
+	}
+	for _, sc := range f.scans {
+		if sc != "Bearer gpu-token" {
+			t.Errorf("a scan went without the bearer: %q", sc)
+		}
 	}
 	for _, want := range []string{
 		"h264_vaapi on /dev/dri/renderD128 is live",
-		"5 video files: 1 already play everywhere, 1 to remux (2.0 GB), 3 to re-encode (12.0 GB, 4.5 hours of film)",
+		"7 video files: 1 already play everywhere, 3 to remux (15.0 GB), 3 to re-encode (12.0 GB, 4.5 hours of film)",
 		"plan remux item 2",
 		"plan encode item 3",
 		`remux item 2 "2.mkv": 2.mkv → 2.mp4`,
 		`encode item 3 "3.mkv": 3.mkv → 3.mp4`,
 		"15.0x realtime",
-		"1 file(s) converted, scan requested",
+		"file(s) converted, scan requested",
 	} {
 		if !strings.Contains(logs, want) {
 			t.Errorf("log lacks %q:\n%s", want, logs)
@@ -331,7 +393,8 @@ func TestDryRunWritesNothing(t *testing.T) {
 		}
 	}
 	for _, want := range []string{
-		"5 video files: 1 already play everywhere, 1 to remux",
+		"7 video files: 1 already play everywhere, 3 to remux",
+		"plan remux item 7 \"Shows/Seven/Season 1/7.mkv\": mkv → mp4, aac stereo first, 2 bitmap subtitle track(s) OCR'd to sidecars",
 		"plan remux item 2 \"Movies/Two (2002)/2.mkv\": mkv → mp4",
 		"plan encode item 3 \"Shows/Three/Season 1/3.mkv\": hevc → h264, aac stereo first",
 		"dry run — nothing written",
@@ -346,7 +409,7 @@ func TestDryRunWritesNothing(t *testing.T) {
 // out, and Verify refuses it before the bucket is touched.
 func TestAWrongFileIsNotUploaded(t *testing.T) {
 	items, b := library()
-	f := &fakeFlickr{t: t, items: items[:2]} // the one remux only
+	f := &fakeFlickr{t: t, items: items[:2]} // the one plain remux only
 	s := &seam{}
 	// ffmpeg writes the file; ffprobe says it is not what was asked for.
 	d := func(ctx context.Context, name string, args []string) ([]byte, error) {
