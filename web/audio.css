@@ -40,4 +40,4 @@ body.audio-mode video, body.audio-mode #thumb { display: none !important; }
 }
 /* an audiobook or a record has no picture to fill: the fullscreen and
    picture-in-picture buttons hide with the video */
-body.audio-mode #btn-fs, body.audio-mode #btn-pip { display: none !important; }
+body.audio-mode #btn-fs, body.audio-mode #pip { display: none !important; }

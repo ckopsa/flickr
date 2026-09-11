@@ -383,8 +383,11 @@
   .rd-end button { margin-top: 10px; margin-right: 8px; }
   .rd-keep { background: #2a4a8a; border-color: #3a5da8; }
   .rd-keep:hover { background: #33579e; }
-  /* the picture is a control: a click pauses it, a double tap seeks (player.js) */
-  video { width: 100%; max-height: 58vh; background: #000; border-radius: 8px; cursor: pointer; }
+  /* the picture is a control: a click pauses it, a double tap seeks (player.js).
+     touch-action: manipulation is what makes the second tap a seek rather than
+     a zoom — a phone's double tap is its own gesture until a page says so. */
+  video { width: 100%; max-height: 58vh; background: #000; border-radius: 8px; cursor: pointer;
+    touch-action: manipulation; }
   /* casting: the page IS the remote (#cast-remote, player.js). A dimmed
      picture of what the television is showing is neither watchable nor a
      control, so the video goes and the artwork stands in its place; the
@@ -404,7 +407,7 @@
   /* nothing to take fullscreen when the picture is on the other device */
   body.casting #btn-fs { display: none; }
   /* the picture is on the television: there is nothing here to put in a small window */
-  body.casting #btn-pip { display: none !important; }
+  body.casting #pip { display: none !important; }
   #scrub { position: relative; height: 22px; margin: 10px 0 2px; cursor: pointer; }
   #scrub .rail { position: absolute; left: 0; right: 0; top: 8px; height: 6px; background: #2a2c33; border-radius: 3px; }
   #scrub .avail { position: absolute; left: 0; top: 8px; height: 6px; background: #3d4250; border-radius: 3px; width: 0; }
@@ -529,6 +532,35 @@
   #device.idle #sleep-menu {
     opacity: 0; pointer-events: none; }
   #device.idle, #device.idle video { cursor: none; }
+  /* --- the pocket theatre ---------------------------------------------------
+
+     A phone held sideways is a cinema the size of a hand. player.js watches
+     exactly one media query for it — landscape, under 500px tall, driven by a
+     finger — and puts .pocket on the body while a picture is up, which is
+     theatre mode's stronger form: the picture takes the WHOLE viewport, the
+     header and everything the document drew around it go, and the transport
+     overlays the bottom and fades with the room as theatre's does. Rotating
+     back takes the class off and the page comes back exactly as it was.
+
+     The title bar stays, because it is the way out, and it fades with the
+     transport. The volume slider goes: the phone has keys for that. */
+  body.pocket { overflow: hidden; }
+  body.pocket header, body.pocket #player-chrome > *:not(#device) { display: none; }
+  body.pocket #stage { padding-inline: 0; }
+  body.pocket #device { position: fixed; inset: 0; z-index: 70; background: #000; }
+  body.pocket video { width: 100%; height: 100%; max-height: none; border-radius: 0; object-fit: contain; }
+  body.pocket #transport { position: absolute; left: 0; right: 0; bottom: 0; z-index: 58;
+    padding: 0 16px 6px; background: linear-gradient(rgba(0,0,0,0), rgba(0,0,0,0.82) 55%); }
+  /* one row of controls, scrolled sideways if it is longer than the hand:
+     wrapping would eat the picture, and a button squeezed onto two lines is
+     taller than the whole transport can afford */
+  body.pocket #controls { gap: 6px; flex-wrap: nowrap; overflow-x: auto; margin-top: 4px; }
+  body.pocket #controls > * { flex: 0 0 auto; white-space: nowrap; }
+  body.pocket #vol { display: none; }
+  body.pocket #player-title { padding-bottom: 20px; }
+  /* the skip sits above the transport again: the picture is the whole screen,
+     so there is no "under the picture" for the controls to be */
+  body.pocket #skips { right: 16px; top: auto; bottom: 84px; }
   /* the '?' card: the keys, listed over the picture they drive */
   #keys-help { position: absolute; right: 16px; bottom: 84px; z-index: 59; max-width: min(320px, 80vw);
     background: rgba(20,21,26,0.94); border: 1px solid #3a3d47; border-radius: 10px;
@@ -1012,6 +1044,9 @@
 <!-- the D-pad's arithmetic: which card an arrow points at, over bounding
      rects alone, so web/focus_test.mjs can drive it with no DOM at all -->
 <script src="focus.js"></script>
+<!-- the thumb's arithmetic: which third of a picture a tap landed in and
+     whether it was one of a pair, tested by web/touch_test.mjs -->
+<script src="touch.js"></script>
 <!-- the cast bridge: the session document read into a load, shared with the
      custom receiver (web/receiver.html) and tested by web/cast_test.mjs -->
 <script src="cast.js"></script>

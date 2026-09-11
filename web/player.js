@@ -49,14 +49,17 @@
   let creditsCued = false;       // this stretch of credits has started the up next
   let autoplayNext = localStorage.autoplayNext !== 'off';
   let scrubbing = false;         // a finger (or a mouse) is dragging the bar
-  let tapTimer = null, lastTapAt = 0, rippleTimer = null;
+  // A finger's tap, waiting to find out whether it was one of a pair:
+  // tapPending is what the last tap left behind (web/touch.js, tapPhase) and
+  // tapTimer is the deferred single it will fire if no twin arrives.
+  let tapTimer = null, tapPending = null, rippleTimer = null;
+  let chromeWasHidden = false;   // were the controls faded out when the finger landed?
   let idleTimer = null;          // the countdown to a dark room
   let clipOpen = false;          // the clip bar is up over the scrubber
   let clipDrag = null;           // { kind, seconds } while a handle is held
   let clipMinted = null;         // the last link the server minted for it
   let looping = false;           // A-B repeat, on the passage or the clip
   let loopSeekAt = 0;            // when the loop last asked to go back to A
-  const DOUBLE_TAP_MS = 300;     // how long a single tap waits for its twin
   const IDLE_MS = 3000;          // how long a still pointer waits before the chrome goes
   const CLIP_SECONDS = 30;       // how long a clip is before anything is dragged
   const RATES = [0.75, 1, 1.25, 1.5, 1.75, 2];  // the speeds, YouTube's list
@@ -133,6 +136,7 @@
     ['M', 'Mute'],
     ['Shift+. / Shift+,', 'Faster / slower'],
     ['F', 'Fullscreen'],
+    ['I', 'Picture in picture'],
     ['C', 'Next subtitle track'],
     ['N', 'Next episode'],
     ['Esc', 'Leave fullscreen, or back out'],
@@ -207,7 +211,7 @@
           '<button id="btn-sleep" title="Sleep timer" aria-label="Sleep timer">🌙</button>' +
           '<button id="btn-autoplay"></button>' +
           '<button id="btn-clip" title="Mark a clip" aria-pressed="false" hidden>✂ Clip</button>' +
-          '<button id="btn-pip" title="Picture in picture" aria-label="Picture in picture" hidden>⧉</button>' +
+          '<button id="pip" title="Picture in picture" aria-label="Picture in picture" hidden>⧉</button>' +
           '<button id="btn-keys" title="Keyboard shortcuts" aria-label="Keyboard shortcuts">?</button>' +
           '<button id="btn-fs" title="Fullscreen" aria-label="Fullscreen">⛶</button>' +
           '<google-cast-launcher id="cast-btn"></google-cast-launcher>' +
@@ -256,6 +260,7 @@
     // and neither does the remote — while the television has the picture this
     // page is a card of controls, which the theatre bars would sit on top of.
     document.body.classList.toggle('theatre', inTheatre());
+    syncPocket();
     renderChapters();
     renderMarksOnScrub();
     paintClip();
@@ -638,6 +643,7 @@
     method = null;
     document.body.classList.remove('audio-mode');
     document.body.classList.remove('theatre');
+    syncPocket(); // and the phone is a page again, whichever way it is held
     wake(); // nothing plays: the room comes back up
     const chrome = $('player-chrome');
     if (chrome) chrome.hidden = true;
@@ -1422,6 +1428,7 @@
     else if (k === '>') stepRate(1);
     else if (k === '<') stepRate(-1);
     else if (k === 'f') toggleFullscreen();
+    else if (k === 'i') togglePip();
     else if (k === 'c') cycleSubs();
     else if (k === 'n') advance();
     else if (k === '?') toggleKeys();
@@ -1505,6 +1512,43 @@
     idleTimer = setTimeout(() => { if (isPlaying()) element.classList.add('idle'); }, IDLE_MS);
   }
 
+  // --- the pocket theatre ------------------------------------------------------
+  //
+  // A phone held sideways with a picture on it has no room for a page and does
+  // not want one: the picture IS the page. body.pocket is theatre mode's
+  // stronger form (the CSS is in index.html under that class) and what turns
+  // it on is the HANDSET, not the route — landscape, short, driven by a finger
+  // — so it is a media query with a listener on it, and rotating back takes
+  // the class off and gives the page its margins again.
+  const POCKET = '(orientation: landscape) and (max-height: 500px) and (pointer: coarse)';
+  let pocketMq = null;
+  function inPocket() { return !!(pocketMq && pocketMq.matches) && inTheatre(); }
+  function syncPocket() {
+    const on = inPocket();
+    if (on === document.body.classList.contains('pocket')) return;
+    document.body.classList.toggle('pocket', on);
+    lockLandscape(on);
+    wake();
+  }
+  // The phone is already sideways — this only asks it to STAY that way while
+  // the picture is up. Most browsers refuse outside fullscreen and a desktop
+  // has no orientation to lock; a refusal is not an error, because the picture
+  // fills the viewport either way.
+  function lockLandscape(on) {
+    const o = root.screen && root.screen.orientation;
+    if (!o) return;
+    try {
+      if (on) { if (o.lock) o.lock('landscape').catch(() => {}); }
+      else if (o.unlock) o.unlock();
+    } catch (e) { /* not this browser's, or not allowed here */ }
+  }
+  function watchPocket() {
+    if (pocketMq || !root.matchMedia) return;
+    pocketMq = root.matchMedia(POCKET);
+    if (pocketMq.addEventListener) pocketMq.addEventListener('change', syncPocket);
+    else if (pocketMq.addListener) pocketMq.addListener(syncPocket);  // an older Safari
+  }
+
   // What a double tap answers with, so the finger knows it landed: the amount
   // seeked, on the side it was tapped, gone again in half a second. Hiding it
   // first restarts the fade when a second tap comes straight after.
@@ -1518,6 +1562,16 @@
     el.hidden = false;
     clearTimeout(rippleTimer);
     rippleTimer = setTimeout(() => { el.hidden = true; }, 500);
+  }
+
+  // What the finger asked for, carried out. The seek is the KEYBOARD's — the
+  // same ten seconds, through the same seekTo, answered with the same ripple —
+  // so an arrow key and a thumb are two ways of saying one thing.
+  function tapped(intent) {
+    if (intent === 'back') { seekTo(position() - 10); seekRipple('left', '−10s'); return; }
+    if (intent === 'forward') { seekTo(position() + 10); seekRipple('right', '+10s'); return; }
+    if (intent === 'reveal') { wake(); return; }  // the pointerdown already did it
+    togglePlay();
   }
 
   // --- the scrub bar under a pointer -------------------------------------------
@@ -1621,25 +1675,36 @@
     video.addEventListener('play', wake);
     video.addEventListener('pause', wake);
 
+    // Whether the controls were faded out when the finger LANDED is read here,
+    // in the target phase: the pointerdown on the device above has already
+    // brought them back by the time the tap is over, and what the tap meant
+    // turns on the room it arrived in.
+    video.addEventListener('pointerdown', e => {
+      if (e.pointerType === 'touch') chromeWasHidden = element.classList.contains('idle');
+    });
+
     // The picture is a control too, now that no native bar is drawn over it.
     // A mouse has nothing to disambiguate, so its click acts at once; a
-    // finger's single tap waits out the double-tap window, and a double tap
-    // on the left or right third seeks instead of pausing.
+    // finger's does not, and web/touch.js holds the arithmetic of that: which
+    // third it landed in, whether it was one of a pair, and what the pair or
+    // the single asked for. A single tap is DEFERRED by the window, so the
+    // first of a double never pauses and unpauses.
     video.addEventListener('pointerup', e => {
       if (e.pointerType !== 'touch') { togglePlay(); return; }
-      const now = Date.now();
-      if (tapTimer && now - lastTapAt < DOUBLE_TAP_MS) {
-        clearTimeout(tapTimer);
-        tapTimer = null;
-        const rect = video.getBoundingClientRect();
-        const x = (e.clientX - rect.left) / (rect.width || 1);
-        if (x < 1 / 3) { seekTo(position() - 10); seekRipple('left', '−10s'); }
-        else if (x > 2 / 3) { seekTo(position() + 30); seekRipple('right', '+30s'); }
-        else togglePlay();
-        return;
-      }
-      lastTapAt = now;
-      tapTimer = setTimeout(() => { tapTimer = null; togglePlay(); }, DOUBLE_TAP_MS);
+      // The television has the picture: nothing here to seek or pause by
+      // tapping, and the remote's own transport stays where it is.
+      if (casting()) return;
+      const rect = video.getBoundingClientRect();
+      const zone = root.Touch.tapZone(e.clientX - rect.left, rect.width);
+      const t = root.Touch.tapPhase(tapPending, zone, Date.now());
+      tapPending = t.pending;
+      // Either the deferred single is this tap's twin, or it belonged to
+      // another third and the thumb has moved on: either way it is dropped.
+      clearTimeout(tapTimer);
+      tapTimer = null;
+      const intent = root.Touch.tapIntent(t.phase, zone, chromeWasHidden);
+      if (t.phase === 'double') { tapped(intent); return; }
+      tapTimer = setTimeout(() => { tapTimer = null; tapped(intent); }, root.Touch.DOUBLE_TAP_MS);
     });
     video.addEventListener('volumechange', syncMuteButton);
     document.addEventListener('fullscreenchange', syncFullscreenButton);
@@ -1805,6 +1870,13 @@
   // phone says what the page says, and nothing here composes an address or a
   // rule of its own. Every call is guarded: a browser without the API is a
   // browser with no lock-screen controls, which is where it started.
+  //
+  // AND THE RULE THAT MAKES THEM WORTH HAVING: nothing in this client pauses
+  // the media element because the page went away. There is no visibilitychange
+  // handler and no pagehide handler anywhere in web/, and none may be added —
+  // a record goes on playing with the phone in a pocket, and the progress post
+  // above goes on writing where it got to while it does. The only stop is the
+  // person's: a button, a key, or leaving for good (beforeunload, kernel.js).
 
   function mediaSession() {
     return (root.navigator && root.navigator.mediaSession) || null;
@@ -1899,7 +1971,7 @@
     return !!(document.pictureInPictureEnabled && video && !video.disablePictureInPicture);
   }
   function syncPipButton() {
-    const b = $('btn-pip');
+    const b = $('pip');
     if (!b) return;
     b.hidden = !pipAvailable();
     const on = document.pictureInPictureElement === video;
@@ -1918,7 +1990,7 @@
   function bindNowPlaying() {
     bindMediaSession();
     element.addEventListener('click', e => {
-      if (e.target.id === 'btn-pip') togglePip();
+      if (e.target.id === 'pip') togglePip();
     });
     video.addEventListener('enterpictureinpicture', syncPipButton);
     video.addEventListener('leavepictureinpicture', syncPipButton);
@@ -1974,6 +2046,7 @@
     // The room changed: theatre mode follows the picture, and the chrome comes
     // back up (and stays up, while this page is the remote).
     document.body.classList.toggle('theatre', inTheatre());
+    syncPocket();
     syncRateControl();
     wake();
     if (item) {
@@ -2048,6 +2121,7 @@
     K = kernel;
     profiles.browser = detectBrowserCaps();
     if (!element) build();
+    watchPocket();
     // The bar is re-rendered from the session document, so the listener goes
     // on the container that outlives every render of it.
     const bar = $('mini-player');
