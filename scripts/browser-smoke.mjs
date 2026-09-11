@@ -16,6 +16,11 @@
 // again. Every step after it runs signed in, and reads exactly as it does
 // without the gate.
 //
+// The walk uses two browser contexts: a desktop one for most of it, and a
+// second with hasTouch for the tablet, the pocket theatre, the thumb and the
+// install row — a finger's steps need a context where (pointer: coarse) is
+// true, and that cannot be turned on for a context that already exists.
+//
 // Needs: go, node, and Playwright with its Chromium (the web environment has
 // them; locally `npm i -g playwright && npx playwright install chromium`).
 // The server half is cmd/server/smoke_test.go, built with `-tags smoke` and
@@ -218,7 +223,9 @@ async function signIn(page, issuer) {
   });
 }
 
-async function walk(page, issuer) {
+// Every page the walk opens is watched the same way: a thrown error, an error
+// logged to the console, or a 500 anywhere fails the run.
+function watchErrors(page) {
   page.on('pageerror', e => jsErrors.push('pageerror: ' + e.message));
   page.on('console', m => {
     if (m.type() !== 'error') return;
@@ -229,6 +236,10 @@ async function walk(page, issuer) {
   page.on('response', r => {
     if (r.status() >= 500) jsErrors.push(`HTTP ${r.status()} ${r.url()}`);
   });
+}
+
+async function walk(page, issuer, ctx) {
+  watchErrors(page);
 
   if (issuer) await signIn(page, issuer);
 
@@ -442,6 +453,165 @@ async function walk(page, issuer) {
     await page.setViewportSize({ width: 1280, height: 800 });
   });
 
+  // --- the same library in two hands -------------------------------------------
+  //
+  // A viewport is not a handset. The four steps below are about the page a
+  // FINGER meets: the layout (pointer: coarse) asks for, and taps that are the
+  // pointer pairs a phone sends rather than ones this file dispatched. That
+  // cannot be turned on for a context which already exists, so they get one of
+  // their own, carrying this context's sitting — the profile is in
+  // localStorage, the session behind the gate in a cookie — so the gate is
+  // already behind it. It is closed again before the walk goes on.
+  const touchCtx = await ctx.browser().newContext({
+    storageState: await ctx.storageState(),
+    hasTouch: true, isMobile: true,
+    viewport: { width: 820, height: 1180 },
+  });
+  const hand = await touchCtx.newPage();
+  watchErrors(hand);
+
+  await step(hand, 'tablet: four columns portrait, six landscape, nothing overflows either way', async () => {
+    const columns = () => hand.evaluate(() => {
+      const g = document.querySelector('section.band .band-grid');
+      if (!g) throw new Error('the shelf has no grid');
+      return getComputedStyle(g).gridTemplateColumns.split(/\s+/).length;
+    });
+    const overflow = () => hand.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+    for (const [w, h, want] of [[820, 1180, 4], [1180, 820, 6]]) {
+      await hand.setViewportSize({ width: w, height: h });
+      for (const hash of ['#/', '#/show/The%20Office', '#/item/4']) {
+        await hand.goto(base + '/' + hash);
+        await hand.waitForFunction(() => document.querySelector('.card, #detail-play'));
+        await hand.waitForTimeout(300);
+        const over = await overflow();
+        if (over > 1) throw new Error(`${hash} is ${over}px wider than the ${w}px tablet`);
+      }
+      await hand.goto(base + '/#/');
+      await hand.waitForFunction(() => document.querySelector('.card'));
+      await hand.waitForTimeout(300);
+      const n = await columns();
+      if (n !== want) throw new Error(`${w}px across the shelf is ${n} columns, want ${want}`);
+      // Inside the tablet's own band (641–1024px) a shelf is moved with a
+      // thumb, so it comes to rest on a card's edge rather than halfway over
+      // one. Past 1024 the page is a desktop again and a wheel does the moving.
+      if (w > 1024) continue;
+      const snapping = await hand.$$eval('.band-row, #cw-row', rs => rs.map(r => getComputedStyle(r).scrollSnapType));
+      if (!snapping.length) throw new Error('the home shelf has no rows to snap');
+      if (!snapping.every(s => /^x\b/.test(s))) {
+        throw new Error('the shelves do not snap sideways on a tablet: ' + snapping.join(', '));
+      }
+    }
+    // ...and the poster keeps its column beside the words: a tablet has the
+    // room for the two-column shapes a phone has to stack.
+    await hand.setViewportSize({ width: 820, height: 1180 });
+    await hand.goto(base + '/#/item/4');
+    await expectVisible(hand, '#detail-play', 'the play control');
+    await hand.waitForTimeout(300);
+    const dir = await hand.evaluate(() => getComputedStyle(document.getElementById('detail-info')).flexDirection);
+    if (dir !== 'row') throw new Error('the poster stacks on a tablet (#detail-info is ' + dir + ')');
+    await snap(hand, 'tablet.png');
+  });
+
+  await step(hand, 'pocket: a landscape phone is a theatre', async () => {
+    await hand.setViewportSize({ width: 844, height: 390 });
+    await hand.goto(base + '/#/');
+    await hand.waitForFunction(() => document.querySelector('.card'));
+    await hand.locator('.card', { hasText: 'Frozen' }).first().click();
+    await expectVisible(hand, '#detail-play', 'the play control');
+    await hand.click('#detail-play');
+    await playing(hand);
+    if (!(await hand.evaluate(() => document.body.classList.contains('pocket')))) {
+      throw new Error('a handset held sideways is not in the pocket theatre');
+    }
+    await expectVisible(hand, '#transport', 'the transport over the picture');
+    await snap(hand, 'pocket.png');
+    // The room darkens as it does on a desktop: three still seconds and the
+    // title bar and the transport fade off the picture.
+    await hand.waitForFunction(() => document.getElementById('device').classList.contains('idle'), null, { timeout: 8000 })
+      .catch(() => { throw new Error('the chrome never faded over the pocket theatre'); });
+    // Rotating back gives the page its margins again.
+    await hand.setViewportSize({ width: 390, height: 844 });
+    await hand.waitForFunction(() => !document.body.classList.contains('pocket'), null, { timeout: 8000 })
+      .catch(() => { throw new Error('the pocket theatre outlived the rotation'); });
+  });
+
+  await step(hand, 'thumb: a double tap skips, a tap zone turns the page', async () => {
+    await hand.goto(base + '/#/');
+    await hand.waitForFunction(() => document.querySelector('.card'));
+    await hand.locator('.card', { hasText: 'Frozen' }).first().click();
+    await expectVisible(hand, '#detail-play', 'the play control');
+    await hand.click('#detail-play');
+    await playing(hand);
+    // The fixture film is six seconds long and a seek clamps to the end, so the
+    // skip worth proving here is the one BACK: hold the picture at five seconds
+    // and take ten off it with two taps on the left-hand third.
+    await hand.evaluate(() => { const v = document.getElementById('video'); v.pause(); v.currentTime = 5; });
+    // The ripple that answers the thumb lives half a second, which can be over
+    // before a poll sees it, so it is recorded as it is drawn.
+    await hand.evaluate(() => {
+      window.__ripple = null;
+      const el = document.getElementById('seek-ripple');
+      new MutationObserver(() => { if (!el.hidden) window.__ripple = (el.textContent || '').trim() || 'shown'; })
+        .observe(el, { attributes: true, childList: true, characterData: true, subtree: true });
+    });
+    const box = await hand.locator('#video').boundingBox();
+    if (!box) throw new Error('no picture to tap');
+    const x = Math.round(box.x + box.width * 0.15), y = Math.round(box.y + box.height / 2);
+    const before = await hand.evaluate(() => document.getElementById('video').currentTime);
+    await hand.touchscreen.tap(x, y);
+    await hand.waitForTimeout(60);
+    await hand.touchscreen.tap(x, y);
+    await hand.waitForTimeout(300);
+    const after = await hand.evaluate(() => document.getElementById('video').currentTime);
+    if (!(before - after >= 3)) throw new Error(`two taps on the left third took ${before}s to ${after}s, not ten seconds back`);
+    const ripple = await hand.evaluate(() => window.__ripple);
+    if (!ripple) throw new Error('the skip drew no ripple to say it had happened');
+    await snap(hand, 'thumb.png');
+
+    // The readers are the same idea over a page of words. The book and pdf
+    // steps above tap those zones with pointers this file dispatches, because
+    // the walk's own context is a desktop; here the finger is a real one.
+    await hand.goto(base + '/#/');
+    await hand.waitForFunction(() => document.querySelector('.card'));
+    await hand.locator('.card', { hasText: 'Hill House' }).first().click();
+    await expectVisible(hand, '#detail-play', 'the read control');
+    await hand.click('#detail-play');
+    await hand.locator('.rd-view iframe').first().waitFor({ timeout: 15000 })
+      .catch(() => { throw new Error('epub.js never rendered a page'); });
+    await hand.waitForTimeout(500);
+    const zone = await hand.locator('.rd-zone[data-zone=next]').first().boundingBox();
+    if (!zone) throw new Error('the reader has no next zone over its page');
+    const was = await hand.textContent('.rd-readout');
+    await hand.touchscreen.tap(Math.round(zone.x + zone.width / 2), Math.round(zone.y + zone.height / 2));
+    await hand.waitForFunction(w => (document.querySelector('.rd-readout') || {}).textContent !== w,
+      was, { timeout: 8000 })
+      .catch(() => { throw new Error(`a finger on the next zone did not turn the page (still ${was})`); });
+    await hand.click('.rd-close');
+  });
+
+  await step(hand, 'standalone: no install row until the browser offers one', async () => {
+    await hand.goto(base + '/#/');
+    await hand.waitForFunction(() => document.querySelector('.card'));
+    await hand.click('#gear');
+    await expectVisible(hand, '#settings', 'the settings panel');
+    // Headless Chromium fires no beforeinstallprompt and this is not an iPhone,
+    // so there is nothing to offer and the row is not drawn at all — which is
+    // the case that has to stay quiet, because it is every desktop's.
+    const row = await hand.evaluate(() => {
+      const box = document.getElementById('settings-install-row');
+      return { there: !!box, hidden: !!(box && box.hidden), html: box ? box.innerHTML : '' };
+    });
+    if (!row.there) throw new Error('the settings panel has no install row to leave empty');
+    const button = hand.locator('#settings-install');
+    if (await button.count() && await button.first().isVisible()) {
+      throw new Error('an install button with no offer behind it');
+    }
+    if (!row.hidden) throw new Error('the install row is drawn with nothing in it: ' + row.html);
+    await snap(hand, 'install.png');
+  });
+
+  await touchCtx.close();
+
   await step(page, 'kids: a kid profile sees the PG film and not the TV-14 show', async () => {
     await page.goto(base + '/#/');
     await page.fill('#search', ''); // the last step's query still filters the shelf
@@ -480,7 +650,7 @@ try {
   const browser = await chromium.launch({ args: ['--autoplay-policy=no-user-gesture-required'] });
   const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 } });
   const page = await ctx.newPage();
-  await walk(page, issuer);
+  await walk(page, issuer, ctx);
   await browser.close();
 } catch (e) {
   failures.push({ name: 'harness', error: String(e && e.stack || e) });
