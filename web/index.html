@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>flickr</title>
 <meta name="theme-color" content="#14151a">
 <link rel="manifest" href="/manifest.json">
@@ -643,12 +643,13 @@
     background: #2e2616; color: var(--warn); border: 1px solid #a37a30; border-radius: 8px;
     padding: 10px 16px; font-size: 13px; max-width: min(680px, 92vw); box-shadow: 0 8px 30px rgba(0,0,0,0.6); }
 
-  /* --- the page on a wide screen, on a phone, and under a thumb -------------
+  /* --- the page on a wide screen, on a phone, on a tablet, under a thumb ----
 
-     Three rules in the order a window meets them. The measure first: past
+     Four rules in the order a window meets them. The measure first: past
      1400px the header's rule still spans the glass but its content stops
      widening. Then the phone, where the two-column shapes (poster beside
      text, contents beside page) have no room to be two columns. Then the
+     tablet, which has the room for them but is held in two hands. Then the
      pointer, which is not a question of width at all: a finger needs 44px
      whatever the screen. */
 
@@ -697,12 +698,68 @@
     #skips { right: 12px; bottom: auto; top: 56px; }
   }
 
+  /* --- slice: the tablet, between the phone and the desktop -----------------
+
+     A 10in tablet used to be a desktop with nothing of its own: the grid came
+     out right by luck (the 150px measure above gives 4 tiles at 768px and 6 at
+     1024px) but the poster was desktop-sized and the shelves were scrolled
+     with a wheel nobody has. This band is the middle size, held in two
+     hands. */
+  @media (min-width: 641px) and (max-width: 1024px) {
+    /* still a column beside the words, one size down from the desktop's */
+    #detail-poster { width: 200px; }
+    /* a shelf is moved with a thumb here: it carries on after the finger
+       lifts, and comes to rest on a card's edge rather than halfway over one */
+    .band-row, #cw-row { -webkit-overflow-scrolling: touch; scroll-snap-type: x proximity; }
+    .band-row > .card, #cw-row > .cw-card { scroll-snap-align: start; }
+  }
+
   @media (pointer: coarse) {
     button, select, input { min-height: 44px; }
     .item { min-height: 44px; padding-top: 13px; padding-bottom: 13px; }
     .season > summary { min-height: 44px; padding-top: 13px; padding-bottom: 13px; }
     google-cast-launcher { width: 44px; height: 44px; }
   }
+  /* the tablet again (the same slice), after the block above because it sets
+     the same property: an episode is picked off the list with a finger there,
+     so the rows are taller than the 44px any control has to clear. */
+  @media (min-width: 641px) and (max-width: 1024px) and (pointer: coarse) {
+    .item { min-height: 56px; }
+  }
+
+  /* --- slice: safe areas ----------------------------------------------------
+
+     viewport-fit=cover above lets the page under the notch and the home
+     indicator, so whatever reaches an edge pads itself back out of them.
+     env() is 0px on a screen with no insets, which is every desktop and the
+     smoke, so none of this moves anything there.
+
+     The PAGE is inset once, through <body>: the header, the shelves and both
+     stages ride in with it, in either orientation. The things positioned
+     against the glass instead — the mini bar, the settings drawer, the gate,
+     and the device once it is fullscreen — are outside that padding and each
+     carries its own. */
+  body { padding-top: env(safe-area-inset-top, 0px);
+    padding-left: env(safe-area-inset-left, 0px); padding-right: env(safe-area-inset-right, 0px); }
+  main { padding-bottom: env(safe-area-inset-bottom, 0px); }
+  /* the bar stands ON the home indicator, so the page ends above both. There
+     is no body class to ask: the kernel only un-hides the bar. */
+  body:has(#mini-player:not([hidden])) main {
+    padding-bottom: calc(76px + env(safe-area-inset-bottom, 0px)); }
+  #mini-player { padding: 0 env(safe-area-inset-right, 0px)
+    env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px); }
+  #gate, #settings { padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px)
+    env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px); }
+  /* fullscreen is the whole glass and leaves the body's inset behind, so the
+     two bars over the picture add the insets to the padding they already have */
+  #device:fullscreen #player-title {
+    padding-top: calc(10px + env(safe-area-inset-top, 0px));
+    padding-left: calc(24px + env(safe-area-inset-left, 0px));
+    padding-right: calc(24px + env(safe-area-inset-right, 0px)); }
+  #device:fullscreen #transport {
+    padding-bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+    padding-left: calc(24px + env(safe-area-inset-left, 0px));
+    padding-right: calc(24px + env(safe-area-inset-right, 0px)); }
 
   /* --- ten foot: the same page, read from a sofa ----------------------------
 
