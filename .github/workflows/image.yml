@@ -45,11 +45,22 @@
 # service-account client), WHISPER_MODEL (the mounted model's path) and
 # the MINIO_* the server uses.
 #
-# ONE VARIABLE, TWO KEYS. `nomad var put` REPLACES the variable, so every
-# write carries both. The server's deploy goes first and writes back
-# whatever transcriber_tag is already there, so a ghcr outage cannot hold
-# the server back; the transcriber job writes both again with its own sha
-# once its image is pushed, and its failure is its own.
+# A THIRD IMAGE, docker.kopsa.info/flickr-converter, carries the
+# conversion worker: cmd/converter cross-compiled for amd64 and appended
+# to flickr-converter-base — the jellyfin base on its amd64 side (the
+# one image whose ffmpeg carries Mesa's radeonsi VA-API driver new enough
+# for big-colt's RX 9070 XT; probed 2026-09-09: 10-bit HEVC in, H.264
+# out, 12-15x realtime) plus the OCR the picture subtitles need
+# (tesseract, mkvtoolnix, pgsrip, subtile-ocr), built by hand in
+# home-infrastructure. The job pins it to big-colt with /dev/dri, reads
+# `converter_tag` from the deploy variable, and starts in DRY_RUN.
+#
+# ONE VARIABLE, THREE KEYS. `nomad var put` REPLACES the variable, so
+# every write carries all three. The server's deploy goes first and
+# writes back whatever transcriber_tag and converter_tag are already
+# there, so a ghcr outage cannot hold the server back; each worker job
+# writes all three again with its own sha once its image is pushed,
+# keeping the other worker's, and its failure is its own.
 
 name: image
 
@@ -79,6 +90,12 @@ env:
   BASE: jellyfin/jellyfin:latest
   TRANSCRIBER_IMAGE: docker.kopsa.info/flickr-transcriber
   TRANSCRIBER_BASE: ghcr.io/ggml-org/whisper.cpp:main-vulkan
+  CONVERTER_IMAGE: docker.kopsa.info/flickr-converter
+  # the jellyfin base plus tesseract, mkvtoolnix, pgsrip and subtile-ocr,
+  # built by hand on big-colt (home-infrastructure
+  # terraform/docker/flickr-converter-base/build.sh); a rebuild is a new
+  # date tag here
+  CONVERTER_BASE: docker.kopsa.info/flickr-converter-base:20260909-1
   CRANE_VERSION: v0.20.3
 
 jobs:
@@ -205,14 +222,16 @@ jobs:
         if: steps.gate.outputs.go == 'true'
         run: |
           set -euo pipefail
-          # `put` REPLACES the variable, so read the worker's tag back and
-          # carry it through; the transcriber job writes it again when its
-          # own image lands. Empty — the first write, before the key
-          # exists — means this sha: one commit, both images.
+          # `put` REPLACES the variable, so read the workers' tags back and
+          # carry them through; each worker job writes its own again when
+          # its image lands. Empty — the first write, before the key
+          # exists — means this sha: one commit, every image.
           keep=$(nomad var get -item transcriber_tag nomad/jobs/flickr/deploy 2>/dev/null || true)
           [ -n "$keep" ] || keep="$TAG"
-          nomad var put -force nomad/jobs/flickr/deploy image_tag="$TAG" transcriber_tag="$keep" >/dev/null
-          echo "deploying ${IMAGE}:${TAG} (transcriber_tag kept at ${keep})"
+          keepc=$(nomad var get -item converter_tag nomad/jobs/flickr/deploy 2>/dev/null || true)
+          [ -n "$keepc" ] || keepc="$TAG"
+          nomad var put -force nomad/jobs/flickr/deploy image_tag="$TAG" transcriber_tag="$keep" converter_tag="$keepc" >/dev/null
+          echo "deploying ${IMAGE}:${TAG} (transcriber_tag kept at ${keep}, converter_tag at ${keepc})"
 
       - name: Watch the restart land
         if: steps.gate.outputs.go == 'true'
@@ -354,8 +373,118 @@ jobs:
         if: steps.gate.outputs.go == 'true'
         run: |
           set -euo pipefail
-          # both keys again, because `put` replaces. The sha is the server
-          # deploy's own, so image_tag comes back exactly as that job left
-          # it however the two are ordered.
-          nomad var put -force nomad/jobs/flickr/deploy image_tag="$TAG" transcriber_tag="$TAG" >/dev/null
-          echo "deploying ${TRANSCRIBER_IMAGE}:${TAG}"
+          # all three keys again, because `put` replaces. The sha is the
+          # server deploy's own, so image_tag comes back exactly as that
+          # job left it however the jobs are ordered; the converter's tag
+          # is read back and kept, as the server keeps this one.
+          keepc=$(nomad var get -item converter_tag nomad/jobs/flickr/deploy 2>/dev/null || true)
+          [ -n "$keepc" ] || keepc="$TAG"
+          nomad var put -force nomad/jobs/flickr/deploy image_tag="$TAG" transcriber_tag="$TAG" converter_tag="$keepc" >/dev/null
+          echo "deploying ${TRANSCRIBER_IMAGE}:${TAG} (converter_tag kept at ${keepc})"
+
+  # The conversion worker: cmd/converter on the jellyfin base's amd64
+  # side. `needs: build` and not the transcriber, for the same reason the
+  # deploy does not: each worker's failure is its own.
+  converter:
+    needs: build
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    env:
+      NOMAD_ADDR: ${{ secrets.NOMAD_ADDR }}
+      NOMAD_TOKEN: ${{ secrets.NOMAD_TOKEN }}
+      TAG: ${{ needs.build.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: The registry is on the LAN
+        run: |
+          set -euo pipefail
+          code=$(curl -sS -o /dev/null -w '%{http_code}' "https://${REGISTRY}/v2/" || true)
+          if [ "$code" != "200" ]; then
+            echo "::error::https://${REGISTRY}/v2/ answered ${code}: this runner is not on the LAN (CI_RUNNER unset, or the registry allowlist changed). Nothing pushed."
+            exit 1
+          fi
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Cache Go modules, build cache and crane
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+            ~/go/bin/crane
+          key: image-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('go.sum') }}-${{ env.CRANE_VERSION }}
+          restore-keys: |
+            image-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Cross-compile the worker (linux/amd64, pure Go)
+        run: |
+          set -euo pipefail
+          mkdir -p out/app
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+            go build -trimpath -ldflags='-s -w' -o out/app/converter ./cmd/converter
+          # one layer, one file: /app/converter beside nothing — the base
+          # has no /app of its own. The mtime is the COMMIT's.
+          tar --sort=name --owner=0 --group=0 --numeric-owner --mtime="@$(git log -1 --format=%ct)" \
+              -C out -cf layer.tar app/converter
+          ls -l layer.tar
+
+      - name: crane
+        run: |
+          set -euo pipefail
+          if [ ! -x ~/go/bin/crane ] || [ "$(~/go/bin/crane version)" != "${CRANE_VERSION#v}" ]; then
+            go install "github.com/google/go-containerregistry/cmd/crane@${CRANE_VERSION}"
+          fi
+          echo "$HOME/go/bin" >> "$GITHUB_PATH"
+
+      - name: Assemble and push ${{ env.CONVERTER_IMAGE }}:${{ needs.build.outputs.tag }}
+        run: |
+          set -euo pipefail
+          push() { local n; for n in 1 2 3; do "$@" && return 0; echo "push attempt $n failed; retrying in 20s"; sleep 20; done; "$@"; }
+          # the hand-built base: the server's jellyfin base on its amd64
+          # side (jellyfin-ffmpeg with the VA-API drivers) plus the OCR tools
+          push crane --platform linux/amd64 append -b "$CONVERTER_BASE" -f layer.tar -t "${CONVERTER_IMAGE}:${TAG}"
+          crane --platform linux/amd64 mutate "${CONVERTER_IMAGE}:${TAG}" -t "${CONVERTER_IMAGE}:${TAG}" \
+            --entrypoint /app/converter --workdir /app \
+            -e PATH=/usr/lib/jellyfin-ffmpeg:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+          # prove the config before anything points at it
+          crane --platform linux/amd64 config "${CONVERTER_IMAGE}:${TAG}" > config.json
+          python3 - <<'PY'
+          import json
+          c = json.load(open("config.json"))
+          cfg = c["config"]
+          assert c["architecture"] == "amd64", c["architecture"]
+          assert cfg.get("Entrypoint") == ["/app/converter"], cfg.get("Entrypoint")
+          assert cfg.get("WorkingDir") == "/app", cfg.get("WorkingDir")
+          assert any(e.startswith("PATH=/usr/lib/jellyfin-ffmpeg:") for e in cfg.get("Env", [])), cfg.get("Env")
+          print("cmd inherited from the base (the worker reads env, not arguments):", cfg.get("Cmd"))
+          PY
+          crane tag "${CONVERTER_IMAGE}:${TAG}" latest
+          echo "pushed ${CONVERTER_IMAGE}:${TAG} and :latest"
+
+      - name: Secrets present?
+        id: gate
+        run: |
+          if [ -z "${NOMAD_ADDR}" ] || [ -z "${NOMAD_TOKEN}" ]; then
+            echo "::notice::NOMAD_ADDR / NOMAD_TOKEN are not set on this repository; worker image pushed, converter_tag left to the RUNBOOK's by-hand write."
+            echo "go=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "go=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: hashicorp/setup-nomad@v1.0.0
+        if: steps.gate.outputs.go == 'true'
+
+      - name: Point the worker at the new image
+        if: steps.gate.outputs.go == 'true'
+        run: |
+          set -euo pipefail
+          # all three keys, because `put` replaces: this sha for the
+          # server and the converter, the transcriber's read back and kept.
+          keept=$(nomad var get -item transcriber_tag nomad/jobs/flickr/deploy 2>/dev/null || true)
+          [ -n "$keept" ] || keept="$TAG"
+          nomad var put -force nomad/jobs/flickr/deploy image_tag="$TAG" transcriber_tag="$keept" converter_tag="$TAG" >/dev/null
+          echo "deploying ${CONVERTER_IMAGE}:${TAG} (transcriber_tag kept at ${keept})"

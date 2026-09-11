@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"flickr/internal/bearer"
 	"flickr/internal/pipeline"
 )
 
@@ -167,7 +168,7 @@ func pass(t *testing.T, f *fakeFlickr) (*httptest.Server, []time.Duration, strin
 	now := time.Unix(0, 0)
 	d := deps{
 		HTTP: srv.Client(),
-		Tokens: &clientCredentials{
+		Tokens: &bearer.ClientCredentials{
 			HTTP: srv.Client(), TokenURL: srv.URL + "/realms/house/protocol/openid-connect/token",
 			ID: "transcriber", Secret: "sssh",
 		},
@@ -318,46 +319,5 @@ func TestRunMovesOnPastAStaleFile(t *testing.T) {
 	}
 	if f.deliveries[1].path != "/api/items/13/transcript" {
 		t.Errorf("the item after the stale one went to %s", f.deliveries[1].path)
-	}
-}
-
-// The three shapes of the gate: nothing, a pasted bearer, and a Keycloak
-// client that holds its token until it is nearly out.
-func TestTokenSources(t *testing.T) {
-	ctx := context.Background()
-	if tok, err := (noToken{}).token(ctx); tok != "" || err != nil {
-		t.Errorf("noToken = %q, %v; want no header at all", tok, err)
-	}
-	if tok, err := staticToken("pasted").token(ctx); tok != "pasted" || err != nil {
-		t.Errorf("staticToken = %q, %v", tok, err)
-	}
-
-	asked := 0
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		asked++
-		fmt.Fprint(w, `{"access_token": "t", "expires_in": 300}`)
-	}))
-	defer srv.Close()
-	now := time.Unix(1_700_000_000, 0)
-	cc := &clientCredentials{
-		HTTP: srv.Client(), TokenURL: srv.URL, ID: "transcriber", Secret: "sssh",
-		Now: func() time.Time { return now },
-	}
-	for i := 0; i < 3; i++ {
-		if tok, err := cc.token(ctx); tok != "t" || err != nil {
-			t.Fatalf("token = %q, %v", tok, err)
-		}
-	}
-	if asked != 1 {
-		t.Errorf("asked %d times for a token good for five minutes, want once", asked)
-	}
-	// A minute before it expires the worker asks again, rather than finding
-	// out at the end of an hour of transcription.
-	now = now.Add(4*time.Minute + 30*time.Second)
-	if _, err := cc.token(ctx); err != nil {
-		t.Fatal(err)
-	}
-	if asked != 2 {
-		t.Errorf("asked %d times, want a refresh a minute before expiry", asked)
 	}
 }

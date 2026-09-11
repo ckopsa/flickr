@@ -1,8 +1,9 @@
-package main
-
-// The bearer the household gate wants, in the three shapes a worker actually
-// meets: a Keycloak client the cluster gave it, a static token somebody
-// pasted into a dev box's env, and nothing at all on a LAN with no gate.
+// Package bearer is the token a worker carries through flickr's household
+// gate, in the three shapes a worker actually meets: a Keycloak client the
+// cluster gave it, a static token somebody pasted into a dev box's env, and
+// nothing at all on a LAN with no gate. The transcriber and the converter
+// are two such workers; the gate is one, so the token is one.
+package bearer
 
 import (
 	"context"
@@ -20,24 +21,27 @@ import (
 // expires in flight fails an hour of transcription at the last step.
 const refreshLead = time.Minute
 
-type tokenSource interface {
-	token(ctx context.Context) (string, error)
+// Source answers the bearer to send, or "" for no Authorization header.
+type Source interface {
+	Token(ctx context.Context) (string, error)
 }
 
-// noToken is a box behind nothing: no Authorization header is sent at all.
-type noToken struct{}
+// None is a box behind nothing: no Authorization header is sent at all.
+type None struct{}
 
-func (noToken) token(context.Context) (string, error) { return "", nil }
+// Token answers the empty string: no header.
+func (None) Token(context.Context) (string, error) { return "", nil }
 
-// staticToken is FLICKR_TOKEN, a bearer somebody pasted in.
-type staticToken string
+// Static is FLICKR_TOKEN, a bearer somebody pasted in.
+type Static string
 
-func (t staticToken) token(context.Context) (string, error) { return string(t), nil }
+// Token answers the pasted bearer as it is.
+func (t Static) Token(context.Context) (string, error) { return string(t), nil }
 
-// clientCredentials is the real one: the worker is a Keycloak client of its
+// ClientCredentials is the real one: the worker is a Keycloak client of its
 // own and trades its secret for a short-lived access token, holding it until
 // a minute before it expires.
-type clientCredentials struct {
+type ClientCredentials struct {
 	HTTP     *http.Client
 	TokenURL string
 	ID       string
@@ -49,12 +53,14 @@ type clientCredentials struct {
 	expires time.Time
 }
 
-// tokenURL is where Keycloak answers client credentials for a realm.
-func tokenURL(issuer string) string {
+// TokenURL is where Keycloak answers client credentials for a realm.
+func TokenURL(issuer string) string {
 	return strings.TrimSuffix(issuer, "/") + "/protocol/openid-connect/token"
 }
 
-func (c *clientCredentials) token(ctx context.Context) (string, error) {
+// Token answers the held token, or trades the secret for a new one when the
+// held one is gone or nearly out.
+func (c *ClientCredentials) Token(ctx context.Context) (string, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	now := time.Now
@@ -100,4 +106,17 @@ func (c *clientCredentials) token(ctx context.Context) (string, error) {
 	}
 	c.tok, c.expires = answer.AccessToken, now().Add(ttl-lead)
 	return c.tok, nil
+}
+
+// Authorize sets the Authorization header on req from src, or leaves it
+// unset when there is no token to send.
+func Authorize(ctx context.Context, src Source, req *http.Request) error {
+	tok, err := src.Token(ctx)
+	if err != nil {
+		return err
+	}
+	if tok != "" {
+		req.Header.Set("Authorization", "Bearer "+tok)
+	}
+	return nil
 }

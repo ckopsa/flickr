@@ -24,6 +24,7 @@ import (
 	"strconv"
 	"time"
 
+	"flickr/internal/bearer"
 	"flickr/internal/pipeline"
 )
 
@@ -39,7 +40,7 @@ const (
 // queue signed; a nil Stopping channel never fires, which is what a test wants.
 type deps struct {
 	HTTP     *http.Client
-	Tokens   tokenSource
+	Tokens   bearer.Source
 	Trans    *pipeline.Transcriber
 	Presign  func(ctx context.Context, objectKey string) (string, error)
 	Sleep    func(ctx context.Context, d time.Duration)
@@ -316,7 +317,7 @@ func (d deps) authorize(ctx context.Context, req *http.Request) error {
 	if d.Tokens == nil {
 		return nil
 	}
-	tok, err := d.Tokens.token(ctx)
+	tok, err := d.Tokens.Token(ctx)
 	if err != nil {
 		return err
 	}
