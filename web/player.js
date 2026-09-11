@@ -625,7 +625,9 @@
 
   async function stopSession() {
     const act = session && R.actionOf(session, 'stop');
-    if (act) fetch(act.href, { method: act.method || 'DELETE' }).catch(() => {});
+    // keepalive: this is reached from close(), which the page's unload calls,
+    // and a request started during unload is cancelled without it.
+    if (act) fetch(act.href, { method: act.method || 'DELETE', keepalive: true }).catch(() => {});
     session = null;
     if (hls) { hls.destroy(); hls = null; }
   }
@@ -1140,9 +1142,12 @@
   function saveProgress(positionSeconds) {
     const act = session && session.item_id === (item && item.id) ? R.actionOf(session, 'progress') : null;
     if (!act) return;
+    // keepalive: a phone that locks or swipes the page away mid-post still
+    // delivers the last position; the kernel never opens the sign-in door
+    // for a keepalive request, so a 401 here fails quietly as before.
     fetch(act.href, {
       method: act.method || 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ position_seconds: positionSeconds }),
+      body: JSON.stringify({ position_seconds: positionSeconds }), keepalive: true,
     }).catch(() => {});
   }
 

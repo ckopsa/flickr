@@ -505,6 +505,7 @@ if (!root.ReaderTouch) root.ReaderTouch = (() => {
       method: act.method || 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(place),
+      keepalive: true, // a locked phone still reports the page it was on
     }).then(r => { if (r.status === 409) refused = true; }).catch(() => {});
   }
 
