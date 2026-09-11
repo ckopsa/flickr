@@ -81,8 +81,13 @@ The browser smoke is the one check that opens the page: it builds
 `cmd/server/smoke_test.go` (`-tags smoke`, skipped otherwise) to serve the
 fixture library on a port with generated media, an EPUB and a PDF, then
 walks the gate, home, settings, a show, a film, a record under the
-mini-player, both readers, search, a phone viewport and a kids profile,
-failing on any JavaScript error. Run it before a PR that touches `web/`.
+mini-player, both readers, search, a phone viewport, a tablet held both
+ways, a landscape phone's pocket theatre, a thumb (the double-tap skip
+and a reader's tap zone), the install row with nothing to offer, and a
+kids profile, failing on any JavaScript error. The tablet, the pocket,
+the thumb and the install row run in a second browser context with
+`hasTouch`, because `(pointer: coarse)` cannot be turned on for a context
+that already exists. Run it before a PR that touches `web/`.
 `SMOKE_OIDC=1` stands the fake Keycloak of `cmd/server/fakeissuer_test.go`
 in front of the same library and adds one step first: anonymous is
 refused in words, the door leads to the provider and back to the hash it
