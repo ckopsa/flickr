@@ -1219,6 +1219,23 @@
       esc(out.title || (viewer ? 'Sign out' : 'Sign in')) + '</a>';
   }
 
+  // --- the page as an app ------------------------------------------------------
+  //
+  // A phone's idea of an app is an icon on the home screen, and the browser
+  // offers to put one there — as an event, fired once, and only where it would
+  // actually work. The kernel keeps that event; this draws the button while it
+  // is held. iOS Safari fires no such event and hides Add to Home Screen in the
+  // share menu instead, so there the row is the one sentence that says where to
+  // look. Already on the home screen, or a desktop the browser offered nothing:
+  // there is nothing to say, and the row is not drawn.
+  function install(state) {
+    const s = state || {};
+    if (s.standalone) return '';
+    if (s.prompt) return '<button id="settings-install">Install flickr</button>';
+    if (s.ios) return '<span class="install-hint">Add to Home Screen from the share menu</span>';
+    return '';
+  }
+
   // --- the trace ---------------------------------------------------------------
   // Not a document kind of its own: the decision the session document carries,
   // drawn for the system panel under the player. The badge line stays out in
@@ -1262,7 +1279,7 @@
   const api = {
     library, libraryGrid, hero, work, artist, item, session, miniPlayer, continueShelf, search,
     lines,
-    account,
+    account, install,
     card, memberRow, control, watchedControl, bookmarkControl, restControls, trace, identityForm,
     esc, fmtTime, fmtRuntime, hashFor, itemHash, showHash, artistHash, searchHash,
     idIn,

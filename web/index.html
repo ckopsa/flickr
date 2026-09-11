@@ -761,6 +761,21 @@
     padding-left: calc(24px + env(safe-area-inset-left, 0px));
     padding-right: calc(24px + env(safe-area-inset-right, 0px)); }
 
+  /* --- installed: the page as an app ----------------------------------------
+
+     On the home screen there is no browser chrome, so there is no Back button
+     either: the page's own "← Back" is the whole way out of an item or a
+     sitting, and at 13px under a thumb it read as a caption. Here it reads as
+     a control. The Android gesture leaves them too — every navigation is a
+     hash and a hash pushes history, which web/kernel_test.mjs holds — but
+     nobody should have to know that to get back. */
+  @media (display-mode: standalone) and (pointer: coarse) {
+    .back { font-size: 15px; padding: 8px 16px; background: #2a2d36; border-color: #454954; }
+    #player-title .back { font-size: 14px; }
+  }
+  /* where there is no button to offer, the share menu said in words */
+  .install-hint { font-size: 12px; color: var(--muted); }
+
   /* --- ten foot: the same page, read from a sofa ----------------------------
 
      Not a breakpoint. A television is a WIDE screen at a distance, driven by
@@ -935,6 +950,12 @@
          them and kernel.js fills the box. A server with no auth in front of
          it says nothing here, because there is no account. -->
     <div class="set-row" id="settings-account" hidden></div>
+    <!-- the page as an app: while the browser is holding out an install prompt
+         this row is the button that takes it, and on an iPhone — which fires no
+         such event — the one line saying where Add to Home Screen lives.
+         R.install draws it and kernel.js fills the box; already on the home
+         screen, or never offered, and the row is not there. -->
+    <div class="set-row" id="settings-install-row" hidden></div>
     <div class="set-row end">
       <button id="settings-close">Close</button>
     </div>

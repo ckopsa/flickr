@@ -970,6 +970,32 @@ test('a server with no accounts says nothing about accounts', () => {
   assert.equal(R.account(null, '/#/'), '');
 });
 
+// The install row, which is four states and no addresses at all: the browser
+// holding out an offer, an iPhone that has no such offer to hold, a page that
+// is already the installed one, and a desktop that was never asked.
+test('the panel offers the home screen only where it can be had', () => {
+  const held = R.install({ prompt: true, standalone: false, ios: false });
+  assert.ok(held.includes('id="settings-install"'), 'no button to take the offer: ' + held);
+  assert.ok(held.includes('Install flickr'));
+
+  // iOS Safari fires no beforeinstallprompt: a button would be a button that
+  // cannot work, so the row says where the browser keeps it instead.
+  const hint = R.install({ prompt: false, standalone: false, ios: true });
+  assert.ok(!hint.includes('settings-install'), 'an iPhone was offered a button: ' + hint);
+  assert.ok(hint.includes('Add to Home Screen'), hint);
+
+  // Already on the home screen, whichever way it got there: nothing to install.
+  assert.equal(R.install({ prompt: true, standalone: true, ios: false }), '');
+  assert.equal(R.install({ prompt: false, standalone: true, ios: true }), '');
+  // And a desktop the browser offered nothing says nothing.
+  assert.equal(R.install({ prompt: false, standalone: false, ios: false }), '');
+  assert.equal(R.install(), '');
+
+  // Like every other renderer, it composes no address.
+  assert.deepEqual(addresses(held), []);
+  assert.deepEqual(addresses(hint), []);
+});
+
 test('a tile is the frame that moment falls on, in the sheet that holds it', () => {
   // One frame every 10s, ten by ten to a sheet: 0s is the first tile of the
   // first sheet, and 1100s — frame 110 — the first of the second row of the
