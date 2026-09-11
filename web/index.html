@@ -56,7 +56,10 @@
      Everything in it is an engineering control, which is why it is not on
      every screen any more. */
   #settings { position: fixed; inset: 0; background: rgba(10,11,14,0.92); z-index: 100; display: flex; align-items: center; justify-content: center; }
-  #settings-box { background: #1b1d24; border: 1px solid #2a2c33; border-radius: 12px; padding: 24px 28px; max-width: 460px; width: 92%; }
+  /* a short phone in landscape is shorter than the panel: the box scrolls
+     inside the glass rather than clipping its close button off the screen */
+  #settings-box { background: #1b1d24; border: 1px solid #2a2c33; border-radius: 12px; padding: 24px 28px; max-width: 460px; width: 92%;
+    max-height: calc(100dvh - 24px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px)); overflow-y: auto; box-sizing: border-box; }
   #settings-box h2 { margin: 0 0 18px; font-size: 18px; font-weight: 600; }
   .set-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 14px; }
   .set-row > label { font-size: 12px; color: var(--muted); }
