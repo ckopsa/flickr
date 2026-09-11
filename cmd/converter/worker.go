@@ -263,6 +263,7 @@ func (d deps) convert(ctx context.Context, cfg config, j job) bool {
 	// replaced, and its next probe is the plan to trust.
 	etag, err := d.Bucket.Stat(ctx, it.ObjectKey)
 	if err == errGone {
+		log.Printf("converter: item %d (%s): already gone from the bucket — converted on an earlier pass, the scan has not caught up", it.ID, it.ObjectKey)
 		return false
 	}
 	if err != nil {
@@ -392,21 +393,43 @@ func langSuffix(lang string) string {
 
 // ffmpeg runs the plan, on the card first. A card that refuses the DECODE —
 // a profile it does not know, a stream it will not parse — is answered by
-// decoding in software and uploading the frames; the encode is still its.
+// decoding in software and uploading the frames; a file the upload cannot
+// carry either — frames that change shape mid-stream, which ffmpeg answers
+// by rebuilding a filter graph the card cannot rebuild — is answered by
+// libx264 on the cores. A remux has one chain and no fallback.
 func (d deps) ffmpeg(ctx context.Context, cfg config, p pipeline.Plan, src, out string) error {
-	outp, err := d.Run(ctx, cfg.FFmpeg, pipeline.ConvertArgs(p, src, out, cfg.Device, true))
-	if err == nil {
-		return nil
+	chains := []struct {
+		chain pipeline.Chain
+		name  string
+	}{{pipeline.CardChain, "on the card"}}
+	if !p.VideoCopy {
+		if p.HWDecode {
+			chains = append(chains, struct {
+				chain pipeline.Chain
+				name  string
+			}{pipeline.UploadChain, "decoding in software"})
+		}
+		chains = append(chains, struct {
+			chain pipeline.Chain
+			name  string
+		}{pipeline.SoftwareChain, "libx264, no card"})
 	}
-	if p.VideoCopy || !p.HWDecode {
-		return fmt.Errorf("ffmpeg: %v: %s", err, tail(outp))
+	var lastErr error
+	for i, c := range chains {
+		if i > 0 {
+			log.Printf("converter: %v; trying %s", lastErr, c.name)
+			os.Remove(out)
+		}
+		outp, err := d.Run(ctx, cfg.FFmpeg, pipeline.ConvertArgs(p, src, out, cfg.Device, c.chain))
+		if err == nil {
+			return nil
+		}
+		lastErr = fmt.Errorf("ffmpeg %s: %v: %s", c.name, err, tail(outp))
+		if ctx.Err() != nil {
+			break // a cancelled run is not a chain to fall through
+		}
 	}
-	log.Printf("converter: the card refused the decode (%s); decoding in software", tail(outp))
-	os.Remove(out)
-	if outp, err = d.Run(ctx, cfg.FFmpeg, pipeline.ConvertArgs(p, src, out, cfg.Device, false)); err != nil {
-		return fmt.Errorf("ffmpeg (software decode): %v: %s", err, tail(outp))
-	}
-	return nil
+	return lastErr
 }
 
 // probeCard encodes one second on the card and says whether it worked. A

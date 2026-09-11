@@ -15,6 +15,7 @@ package pipeline
 // encode; the worker tries the card first and falls back on failure.
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -225,15 +226,37 @@ func surround(t model.AudioTrack) AudioPlan {
 	return AudioPlan{Ordinal: t.Ordinal, Codec: "eac3", Channels: ch}
 }
 
+// Chain is which decode/encode path ConvertArgs builds for a re-encode.
+type Chain int
+
+const (
+	// CardChain decodes on the card where the card can and encodes there.
+	CardChain Chain = iota
+	// UploadChain decodes in software, filters there, and uploads the
+	// frames to the card for the encode: the answer to a decode the card
+	// refuses, and the only chain with a software filter (detelecine) in it.
+	UploadChain
+	// SoftwareChain is libx264 end to end: no card at all. The last resort,
+	// for a file whose frames change shape mid-stream — a DVD rip that
+	// switches field order or size — which makes ffmpeg rebuild its filter
+	// graph, and the upload to the card cannot be rebuilt. Slower, and
+	// still many times realtime on a box with cores to spare at 480p.
+	SoftwareChain
+)
+
+// softwareCRF is libx264's quality for the last resort: about where CQP 21
+// on the card sits.
+const softwareCRF = "20"
+
 // ConvertArgs is pure: plan + input URL + output path -> ffmpeg argv (sans
-// binary). hw says whether the source is decoded on the card; a caller whose
-// card refused the decode calls again with hw=false and the same plan. The
-// device is the render node the worker was told.
-func ConvertArgs(p Plan, inputURL, outPath, device string, hw bool) []string {
+// binary), on the given chain. A remux ignores the chain: its video is
+// copied. The device is the render node the worker was told.
+func ConvertArgs(p Plan, inputURL, outPath, device string, chain Chain) []string {
 	args := []string{"-nostdin", "-hide_banner", "-loglevel", "error", "-y"}
-	if !p.VideoCopy {
+	hw := chain == CardChain && p.HWDecode
+	if !p.VideoCopy && chain != SoftwareChain {
 		args = append(args, "-vaapi_device", device)
-		if hw && p.HWDecode {
+		if hw {
 			args = append(args, "-hwaccel", "vaapi", "-hwaccel_output_format", "vaapi")
 		}
 	}
@@ -245,11 +268,21 @@ func ConvertArgs(p Plan, inputURL, outPath, device string, hw bool) []string {
 		args = append(args, "-map", "0:s:"+strconv.Itoa(s))
 	}
 
-	if p.VideoCopy {
+	switch {
+	case p.VideoCopy:
 		args = append(args, "-c:v", "copy")
-	} else {
+	case chain == SoftwareChain:
 		var vf []string
-		if hw && p.HWDecode {
+		if p.Detelecine {
+			vf = append(vf, fmt.Sprintf("fps=%.6f", p.FPS))
+		}
+		vf = append(vf, "format=yuv420p")
+		args = append(args, "-vf", strings.Join(vf, ","),
+			"-c:v", "libx264", "-preset", "medium", "-profile:v", "high", "-level", convertVideoLevel,
+			"-crf", softwareCRF)
+	default:
+		var vf []string
+		if hw {
 			// Frames are already on the card; nv12 is what the H.264
 			// encoder takes and what a 10-bit source is not.
 			vf = append(vf, "scale_vaapi=format=nv12")
@@ -319,7 +352,15 @@ func ProbeArgs(outPath string) []string {
 // two channels or fewer (or the copied stereo the plan kept), as many audio
 // and subtitle streams as were mapped, and a duration within two percent (or
 // five seconds) of the source's. A file that fails here is never uploaded.
+//
+// The answer is read from the first brace: the worker hands over stdout and
+// stderr together, and ffprobe says things on stderr at -v error that are
+// not errors ("Referenced QT chapter track not found", on a file whose
+// chapters were copied by name) before the JSON begins.
 func Verify(probe []byte, p Plan, sourceSeconds float64) error {
+	if i := bytes.IndexByte(probe, '{'); i > 0 {
+		probe = probe[i:]
+	}
 	var out struct {
 		Format struct {
 			Duration string `json:"duration"`

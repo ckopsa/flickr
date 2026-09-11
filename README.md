@@ -304,8 +304,9 @@ a handful of architectural decisions (see design notes below):
    probe) decides skip / remux / encode and `pipeline.ConvertArgs` (pure)
    says the argv: the video is copied when it is H.264 and re-encoded with
    `h264_vaapi` otherwise (decoded on the card where the card can, in
-   software and uploaded where it cannot — the worker falls back on a refused
-   decode), the first audio stream becomes AAC stereo with its surround
+   software and uploaded where it cannot, and on `libx264` alone when the
+   upload cannot be rebuilt mid-file either — the worker falls through the
+   three chains in that order), the first audio stream becomes AAC stereo with its surround
    original kept second (copied where MP4 carries it, E-AC-3 where it does
    not), text subtitles ride along as `mov_text`, and 4K and HDR files are
    left exactly as they are. A picture subtitle (Blu-ray PGS, DVD VobSub)
