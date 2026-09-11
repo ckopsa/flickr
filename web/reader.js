@@ -82,10 +82,132 @@ if (!root.ReaderTheme) root.ReaderTheme = (() => {
   return { rules, current, toggle, apply, inject };
 })();
 
+// --- the page under a finger: zones, a swipe, a pinch ------------------------
+// Both panes' page is the same three invisible zones wide — the outer thirds
+// turn it, the middle shows and hides the chrome so a phone reads full-bleed —
+// a swipe across it turns it too, and on the PDF two fingers scale it. The
+// DECISIONS are touch.js (pure, node-tested); the listeners are here, once,
+// and each pane passes what its own buttons already do. The zones sit OVER the
+// page, which is the only way a gesture is seen at all: a pointer inside the
+// book's iframe never reaches this document. A mouse keeps the edge taps it
+// had; the middle third answers a finger only, so a click there does nothing.
+// The price of covering the page is that a LINK inside a book is out of reach
+// of either: the contents and the passage bounds are the ways around a book.
+if (!root.ReaderTouch) root.ReaderTouch = (() => {
+  const TAP_MOVE = 12;   // a tap may wobble this far; further is a drag
+  const TAP_SLOP = 30;   // two taps this close, this soon, are one double tap
+  const TAP_MS = 300;
+
+  // view is the element the zones cover; h is what the pane's own buttons do:
+  // { prev, next, menu } always, plus { pinch } on the PDF pane, which is
+  // { scale(), at(s), to(s), reset() } — read the scale, show one during the
+  // gesture, commit one at the end, fit the page back on a double tap.
+  function attach(view, h) {
+    if (!view) return;
+    if (view.dataset.rdZones !== 'on') { view.dataset.rdZones = 'on'; bind(view, h); }
+    zones(view);
+  }
+
+  // Rebuilt whenever the pane has emptied the view under them (a teardown, a
+  // failure, a fresh canvas): cheap, and there is nowhere else to notice.
+  function zones(view) {
+    if (view.querySelector('.rd-zone')) return;
+    for (const name of ['prev', 'menu', 'next']) {
+      const d = document.createElement('div');
+      d.className = 'rd-zone';
+      d.dataset.zone = name;
+      view.appendChild(d);
+    }
+  }
+
+  // A tall PDF page scrolls inside the view, and the zones are positioned
+  // against its visible box: stretch them over the whole page so a tap lands
+  // wherever the reader has scrolled to.
+  function fit(view, height) {
+    if (!view) return;
+    const h = Math.max(view.clientHeight, height || 0);
+    for (const z of view.querySelectorAll('.rd-zone')) z.style.height = h + 'px';
+  }
+
+  function bind(view, h) {
+    const live = new Map();   // the fingers down, by pointerId
+    let log = null;           // this finger's way across the page
+    let multi = false;        // a second finger joined: no swipe and no tap
+    let pinching = false, d0 = 0, base = 1, scale = 1;
+    let lastTap = 0, lastX = 0, lastY = 0;
+
+    function spread() {
+      const p = Array.from(live.values());
+      return p.length < 2 ? 0 : Math.hypot(p[0].x - p[1].x, p[0].y - p[1].y);
+    }
+
+    view.addEventListener('pointerdown', e => {
+      live.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (live.size > 1) {
+        multi = true;
+        log = null;
+        if (h.pinch && !pinching) { pinching = true; d0 = spread(); base = h.pinch.scale(); scale = base; }
+        return;
+      }
+      multi = false;
+      log = [{ x: e.clientX, y: e.clientY, t: e.timeStamp }];
+    });
+
+    view.addEventListener('pointermove', e => {
+      if (!live.has(e.pointerId)) return; // a hover, not a finger
+      live.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (pinching) { scale = root.Touch.pinchScale(d0, spread(), base); h.pinch.at(scale); return; }
+      if (log) log.push({ x: e.clientX, y: e.clientY, t: e.timeStamp });
+    });
+
+    // The last of the two fingers up ends the pinch, and the page is drawn
+    // again at the scale it reached. Nothing else that gesture did counts.
+    function lift(e) {
+      live.delete(e.pointerId);
+      if (!pinching || live.size > 1) return true;
+      pinching = false;
+      log = null;
+      h.pinch.to(scale);
+      return false;
+    }
+
+    view.addEventListener('pointerup', e => {
+      if (!lift(e)) return;
+      const points = log;
+      log = null;
+      if (multi || !points) return;
+      const swipe = root.Touch.swipeOf(points, e.timeStamp);
+      if (swipe) { if (swipe === 'next') h.next(); else h.prev(); return; }
+      const a = points[0];
+      if (Math.abs(e.clientX - a.x) > TAP_MOVE || Math.abs(e.clientY - a.y) > TAP_MOVE) return; // a drag, not a tap
+      const r = view.getBoundingClientRect();
+      const zone = root.Touch.readerZone(e.clientX - r.left, r.width);
+      if (zone === 'prev') { h.prev(); return; }
+      if (zone === 'next') { h.next(); return; }
+      if (e.pointerType !== 'touch') return; // a mouse click in the middle falls through
+      // The middle third shows and hides the chrome — and a second tap on the
+      // same spot fits a zoomed PDF page back to the pane (the chrome toggled
+      // twice, so it is where it started, which is what a reader expects).
+      const twice = e.timeStamp - lastTap < TAP_MS &&
+        Math.abs(e.clientX - lastX) < TAP_SLOP && Math.abs(e.clientY - lastY) < TAP_SLOP;
+      lastTap = e.timeStamp; lastX = e.clientX; lastY = e.clientY;
+      h.menu();
+      if (twice && h.pinch) h.pinch.reset();
+    });
+
+    // The browser took the gesture over (a scroll, a system edge swipe): the
+    // finger is gone and asked for nothing.
+    view.addEventListener('pointercancel', e => { log = null; lift(e); });
+  }
+
+  return { attach, fit };
+})();
+
   const MISSING = 'The reader library is missing: web/vendor/epub.min.js and web/vendor/jszip.min.js ' +
                   'are not vendored (see web/vendor/README.md).';
   const PLACE_DELAY_MS = 800;   // debounce for position reports (a page turn per second is bursty)
   const LOCATION_CHARS = 1024;  // epub.js location granularity (chars per location)
+  const FONT_MIN = 70, FONT_MAX = 200, FONT_STEP = 10; // the type size, in per cent of the book's own
 
   let container = null, ui = null, keysBound = false;
   let sess = null, opts = null, book = null, rendition = null, compareCFI = null;
@@ -111,6 +233,8 @@ if (!root.ReaderTheme) root.ReaderTheme = (() => {
         '<button class="rd-toc-btn" title="Contents">☰</button>' +
         '<div class="rd-title"></div>' +
         '<div class="rd-readout"></div>' +
+        '<button class="rd-font-down" title="Smaller type">A−</button>' +
+        '<button class="rd-font-up" title="Larger type">A+</button>' +
         '<button class="rd-theme" title="Paper or dark page">◐</button>' +
         '<button class="rd-pictures" title="This book\'s pictures on the dark page: as printed, or recoloured with the page">🖼</button>' +
         '<button class="rd-close" title="Close the book">✕ Back</button>' +
@@ -133,6 +257,7 @@ if (!root.ReaderTheme) root.ReaderTheme = (() => {
     const q = sel => c.querySelector(sel);
     ui = {
       theme: q('.rd-theme'), pictures: q('.rd-pictures'),
+      fontDown: q('.rd-font-down'), fontUp: q('.rd-font-up'),
       title: q('.rd-title'), readout: q('.rd-readout'), toc: q('.rd-toc'), view: q('.rd-view'),
       msg: q('.rd-msg'), end: q('.rd-end'), endSub: q('.rd-end-sub'),
       prev: q('.rd-prev'), next: q('.rd-next'), tocBtn: q('.rd-toc-btn'), close: q('.rd-close'),
@@ -142,6 +267,8 @@ if (!root.ReaderTheme) root.ReaderTheme = (() => {
     ui.next.onclick = next;
     ui.tocBtn.onclick = () => { ui.toc.hidden = !ui.toc.hidden; };
     ui.theme.onclick = () => { ReaderTheme.toggle(); applyPage(); };
+    ui.fontDown.onclick = () => setFontPct(fontPct() - FONT_STEP);
+    ui.fontUp.onclick = () => setFontPct(fontPct() + FONT_STEP);
     ui.pictures.onclick = setPictures;
     ui.close.onclick = () => opts && opts.onBack && opts.onBack();
     ui.back.onclick = () => opts && opts.onBack && opts.onBack();
@@ -220,6 +347,7 @@ if (!root.ReaderTheme) root.ReaderTheme = (() => {
     locationsReady = false;
     lastLocation = null;
     container.hidden = false;
+    container.classList.remove('rd-chrome-hidden'); // a new book opens with its bars
     ui.end.hidden = true;
     ui.prev.disabled = ui.next.disabled = false;
     ui.title.textContent = sess.title || '';
@@ -245,12 +373,12 @@ if (!root.ReaderTheme) root.ReaderTheme = (() => {
       applyPage();
       rendition.on('relocated', loc => { if (seq === openSeq) onRelocated(loc); });
       rendition.on('displayError', err => { if (seq === openSeq) ui.msg.textContent = 'Could not display: ' + err; });
-      // Tap the left/right edge of the page to turn it (links still work).
-      rendition.on('click', e => {
-        if (seq !== openSeq || (e.target && e.target.closest && e.target.closest('a'))) return;
-        const w = ui.view.clientWidth || 1, x = e.clientX;
-        if (x < w * 0.25) prev(); else if (x > w * 0.75) next();
-      });
+      // The page itself is three zones and a swipe (ReaderTouch): the outer
+      // thirds turn it, the middle one hides the bars. They go over the book's
+      // frame rather than inside it, because a pointer in an iframe is not
+      // this document's to see.
+      ReaderTouch.attach(ui.view, { prev, next, menu: toggleChrome });
+      applyFont();
       await book.ready;
       if (seq !== openSeq) return;
       const target = passage ? await targetFor(from) : savedTarget();
@@ -471,6 +599,47 @@ if (!root.ReaderTheme) root.ReaderTheme = (() => {
         : "This book's pictures are recoloured with the dark page — tap to show them as printed";
       ui.pictures.hidden = !(sess && sess.actions && sess.actions.set_display);
     }
+  }
+
+  // --- the type size ----------------------------------------------------------
+  // A book is not a picture of a page: it reflows, so the reader sets the size
+  // of its type and the phone gets as many words as it wants on a line. A- and
+  // A+ in the top bar, remembered per browser like the page's theme (the PDF
+  // pane pinches instead — a page of a PDF IS a picture).
+  function fontPct() {
+    let n = NaN;
+    try { n = Number(localStorage.readerFontSize); } catch (e) { /* no storage */ }
+    return Number.isFinite(n) && n >= FONT_MIN && n <= FONT_MAX ? n : 100;
+  }
+  function setFontPct(n) {
+    n = Math.min(FONT_MAX, Math.max(FONT_MIN, n));
+    try { localStorage.readerFontSize = String(n); } catch (e) { /* no storage */ }
+    applyFont();
+  }
+  function applyFont() {
+    const pct = fontPct();
+    // epub.js sets it inside the book's frame, which reflows the section: the
+    // place the reader is at is the CFI it was already on, so nothing moves
+    // but the line breaks.
+    if (rendition) { try { rendition.themes.fontSize(pct + '%'); } catch (e) { /* not rendering yet */ } }
+    if (ui && ui.fontDown) {
+      ui.fontDown.disabled = pct <= FONT_MIN;
+      ui.fontUp.disabled = pct >= FONT_MAX;
+      ui.fontDown.title = 'Smaller type (' + pct + '%)';
+      ui.fontUp.title = 'Larger type (' + pct + '%)';
+    }
+  }
+
+  // The middle zone's job: a phone reads full-bleed, so the top bar and the
+  // bottom one go until it is tapped again. The pane has just grown or shrunk
+  // by the height of those bars and epub.js watches only the window, so the
+  // book is told to lay itself out again or it would keep the old page height.
+  // epub.js displays the place it was at back into the new one, so the reader
+  // keeps the paragraph they were reading — with more of the page around it.
+  function toggleChrome() {
+    if (!container) return;
+    container.classList.toggle('rd-chrome-hidden');
+    if (rendition) { try { rendition.resize(); } catch (e) { /* not rendering yet */ } }
   }
 
   // The choice is the BOOK's, kept by the server for every profile and

@@ -1,15 +1,18 @@
-// flickr — what a finger meant (docs/hypermedia.md §The client).
+// touch.js — the pure parts of touch gestures: no DOM, tested under node
 //
-// A tap is not a click. A click means one thing the moment it lands; a tap
-// means nothing until the double-tap window has passed without a second one,
-// and WHERE it landed decides what it meant — the left third of a picture is
-// "back", the right third "forward", the middle "play or pause". That rule is
-// the part with the bugs in it (an off-by-one third, a first tap that pauses
-// and then unpauses, a double counted across two different sides), not the
-// listener around it, so it lives here as pure functions over numbers and
-// web/touch_test.mjs drives it with no DOM at all.
+// A finger is not a mouse: it has no hover, it arrives with a rectangle of
+// skin rather than a point, and the gestures it makes — a tap in a zone, a
+// swipe across the page, two fingers pinching — are DECISIONS over a log of
+// pointer positions. The decisions are the part with the bugs in it, so they
+// live here as functions over numbers, the way focus.js holds the D-pad's
+// arithmetic, and the panes and the player keep only the listeners.
 (function (root) {
   'use strict';
+
+  // The shared surface. Each section below hangs its own functions on it, so
+  // two of them can live in this file without one export line to fight over.
+  const api = (typeof module === 'object' && module.exports)
+    ? module.exports : (root.Touch = root.Touch || {});
 
   // --- player -------------------------------------------------------------------
 
@@ -62,7 +65,60 @@
     return 'toggle';
   }
 
-  const api = { tapZone, tapPhase, tapIntent, DOUBLE_TAP_MS };
-  if (typeof module === 'object' && module.exports) module.exports = api;
-  else root.Touch = api;
+  api.tapZone = tapZone;
+  api.tapPhase = tapPhase;
+  api.tapIntent = tapIntent;
+  api.DOUBLE_TAP_MS = DOUBLE_TAP_MS;
+
+// --- readers --------------------------------------------------------------------
+// The reader's page is three invisible zones wide (left turns back, right
+// turns on, the middle shows and hides the chrome), a swipe across it turns
+// it too, and on a PDF two fingers scale the page.
+
+  const SWIPE_MIN = 60;    // how far across the page counts as a turn
+  const SWIPE_DRIFT = 40;  // ...and how far up or down still counts as across
+  const SWIPE_MS = 400;    // a slower drag is reading, or a scroll, not a turn
+  const ZOOM_MIN = 0.75, ZOOM_MAX = 3;
+
+  // Which third of the page a tap landed in. x is measured from the page's
+  // left edge; anything off either end belongs to the zone it went past.
+  function readerZone(x, width) {
+    if (!(width > 0)) return 'menu';
+    const f = x / width;
+    if (f < 1 / 3) return 'prev';
+    if (f > 2 / 3) return 'next';
+    return 'menu';
+  }
+
+  // The turn a pointer log asks for, or null for anything that is not a
+  // swipe: `points` is [{x, y, t}, ...] from the touch going down to it
+  // coming up, `now` is when it came up. A swipe is far enough across, not
+  // far up or down at any point along the way, and quick. A LEFT swipe turns
+  // the page on, the way a left swipe moves a photo out of the way.
+  function swipeOf(points, now) {
+    if (!points || points.length < 2) return null;
+    const a = points[0], b = points[points.length - 1];
+    if (!(now - a.t < SWIPE_MS)) return null;
+    let drift = 0;
+    for (const p of points) drift = Math.max(drift, Math.abs(p.y - a.y));
+    if (drift >= SWIPE_DRIFT) return null;
+    const dx = b.x - a.x;
+    if (!(Math.abs(dx) > SWIPE_MIN)) return null;
+    return dx < 0 ? 'next' : 'prev';
+  }
+
+  // The scale a pinch asks for: the scale the page was at when the two
+  // fingers went down, times how much further apart they are now, held
+  // between a page three quarters of the pane wide and three times it.
+  // A degenerate first distance (the two fingers landed on one spot) leaves
+  // the page where it was.
+  function pinchScale(d0, d1, base) {
+    const b = base > 0 ? base : 1;
+    const s = d0 > 0 && d1 > 0 ? b * d1 / d0 : b;
+    return s < ZOOM_MIN ? ZOOM_MIN : s > ZOOM_MAX ? ZOOM_MAX : s;
+  }
+
+  api.readerZone = readerZone;
+  api.swipeOf = swipeOf;
+  api.pinchScale = pinchScale;
 })(typeof window !== 'undefined' ? window : this);

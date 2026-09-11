@@ -145,6 +145,22 @@ async function playing(page, min = 1) {
     .catch(() => { throw new Error('the media element is not playing'); });
 }
 
+// A finger's tap on one of the reader's zones. The walk runs in a desktop
+// context, so the tap is the pointer pair the zones listen for, dispatched
+// with pointerType 'touch' — the path a phone takes, on the page as it is.
+async function tapZone(page, zone) {
+  const sel = `.rd-zone[data-zone=${zone}]`;
+  const box = await page.locator(sel).first().boundingBox()
+    .catch(() => null);
+  if (!box) throw new Error(`the reader has no ${zone} zone over its page`);
+  const finger = {
+    pointerId: 1, pointerType: 'touch', isPrimary: true, bubbles: true,
+    clientX: Math.round(box.x + box.width / 2), clientY: Math.round(box.y + box.height / 2),
+  };
+  await page.dispatchEvent(sel, 'pointerdown', finger);
+  await page.dispatchEvent(sel, 'pointerup', finger);
+}
+
 // A screenshot for the record, taken once the view transition has settled.
 async function snap(page, name) {
   await page.waitForTimeout(450);
@@ -356,6 +372,14 @@ async function walk(page, issuer) {
       .catch(() => { throw new Error('epub.js never rendered a page'); });
     await page.click('.rd-next');
     await page.waitForTimeout(500);
+    // ...and a finger turns it too: the right-hand third of the page is a zone,
+    // and a tap on it is the same turn, reported the same way — the readout is
+    // the pane's own answer to where the reader is.
+    const was = await page.textContent('.rd-readout');
+    await tapZone(page, 'next');
+    await page.waitForFunction(w => (document.querySelector('.rd-readout') || {}).textContent !== w,
+      was, { timeout: 8000 })
+      .catch(() => { throw new Error(`a tap on the next zone did not turn the page (still ${was})`); });
     await page.click('.rd-close');
     await page.waitForFunction(() => document.getElementById('stage').hidden);
   });
@@ -369,6 +393,12 @@ async function walk(page, issuer) {
       .catch(() => { throw new Error('pdf.js never drew a page'); });
     await page.click('.rd-next');
     await page.waitForTimeout(500);
+    // ...and a finger turns it too, on the page indicator the buttons move.
+    const was = Number(await page.inputValue('.rd-page-in'));
+    await tapZone(page, 'next');
+    await page.waitForFunction(n => Number(document.querySelector('.rd-page-in').value) === n + 1,
+      was, { timeout: 8000 })
+      .catch(() => { throw new Error(`a tap on the next zone did not turn page ${was}`); });
     await page.click('.rd-close');
     await page.waitForFunction(() => document.getElementById('stage').hidden);
   });

@@ -89,3 +89,79 @@ test('a tap on a dark picture asks for the controls, not for a pause', () => {
   assert.equal(tapIntent('single', 'middle', false), 'toggle');
   assert.equal(tapIntent('single', 'left', false), 'toggle');
 });
+
+// --- readers ------------------------------------------------------------------
+
+test('readers: a tap lands in one of three zones', async t => {
+  const { readerZone } = touch;
+
+  await t.test('the outer thirds turn the page, the middle one shows the chrome', () => {
+    assert.equal(readerZone(10, 390), 'prev');
+    assert.equal(readerZone(195, 390), 'menu');
+    assert.equal(readerZone(380, 390), 'next');
+  });
+
+  await t.test('a tap off either end belongs to the zone it went past', () => {
+    assert.equal(readerZone(-20, 390), 'prev');
+    assert.equal(readerZone(500, 390), 'next');
+  });
+
+  await t.test('a pane with no width yet asks for nothing but the chrome', () => {
+    assert.equal(readerZone(10, 0), 'menu');
+  });
+});
+
+test('readers: a swipe across the page turns it', async t => {
+  const { swipeOf } = touch;
+  // A log as the listener keeps one: the finger down, a point or two on the
+  // way, and `now` when it came up.
+  const log = (...xs) => xs.map(([x, y, t]) => ({ x, y, t }));
+
+  await t.test('left turns on, right turns back', () => {
+    assert.equal(swipeOf(log([300, 100, 0], [120, 104, 120]), 150), 'next');
+    assert.equal(swipeOf(log([120, 100, 0], [300, 96, 120]), 150), 'prev');
+  });
+
+  await t.test('a short swipe is a tap, not a turn', () => {
+    assert.equal(swipeOf(log([300, 100, 0], [250, 100, 80]), 100), null);
+    assert.equal(swipeOf(log([300, 100, 0], [240, 100, 80]), 100), null); // exactly 60px
+  });
+
+  await t.test('a swipe that wandered up or down is a scroll', () => {
+    assert.equal(swipeOf(log([300, 100, 0], [200, 160, 90]), 120), null);
+    // ...including one that came back: the drift is the whole way, not the ends
+    assert.equal(swipeOf(log([300, 100, 0], [250, 155, 60], [180, 102, 120]), 150), null);
+  });
+
+  await t.test('a slow drag is reading, not a turn', () => {
+    assert.equal(swipeOf(log([300, 100, 0], [100, 100, 600]), 620), null);
+  });
+
+  await t.test('a log with nothing in it asks for nothing', () => {
+    assert.equal(swipeOf([], 10), null);
+    assert.equal(swipeOf(log([300, 100, 0]), 10), null);
+  });
+});
+
+test('readers: a pinch scales the PDF between its bounds', async t => {
+  const { pinchScale } = touch;
+
+  await t.test('the fingers spreading scales up, closing scales down', () => {
+    assert.equal(pinchScale(100, 200, 1), 2);
+    assert.equal(pinchScale(200, 100, 2), 1);
+  });
+
+  await t.test('it carries on from the scale the page was at', () => {
+    assert.equal(pinchScale(100, 150, 1.2), 1.8);
+  });
+
+  await t.test('it is held between three quarters of the pane and three times it', () => {
+    assert.equal(pinchScale(100, 1000, 1), 3);
+    assert.equal(pinchScale(1000, 100, 1), 0.75);
+  });
+
+  await t.test('two fingers on one spot leave the page where it was', () => {
+    assert.equal(pinchScale(0, 120, 1.5), 1.5);
+    assert.equal(pinchScale(120, 0, 1.5), 1.5);
+  });
+});

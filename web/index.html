@@ -383,6 +383,24 @@
   .rd-end button { margin-top: 10px; margin-right: 8px; }
   .rd-keep { background: #2a4a8a; border-color: #3a5da8; }
   .rd-keep:hover { background: #33579e; }
+  /* --- the readers on touch (ReaderTouch in reader.js, the decisions in
+     touch.js) ---------------------------------------------------------------
+     Three invisible zones over the page: the outer thirds turn it, the middle
+     one shows and hides the chrome, so a phone reads a book full-bleed. They
+     cover the book's own frame, which is what makes a gesture visible to this
+     document at all; pan-y leaves a tall PDF page scrolling under them and
+     keeps a pinch's two fingers ours rather than the browser's. */
+  .rd-view { position: relative; }
+  .rd-zone { position: absolute; top: 0; height: 100%; width: 33.34%; z-index: 30;
+    background: transparent; touch-action: pan-y; }
+  .rd-zone[data-zone=prev] { left: 0; }
+  .rd-zone[data-zone=menu] { left: 33.33%; }
+  .rd-zone[data-zone=next] { right: 0; }
+  .rd-chrome-hidden .rd-bar, .rd-chrome-hidden .rd-nav { display: none; }
+  /* a pinched-up PDF page is bigger than the pane: the finger moves it */
+  .rd-zoomed .rd-zone { touch-action: pan-x pan-y; }
+  /* the book's type size: a pair, narrow, beside the page's theme */
+  .rd-font-down, .rd-font-up { font-size: 13px; font-weight: 600; padding: 6px 10px; }
   /* the picture is a control: a click pauses it, a double tap seeks (player.js).
      touch-action: manipulation is what makes the second tap a seek rather than
      a zoom — a phone's double tap is its own gesture until a page says so. */
@@ -1044,8 +1062,9 @@
 <!-- the D-pad's arithmetic: which card an arrow points at, over bounding
      rects alone, so web/focus_test.mjs can drive it with no DOM at all -->
 <script src="focus.js"></script>
-<!-- the thumb's arithmetic: which third of a picture a tap landed in and
-     whether it was one of a pair, tested by web/touch_test.mjs -->
+<!-- the thumb's and the readers' arithmetic: which third of a picture or a
+     page a tap landed in, whether it was one of a pair, what a swipe asked
+     for, what a pinch scaled to — numbers only, tested by web/touch_test.mjs -->
 <script src="touch.js"></script>
 <!-- the cast bridge: the session document read into a load, shared with the
      custom receiver (web/receiver.html) and tested by web/cast_test.mjs -->
