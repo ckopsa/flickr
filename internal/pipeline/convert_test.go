@@ -161,9 +161,14 @@ func TestConvertPlanTelecine(t *testing.T) {
 	if p.HWDecode {
 		t.Error("a software filter chain must not start from frames on the card")
 	}
-	s := strings.Join(ConvertArgs(p, "http://x/in.mkv", "/w/out.mp4", "/dev/dri/renderD128", true), " ")
+	s := strings.Join(ConvertArgs(p, "http://x/in.mkv", "/w/out.mp4", "/dev/dri/renderD128", CardChain), " ")
 	if !strings.Contains(s, "-vf fps=23.976000,format=nv12,hwupload") {
 		t.Errorf("telecine chain missing: %s", s)
+	}
+	// The last resort keeps the re-timing and drops the card entirely.
+	s = strings.Join(ConvertArgs(p, "http://x/in.mkv", "/w/out.mp4", "/dev/dri/renderD128", SoftwareChain), " ")
+	if !strings.Contains(s, "-vf fps=23.976000,format=yuv420p -c:v libx264") || strings.Contains(s, "vaapi") {
+		t.Errorf("software chain: %s", s)
 	}
 	// A copied H.264 never re-times: the pulldown flags pass through.
 	mi = video("mkv", "h264", "ac3", 2)
@@ -175,7 +180,7 @@ func TestConvertPlanTelecine(t *testing.T) {
 
 func TestConvertArgsEncodeOnTheCard(t *testing.T) {
 	p := ConvertPlan("Shows/S/Season 1/S01E01.mkv", video("mkv", "hevc", "eac3", 6))
-	s := strings.Join(ConvertArgs(p, "http://x/in.mkv", "/w/out.mp4", "/dev/dri/renderD128", true), " ")
+	s := strings.Join(ConvertArgs(p, "http://x/in.mkv", "/w/out.mp4", "/dev/dri/renderD128", CardChain), " ")
 	for _, want := range []string{
 		"-vaapi_device /dev/dri/renderD128",
 		"-hwaccel vaapi -hwaccel_output_format vaapi -i http://x/in.mkv", // decoded on the card, before the input
@@ -195,12 +200,24 @@ func TestConvertArgsEncodeOnTheCard(t *testing.T) {
 	}
 
 	// The fallback: the same plan decoded in software and uploaded.
-	s = strings.Join(ConvertArgs(p, "http://x/in.mkv", "/w/out.mp4", "/dev/dri/renderD128", false), " ")
+	s = strings.Join(ConvertArgs(p, "http://x/in.mkv", "/w/out.mp4", "/dev/dri/renderD128", UploadChain), " ")
 	if strings.Contains(s, "-hwaccel") || !strings.Contains(s, "-vf format=nv12,hwupload") {
 		t.Errorf("software fallback must upload plain frames: %s", s)
 	}
 	if !strings.Contains(s, "-vaapi_device /dev/dri/renderD128") {
 		t.Errorf("the encoder still needs the device: %s", s)
+	}
+	// The last resort: no card, the same streams and layout.
+	s = strings.Join(ConvertArgs(p, "http://x/in.mkv", "/w/out.mp4", "/dev/dri/renderD128", SoftwareChain), " ")
+	for _, want := range []string{"-vf format=yuv420p -c:v libx264 -preset medium -profile:v high -level 41 -crf 20", "-map 0:v:0 -map 0:a:0 -map 0:a:0", "-c:a:0 aac -ac:a:0 2", "-movflags +faststart -f mp4 /w/out.mp4"} {
+		if !strings.Contains(s, want) {
+			t.Errorf("missing %q in: %s", want, s)
+		}
+	}
+	for _, none := range []string{"vaapi", "hwupload", "-qp"} {
+		if strings.Contains(s, none) {
+			t.Errorf("the software chain must not mention the card (%s): %s", none, s)
+		}
 	}
 }
 
@@ -208,7 +225,7 @@ func TestConvertArgsRemuxTouchesNoVideo(t *testing.T) {
 	mi := video("mkv", "h264", "aac", 2)
 	mi.Subtitles = []model.SubtitleTrack{{Ordinal: 0, Codec: "subrip", Language: "en"}}
 	p := ConvertPlan("Movies/A/A.mkv", mi)
-	s := strings.Join(ConvertArgs(p, "http://x/in.mkv", "/w/out.mp4", "/dev/dri/renderD128", true), " ")
+	s := strings.Join(ConvertArgs(p, "http://x/in.mkv", "/w/out.mp4", "/dev/dri/renderD128", CardChain), " ")
 	for _, want := range []string{"-c:v copy", "-c:a:0 copy", "-map 0:s:0", "-c:s mov_text", "-f mp4"} {
 		if !strings.Contains(s, want) {
 			t.Errorf("missing %q in: %s", want, s)
@@ -226,6 +243,12 @@ func TestVerify(t *testing.T) {
 	good := `{"streams":[{"codec_type":"video","codec_name":"h264"},{"codec_type":"audio","codec_name":"aac","channels":2},{"codec_type":"audio","codec_name":"eac3","channels":6}],"format":{"duration":"5399.500000"}}`
 	if err := Verify([]byte(good), p, 5400); err != nil {
 		t.Errorf("a good file was refused: %v", err)
+	}
+	// ffprobe's stderr arrives in front of the JSON: a warning that is not
+	// an error, on the Pemberley episodes (2026-09-11).
+	noisy := "[mov,mp4,m4a,3gp,3g2,mj2 @ 0x7fb199ab3000] Referenced QT chapter track not found\n" + good
+	if err := Verify([]byte(noisy), p, 5400); err != nil {
+		t.Errorf("a warning before the JSON was taken for the JSON: %v", err)
 	}
 	cases := []struct{ name, probe, want string }{
 		{"video not h264", strings.Replace(good, `"codec_name":"h264"`, `"codec_name":"hevc"`, 1), "want h264"},

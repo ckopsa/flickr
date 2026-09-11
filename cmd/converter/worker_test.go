@@ -121,6 +121,12 @@ func withBitmap(it item) item {
 	return it
 }
 
+// telecined makes an item the DVD rip the software chain exists for.
+func telecined(it item) item {
+	it.MediaInfo.Telecine, it.MediaInfo.FPS = true, 29.97
+	return it
+}
+
 func video(id int64, key, container, vc, ac string, ch int) item {
 	return item{
 		ID: id, ObjectKey: key, ETag: fmt.Sprintf("etag-%d", id), Size: id * 1_000_000_000,
@@ -162,6 +168,13 @@ func (s *seam) run(_ context.Context, name string, args []string) ([]byte, error
 			s.refusals++
 			s.mu.Unlock()
 			return []byte("[hevc @ 0x1] Failed to create a VAAPI decode context"), errors.New("exit status 1")
+		}
+		if strings.Contains(line, "vaapi") && strings.Contains(line, "/8.mkv") {
+			// a DVD rip whose frames change shape: every card chain dies
+			s.mu.Lock()
+			s.refusals++
+			s.mu.Unlock()
+			return []byte("Error reinitializing filters!\nTask finished with error code: -38 (Function not implemented)"), errors.New("exit status 218")
 		}
 		s.mu.Lock()
 		if s.made == nil {
@@ -278,18 +291,20 @@ func pass(t *testing.T, f *fakeFlickr, b *fakeBucket, s *seam, dryRun bool) stri
 
 func library() ([]item, *fakeBucket) {
 	items := []item{
-		video(1, "Movies/One (2001)/1.mp4", "mp4", "h264", "aac", 2),                // already fine
-		video(2, "Movies/Two (2002)/2.mkv", "mkv", "h264", "aac", 2),                // a remux
-		video(3, "Shows/Three/Season 1/3.mkv", "mkv", "hevc", "eac3", 6),            // an encode, card refuses the decode once
-		video(4, "Movies/Four (2004)/4.mkv", "mkv", "hevc", "aac", 2),               // replaced since the scan
-		video(5, "Movies/Five (2005)/5.mkv", "mkv", "av1", "opus", 6),               // converted on an earlier pass: gone
-		withBitmap(video(6, "Movies/Six (2006)/6.mkv", "mkv", "h264", "aac", 2)),    // OCR reads nothing: left alone
-		withBitmap(video(7, "Shows/Seven/Season 1/7.mkv", "mkv", "h264", "ac3", 6)), // OCR'd, then remuxed
+		video(1, "Movies/One (2001)/1.mp4", "mp4", "h264", "aac", 2),                    // already fine
+		video(2, "Movies/Two (2002)/2.mkv", "mkv", "h264", "aac", 2),                    // a remux
+		video(3, "Shows/Three/Season 1/3.mkv", "mkv", "hevc", "eac3", 6),                // an encode, card refuses the decode once
+		video(4, "Movies/Four (2004)/4.mkv", "mkv", "hevc", "aac", 2),                   // replaced since the scan
+		video(5, "Movies/Five (2005)/5.mkv", "mkv", "av1", "opus", 6),                   // converted on an earlier pass: gone
+		withBitmap(video(6, "Movies/Six (2006)/6.mkv", "mkv", "h264", "aac", 2)),        // OCR reads nothing: left alone
+		withBitmap(video(7, "Shows/Seven/Season 1/7.mkv", "mkv", "h264", "ac3", 6)),     // OCR'd, then remuxed
+		telecined(video(8, "Movies/Eight (2008)/8.mkv", "mkv", "mpeg2video", "ac3", 2)), // every card chain dies: libx264
 	}
 	b := &fakeBucket{etags: map[string]string{
 		"Movies/One (2001)/1.mp4": "etag-1", "Movies/Two (2002)/2.mkv": "etag-2",
 		"Shows/Three/Season 1/3.mkv": "etag-3", "Movies/Four (2004)/4.mkv": "someone-replaced-it",
 		"Movies/Six (2006)/6.mkv": "etag-6", "Shows/Seven/Season 1/7.mkv": "etag-7",
+		"Movies/Eight (2008)/8.mkv": "etag-8",
 	}, puts: map[string]int64{}}
 	return items, b
 }
@@ -305,13 +320,17 @@ func TestRunConvertsWhatNeedsIt(t *testing.T) {
 		put = append(put, k)
 	}
 	sort.Strings(put)
-	want := []string{"Movies/Two (2002)/2.mp4", "Shows/Seven/Season 1/7.eng.2.srt", "Shows/Seven/Season 1/7.eng.srt", "Shows/Seven/Season 1/7.mp4", "Shows/Three/Season 1/3.mp4"}
+	want := []string{"Movies/Eight (2008)/8.mp4", "Movies/Two (2002)/2.mp4", "Shows/Seven/Season 1/7.eng.2.srt", "Shows/Seven/Season 1/7.eng.srt", "Shows/Seven/Season 1/7.mp4", "Shows/Three/Season 1/3.mp4"}
 	if strings.Join(put, ",") != strings.Join(want, ",") {
 		t.Errorf("uploaded %v, want %v\n%s", put, want, logs)
 	}
 	sort.Strings(b.removed)
-	if strings.Join(b.removed, ",") != "Movies/Two (2002)/2.mkv,Shows/Seven/Season 1/7.mkv,Shows/Three/Season 1/3.mkv" {
-		t.Errorf("removed %v, want the three originals", b.removed)
+	if strings.Join(b.removed, ",") != "Movies/Eight (2008)/8.mkv,Movies/Two (2002)/2.mkv,Shows/Seven/Season 1/7.mkv,Shows/Three/Season 1/3.mkv" {
+		t.Errorf("removed %v, want the four originals", b.removed)
+	}
+	// The file gone from the bucket since the scan is said, once, in words.
+	if !strings.Contains(logs, "item 5 (Movies/Five (2005)/5.mkv): already gone from the bucket") {
+		t.Errorf("the gone file was not explained:\n%s", logs)
 	}
 	// The file whose subtitles would not read is exactly as it was, and
 	// says why; the one that read has its two sidecars up before its mp4.
@@ -330,12 +349,10 @@ func TestRunConvertsWhatNeedsIt(t *testing.T) {
 	if !strings.Contains(logs, "item 4 (Movies/Four (2004)/4.mkv): changed since the scan") {
 		t.Errorf("the replaced file was not explained:\n%s", logs)
 	}
-	if strings.Contains(logs, "item 5") && !strings.Contains(logs, "plan encode item 5") {
-		t.Errorf("a file gone from the bucket is not news:\n%s", logs)
-	}
-	// The remux went first (cheap), then the encode; the encode fell back
-	// to software when the card refused the decode, and still landed.
-	if s.refusals != 1 || !strings.Contains(logs, "decoding in software") {
+	// The remuxes went first (cheap), then the encodes: item 3 fell back to
+	// software decode when the card refused, item 8 fell through both card
+	// chains to libx264, and both landed.
+	if s.refusals != 2 || !strings.Contains(logs, "trying decoding in software") || !strings.Contains(logs, "trying libx264, no card") {
 		t.Errorf("refusals = %d; logs:\n%s", s.refusals, logs)
 	}
 	var order []string
@@ -344,12 +361,18 @@ func TestRunConvertsWhatNeedsIt(t *testing.T) {
 			order = append(order, c)
 		}
 	}
-	// Remuxes by size (2, then 6 whose subtitles fail before its ffmpeg, then 7), then the encode: card, then software.
-	if len(order) != 4 || !strings.Contains(order[0], "/2.mkv") || !strings.Contains(order[1], "/7.mkv") || !strings.Contains(order[2], "/3.mkv") || !strings.Contains(order[3], "/3.mkv") {
+	// Remuxes by size (2, then 6 whose subtitles fail before its ffmpeg,
+	// then 7), then the encodes by size: 3 on the card then software
+	// decode, 8 through the upload chain (no card decode for mpeg2 with a
+	// detelecine) and then libx264.
+	if len(order) != 6 || !strings.Contains(order[0], "/2.mkv") || !strings.Contains(order[1], "/7.mkv") || !strings.Contains(order[2], "/3.mkv") || !strings.Contains(order[3], "/3.mkv") || !strings.Contains(order[4], "/8.mkv") || !strings.Contains(order[5], "/8.mkv") {
 		t.Errorf("ffmpeg ran %d times: %v", len(order), order)
 	}
 	if !strings.Contains(order[2], "-hwaccel vaapi") || strings.Contains(order[3], "-hwaccel") || !strings.Contains(order[3], "hwupload") {
-		t.Errorf("the second try must decode in software: %v", order[2:])
+		t.Errorf("the second try must decode in software: %v", order[2:4])
+	}
+	if !strings.Contains(order[4], "hwupload") || !strings.Contains(order[5], "libx264") || strings.Contains(order[5], "vaapi") {
+		t.Errorf("the DVD rip must end on libx264: %v", order[4:])
 	}
 	// A scan, with the bearer, as soon as the first file lands (the clock
 	// starts long past the last one), then every quarter hour of the fake
@@ -364,7 +387,7 @@ func TestRunConvertsWhatNeedsIt(t *testing.T) {
 	}
 	for _, want := range []string{
 		"h264_vaapi on /dev/dri/renderD128 is live",
-		"7 video files: 1 already play everywhere, 3 to remux (15.0 GB), 3 to re-encode (12.0 GB, 4.5 hours of film)",
+		"8 video files: 1 already play everywhere, 3 to remux (15.0 GB), 4 to re-encode (20.0 GB, 6.0 hours of film)",
 		"plan remux item 2",
 		"plan encode item 3",
 		`remux item 2 "2.mkv": 2.mkv → 2.mp4`,
@@ -393,7 +416,7 @@ func TestDryRunWritesNothing(t *testing.T) {
 		}
 	}
 	for _, want := range []string{
-		"7 video files: 1 already play everywhere, 3 to remux",
+		"8 video files: 1 already play everywhere, 3 to remux",
 		"plan remux item 7 \"Shows/Seven/Season 1/7.mkv\": mkv → mp4, aac stereo first, 2 bitmap subtitle track(s) OCR'd to sidecars",
 		"plan remux item 2 \"Movies/Two (2002)/2.mkv\": mkv → mp4",
 		"plan encode item 3 \"Shows/Three/Season 1/3.mkv\": hevc → h264, aac stereo first",
