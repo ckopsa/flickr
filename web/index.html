@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>flickr</title>
 <meta name="theme-color" content="#14151a">
 <link rel="manifest" href="/manifest.json">
@@ -56,7 +56,10 @@
      Everything in it is an engineering control, which is why it is not on
      every screen any more. */
   #settings { position: fixed; inset: 0; background: rgba(10,11,14,0.92); z-index: 100; display: flex; align-items: center; justify-content: center; }
-  #settings-box { background: #1b1d24; border: 1px solid #2a2c33; border-radius: 12px; padding: 24px 28px; max-width: 460px; width: 92%; }
+  /* a short phone in landscape is shorter than the panel: the box scrolls
+     inside the glass rather than clipping its close button off the screen */
+  #settings-box { background: #1b1d24; border: 1px solid #2a2c33; border-radius: 12px; padding: 24px 28px; max-width: 460px; width: 92%;
+    max-height: calc(100dvh - 24px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px)); overflow-y: auto; box-sizing: border-box; }
   #settings-box h2 { margin: 0 0 18px; font-size: 18px; font-weight: 600; }
   .set-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 14px; }
   .set-row > label { font-size: 12px; color: var(--muted); }
@@ -383,8 +386,29 @@
   .rd-end button { margin-top: 10px; margin-right: 8px; }
   .rd-keep { background: #2a4a8a; border-color: #3a5da8; }
   .rd-keep:hover { background: #33579e; }
-  /* the picture is a control: a click pauses it, a double tap seeks (player.js) */
-  video { width: 100%; max-height: 58vh; background: #000; border-radius: 8px; cursor: pointer; }
+  /* --- the readers on touch (ReaderTouch in reader.js, the decisions in
+     touch.js) ---------------------------------------------------------------
+     Three invisible zones over the page: the outer thirds turn it, the middle
+     one shows and hides the chrome, so a phone reads a book full-bleed. They
+     cover the book's own frame, which is what makes a gesture visible to this
+     document at all; pan-y leaves a tall PDF page scrolling under them and
+     keeps a pinch's two fingers ours rather than the browser's. */
+  .rd-view { position: relative; }
+  .rd-zone { position: absolute; top: 0; height: 100%; width: 33.34%; z-index: 30;
+    background: transparent; touch-action: pan-y; }
+  .rd-zone[data-zone=prev] { left: 0; }
+  .rd-zone[data-zone=menu] { left: 33.33%; }
+  .rd-zone[data-zone=next] { right: 0; }
+  .rd-chrome-hidden .rd-bar, .rd-chrome-hidden .rd-nav { display: none; }
+  /* a pinched-up PDF page is bigger than the pane: the finger moves it */
+  .rd-zoomed .rd-zone { touch-action: pan-x pan-y; }
+  /* the book's type size: a pair, narrow, beside the page's theme */
+  .rd-font-down, .rd-font-up { font-size: 13px; font-weight: 600; padding: 6px 10px; }
+  /* the picture is a control: a click pauses it, a double tap seeks (player.js).
+     touch-action: manipulation is what makes the second tap a seek rather than
+     a zoom — a phone's double tap is its own gesture until a page says so. */
+  video { width: 100%; max-height: 58vh; background: #000; border-radius: 8px; cursor: pointer;
+    touch-action: manipulation; }
   /* casting: the page IS the remote (#cast-remote, player.js). A dimmed
      picture of what the television is showing is neither watchable nor a
      control, so the video goes and the artwork stands in its place; the
@@ -404,7 +428,7 @@
   /* nothing to take fullscreen when the picture is on the other device */
   body.casting #btn-fs { display: none; }
   /* the picture is on the television: there is nothing here to put in a small window */
-  body.casting #btn-pip { display: none !important; }
+  body.casting #pip { display: none !important; }
   #scrub { position: relative; height: 22px; margin: 10px 0 2px; cursor: pointer; }
   #scrub .rail { position: absolute; left: 0; right: 0; top: 8px; height: 6px; background: #2a2c33; border-radius: 3px; }
   #scrub .avail { position: absolute; left: 0; top: 8px; height: 6px; background: #3d4250; border-radius: 3px; width: 0; }
@@ -529,6 +553,35 @@
   #device.idle #sleep-menu {
     opacity: 0; pointer-events: none; }
   #device.idle, #device.idle video { cursor: none; }
+  /* --- the pocket theatre ---------------------------------------------------
+
+     A phone held sideways is a cinema the size of a hand. player.js watches
+     exactly one media query for it — landscape, under 500px tall, driven by a
+     finger — and puts .pocket on the body while a picture is up, which is
+     theatre mode's stronger form: the picture takes the WHOLE viewport, the
+     header and everything the document drew around it go, and the transport
+     overlays the bottom and fades with the room as theatre's does. Rotating
+     back takes the class off and the page comes back exactly as it was.
+
+     The title bar stays, because it is the way out, and it fades with the
+     transport. The volume slider goes: the phone has keys for that. */
+  body.pocket { overflow: hidden; }
+  body.pocket header, body.pocket #player-chrome > *:not(#device) { display: none; }
+  body.pocket #stage { padding-inline: 0; }
+  body.pocket #device { position: fixed; inset: 0; z-index: 70; background: #000; }
+  body.pocket video { width: 100%; height: 100%; max-height: none; border-radius: 0; object-fit: contain; }
+  body.pocket #transport { position: absolute; left: 0; right: 0; bottom: 0; z-index: 58;
+    padding: 0 16px 6px; background: linear-gradient(rgba(0,0,0,0), rgba(0,0,0,0.82) 55%); }
+  /* one row of controls, scrolled sideways if it is longer than the hand:
+     wrapping would eat the picture, and a button squeezed onto two lines is
+     taller than the whole transport can afford */
+  body.pocket #controls { gap: 6px; flex-wrap: nowrap; overflow-x: auto; margin-top: 4px; }
+  body.pocket #controls > * { flex: 0 0 auto; white-space: nowrap; }
+  body.pocket #vol { display: none; }
+  body.pocket #player-title { padding-bottom: 20px; }
+  /* the skip sits above the transport again: the picture is the whole screen,
+     so there is no "under the picture" for the controls to be */
+  body.pocket #skips { right: 16px; top: auto; bottom: 84px; }
   /* the '?' card: the keys, listed over the picture they drive */
   #keys-help { position: absolute; right: 16px; bottom: 84px; z-index: 59; max-width: min(320px, 80vw);
     background: rgba(20,21,26,0.94); border: 1px solid #3a3d47; border-radius: 10px;
@@ -643,12 +696,13 @@
     background: #2e2616; color: var(--warn); border: 1px solid #a37a30; border-radius: 8px;
     padding: 10px 16px; font-size: 13px; max-width: min(680px, 92vw); box-shadow: 0 8px 30px rgba(0,0,0,0.6); }
 
-  /* --- the page on a wide screen, on a phone, and under a thumb -------------
+  /* --- the page on a wide screen, on a phone, on a tablet, under a thumb ----
 
-     Three rules in the order a window meets them. The measure first: past
+     Four rules in the order a window meets them. The measure first: past
      1400px the header's rule still spans the glass but its content stops
      widening. Then the phone, where the two-column shapes (poster beside
      text, contents beside page) have no room to be two columns. Then the
+     tablet, which has the room for them but is held in two hands. Then the
      pointer, which is not a question of width at all: a finger needs 44px
      whatever the screen. */
 
@@ -697,12 +751,83 @@
     #skips { right: 12px; bottom: auto; top: 56px; }
   }
 
+  /* --- slice: the tablet, between the phone and the desktop -----------------
+
+     A 10in tablet used to be a desktop with nothing of its own: the grid came
+     out right by luck (the 150px measure above gives 4 tiles at 768px and 6 at
+     1024px) but the poster was desktop-sized and the shelves were scrolled
+     with a wheel nobody has. This band is the middle size, held in two
+     hands. */
+  @media (min-width: 641px) and (max-width: 1024px) {
+    /* still a column beside the words, one size down from the desktop's */
+    #detail-poster { width: 200px; }
+    /* a shelf is moved with a thumb here: it carries on after the finger
+       lifts, and comes to rest on a card's edge rather than halfway over one */
+    .band-row, #cw-row { -webkit-overflow-scrolling: touch; scroll-snap-type: x proximity; }
+    .band-row > .card, #cw-row > .cw-card { scroll-snap-align: start; }
+  }
+
   @media (pointer: coarse) {
     button, select, input { min-height: 44px; }
     .item { min-height: 44px; padding-top: 13px; padding-bottom: 13px; }
     .season > summary { min-height: 44px; padding-top: 13px; padding-bottom: 13px; }
     google-cast-launcher { width: 44px; height: 44px; }
   }
+  /* the tablet again (the same slice), after the block above because it sets
+     the same property: an episode is picked off the list with a finger there,
+     so the rows are taller than the 44px any control has to clear. */
+  @media (min-width: 641px) and (max-width: 1024px) and (pointer: coarse) {
+    .item { min-height: 56px; }
+  }
+
+  /* --- slice: safe areas ----------------------------------------------------
+
+     viewport-fit=cover above lets the page under the notch and the home
+     indicator, so whatever reaches an edge pads itself back out of them.
+     env() is 0px on a screen with no insets, which is every desktop and the
+     smoke, so none of this moves anything there.
+
+     The PAGE is inset once, through <body>: the header, the shelves and both
+     stages ride in with it, in either orientation. The things positioned
+     against the glass instead — the mini bar, the settings drawer, the gate,
+     and the device once it is fullscreen — are outside that padding and each
+     carries its own. */
+  body { padding-top: env(safe-area-inset-top, 0px);
+    padding-left: env(safe-area-inset-left, 0px); padding-right: env(safe-area-inset-right, 0px); }
+  main { padding-bottom: env(safe-area-inset-bottom, 0px); }
+  /* the bar stands ON the home indicator, so the page ends above both. There
+     is no body class to ask: the kernel only un-hides the bar. */
+  body:has(#mini-player:not([hidden])) main {
+    padding-bottom: calc(76px + env(safe-area-inset-bottom, 0px)); }
+  #mini-player { padding: 0 env(safe-area-inset-right, 0px)
+    env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px); }
+  #gate, #settings { padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px)
+    env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px); }
+  /* fullscreen is the whole glass and leaves the body's inset behind, so the
+     two bars over the picture add the insets to the padding they already have */
+  #device:fullscreen #player-title {
+    padding-top: calc(10px + env(safe-area-inset-top, 0px));
+    padding-left: calc(24px + env(safe-area-inset-left, 0px));
+    padding-right: calc(24px + env(safe-area-inset-right, 0px)); }
+  #device:fullscreen #transport {
+    padding-bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+    padding-left: calc(24px + env(safe-area-inset-left, 0px));
+    padding-right: calc(24px + env(safe-area-inset-right, 0px)); }
+
+  /* --- installed: the page as an app ----------------------------------------
+
+     On the home screen there is no browser chrome, so there is no Back button
+     either: the page's own "← Back" is the whole way out of an item or a
+     sitting, and at 13px under a thumb it read as a caption. Here it reads as
+     a control. The Android gesture leaves them too — every navigation is a
+     hash and a hash pushes history, which web/kernel_test.mjs holds — but
+     nobody should have to know that to get back. */
+  @media (display-mode: standalone) and (pointer: coarse) {
+    .back { font-size: 15px; padding: 8px 16px; background: #2a2d36; border-color: #454954; }
+    #player-title .back { font-size: 14px; }
+  }
+  /* where there is no button to offer, the share menu said in words */
+  .install-hint { font-size: 12px; color: var(--muted); }
 
   /* --- ten foot: the same page, read from a sofa ----------------------------
 
@@ -878,6 +1003,12 @@
          them and kernel.js fills the box. A server with no auth in front of
          it says nothing here, because there is no account. -->
     <div class="set-row" id="settings-account" hidden></div>
+    <!-- the page as an app: while the browser is holding out an install prompt
+         this row is the button that takes it, and on an iPhone — which fires no
+         such event — the one line saying where Add to Home Screen lives.
+         R.install draws it and kernel.js fills the box; already on the home
+         screen, or never offered, and the row is not there. -->
+    <div class="set-row" id="settings-install-row" hidden></div>
     <div class="set-row end">
       <button id="settings-close">Close</button>
     </div>
@@ -934,6 +1065,10 @@
 <!-- the D-pad's arithmetic: which card an arrow points at, over bounding
      rects alone, so web/focus_test.mjs can drive it with no DOM at all -->
 <script src="focus.js"></script>
+<!-- the thumb's and the readers' arithmetic: which third of a picture or a
+     page a tap landed in, whether it was one of a pair, what a swipe asked
+     for, what a pinch scaled to — numbers only, tested by web/touch_test.mjs -->
+<script src="touch.js"></script>
 <!-- the cast bridge: the session document read into a load, shared with the
      custom receiver (web/receiver.html) and tested by web/cast_test.mjs -->
 <script src="cast.js"></script>

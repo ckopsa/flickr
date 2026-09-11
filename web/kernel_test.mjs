@@ -93,6 +93,45 @@ test('the subtitle look has a control, a rule to write and a device to place it'
     'the device is never told where the cues sit');
 });
 
+// --- background audio ---------------------------------------------------------
+//
+// A phone with its screen locked is still playing, and the way that stops being
+// true is a listener: pause on visibilitychange, tear the element down on
+// pagehide, drop the buffer on blur. None of them is here, and this is the test
+// that keeps it that way. `beforeunload` is allowed and wanted — that is the
+// page actually going away, which is when the sitting should end.
+test('nothing in the kernel stops the sound when the page goes to the background', () => {
+  const src = code(read('kernel.js'));
+  for (const ev of ['visibilitychange', 'pagehide', 'blur']) {
+    assert.ok(!src.includes(ev),
+      `kernel.js listens for ${ev}: a locked phone would stop playing mid-chapter`);
+  }
+  assert.match(src, /'beforeunload'/, 'nothing ends the sitting when the page goes away');
+  // A write that has to outlive the page says so, and api() hands opts straight
+  // to fetch rather than picking the fields it passes on.
+  assert.match(src, /opts\.quiet \|\| opts\.keepalive/,
+    'a keepalive beacon would be taken for a refusal and open the sign-in door');
+  assert.match(src, /fetch\(href, opts\)/, 'api() does not pass keepalive through to fetch');
+});
+
+// --- installing ---------------------------------------------------------------
+//
+// The panel's install row: the renderer is pure and tested over its four states
+// in web/render_test.mjs, so what is checked here is that the kernel holds the
+// halves the renderer cannot — the event, which can only be answered while it
+// is held, and the two questions that decide which of the four states it is.
+test('the kernel keeps the browser\'s install offer and draws the row from it', () => {
+  const src = code(read('kernel.js'));
+  assert.match(src, /'beforeinstallprompt'/, 'the offer is never caught');
+  assert.match(src, /'appinstalled'/, 'the button outlives the install');
+  assert.match(src, /\(display-mode: standalone\)/, 'an installed page is still offered an install');
+  assert.match(src, /navigator\.standalone/, 'iOS says it is installed the other way');
+  assert.match(src, /R\.install\(/, 'the row is drawn somewhere other than the renderer');
+  // The page carries the box the kernel fills, and it starts out empty.
+  assert.match(read('index.html'), /id="settings-install-row" hidden/,
+    'the settings panel has no row for the install');
+});
+
 // --- the documents the kernel follows ----------------------------------------
 
 test('the root names everything the client needs to reach', () => {
@@ -326,4 +365,55 @@ test('a 401 with no remedy is a refusal like any other', async () => {
   const e = await K.api('/api/').then(() => null, x => x);
   assert.equal(e.status, 401);
   assert.deepEqual(went, []);
+});
+
+// --- the back gesture ---------------------------------------------------------
+//
+// Installed on a home screen there is no browser chrome, so the Android back
+// gesture is the only back there is: it has to leave an item for the page it was
+// opened from rather than closing the app. Nothing handles it, and nothing
+// should — every navigation here is a hash, and setting a hash PUSHES an entry.
+// So what is held is that the kernel still navigates that way. A location with a
+// history stack behind it is enough to see it: `navigate` grows the stack, and
+// `replaceHash` — a hash rewritten in place — does not.
+function historyStack(start) {
+  const stack = [start];
+  let at = 0;
+  const location = {
+    pathname: '/', search: '',
+    get hash() { return stack[at]; },
+    set hash(v) {
+      if (v === stack[at]) return;
+      stack.length = at + 1;
+      stack.push(v);
+      at = stack.length - 1;
+    },
+    replace(v) { stack[at] = v; },
+    assign() {},
+  };
+  return {
+    location,
+    history: { back() { if (at > 0) at--; }, replaceState(_s, _t, v) { stack[at] = v; } },
+    entries: () => stack.slice(0, at + 1),
+  };
+}
+
+test('navigating pushes history, so the back gesture leaves an item for the library', () => {
+  const h = historyStack('#/');
+  const K = loadKernel({ location: h.location, history: h.history });
+
+  K.navigate('#/item/8');   // as a poster's tap sends it
+  assert.equal(h.location.hash, '#/item/8');
+  assert.deepEqual(h.entries(), ['#/', '#/item/8'],
+    'the item got no entry of its own: back would close the app');
+
+  h.history.back();
+  assert.equal(h.location.hash, '#/', 'back from an item does not land on the library');
+
+  // A hash rewritten in PLACE — the passage dropped off the item that is
+  // playing, the reader keeping its book — is not somewhere the gesture should
+  // have to stop on the way home.
+  h.location.hash = '#/item/8?t=90';
+  K.replaceHash('#/item/8');
+  assert.deepEqual(h.entries(), ['#/', '#/item/8'], 'replacing a hash grew the history');
 });

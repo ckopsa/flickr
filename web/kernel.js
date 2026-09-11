@@ -836,11 +836,66 @@
     box.hidden = !box.innerHTML;
   }
 
+  // --- the page as an app ------------------------------------------------------
+  //
+  // Two things a phone expects of an app: a way onto the home screen, and a
+  // sitting that survives the screen locking.
+  //
+  // The first is the browser's own offer, and it arrives as an event that can
+  // only be answered while it is held — so it is kept here, the default banner
+  // is declined (the gear is where this lives), and the row in the panel is
+  // drawn from three facts: whether the event is held, whether this page IS
+  // already the installed one, and whether this is an iPhone, which fires no
+  // such event and has a share menu instead. Nothing to offer is the common
+  // case, and then the row is not there at all.
+  //
+  // The second is an audit rather than code: NOTHING in this file listens for
+  // the page going to the background — no visibilitychange, no pagehide, no
+  // blur — so a locked phone keeps playing, and Media Session carries the
+  // lock-screen controls. The one listener near them is `beforeunload`, which
+  // is the page actually going away and not the same thing. A write that has to
+  // survive that — a last position from a phone being locked — says so by
+  // marking itself `keepalive`: api() hands opts straight to fetch, and signIn
+  // above already knows not to open a door for one. web/kernel_test.mjs keeps
+  // the three background events out of this file.
+  let installEvent = null;
+
+  function standalone() {
+    return matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+  }
+  // An iPhone or an iPad. iPadOS 13 and after answer the user agent of a Mac,
+  // so a Mac that can be touched is the iPad saying so.
+  function iOS() {
+    const ua = navigator.userAgent || '';
+    return /iPhone|iPad|iPod/.test(ua) ||
+      (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1);
+  }
+
+  function paintInstall() {
+    const box = $('settings-install-row');
+    if (!box) return;
+    box.innerHTML = R.install({ prompt: !!installEvent, standalone: standalone(), ios: iOS() });
+    box.hidden = !box.innerHTML;
+    const b = $('settings-install');
+    if (b) b.onclick = promptInstall;
+  }
+
+  // The offer is spent by being taken, whatever the answer: forget it first, so
+  // a dismissed prompt leaves no button that would refuse the next press.
+  async function promptInstall() {
+    const e = installEvent;
+    installEvent = null;
+    paintInstall();
+    if (!e) return;
+    try { await e.prompt(); } catch (err) { /* dismissed, or no longer offered */ }
+  }
+
   function openSettings() {
     paintAutoplay();
     paintTenFoot();
     paintCues();
     paintAccount();
+    paintInstall();
     $('settings').hidden = false;
     watchActivity(true);
   }
@@ -1466,6 +1521,14 @@
     document.addEventListener('pointerout', onPointerOut);
     window.addEventListener('hashchange', applyRoute);
     window.addEventListener('beforeunload', () => root.Player.close());
+    // The browser's offer to put this on the home screen, held until the panel
+    // is opened; and the offer withdrawn once it has been taken.
+    window.addEventListener('beforeinstallprompt', e => {
+      e.preventDefault();
+      installEvent = e;
+      paintInstall();
+    });
+    window.addEventListener('appinstalled', () => { installEvent = null; paintInstall(); });
     $('profile-chip').onclick = openGate;
     const newProfile = () => createProfile($('gate-name').value, $('gate-kid-check').checked);
     $('gate-create').onclick = newProfile;

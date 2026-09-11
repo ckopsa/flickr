@@ -36,6 +36,7 @@
   let openSeq = 0, drawSeq = 0; // stale async work from an earlier open / draw checks these
   let renderTask = null;       // the pdf.js render in flight, cancelled by the next one
   let placeTimer = null, pendingPlace = null, resizeTimer = null;
+  let zoom = 1;                // the pinch's scale; 1 is the page fit to the pane
 
   // --- the pane ---------------------------------------------------------------
 
@@ -92,11 +93,7 @@
       if (Number.isInteger(n) && n > 0) goTo(n); else ui.pageIn.value = String(page || '');
     };
     ui.pageIn.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); ui.pageIn.blur(); } };
-    // Tap the left/right edge of the page to turn it.
-    ui.view.onclick = e => {
-      const w = ui.view.clientWidth || 1, x = e.clientX - ui.view.getBoundingClientRect().left;
-      if (x < w * 0.25) prev(); else if (x > w * 0.75) next();
-    };
+    zonesOn();
     if (!keysBound) {
       document.addEventListener('keydown', onKey);
       window.addEventListener('resize', onResize);
@@ -111,6 +108,36 @@
     if (e.key === 'ArrowLeft') { prev(); e.preventDefault(); }
     else if (e.key === 'ArrowRight') { next(); e.preventDefault(); }
   }
+  // The page under a finger: three zones over it (the outer thirds turn it,
+  // the middle hides the bars), a swipe across it, and two fingers to scale
+  // it — ReaderTouch in reader.js, the listeners both panes share.
+  function zonesOn() {
+    if (!ui || !ui.view) return;
+    ReaderTouch.attach(ui.view, {
+      prev, next, menu: toggleChrome,
+      pinch: { scale: () => zoom, at: showZoom, to: setZoom, reset: () => setZoom(1) },
+    });
+  }
+  function toggleChrome() { if (container) container.classList.toggle('rd-chrome-hidden'); }
+  // While the fingers are moving the page is the picture it already is, scaled
+  // by CSS: a pdf.js render per frame would stutter. The real draw, crisp at
+  // the new scale, comes when they lift.
+  function showZoom(s) {
+    if (!ui || !ui.canvas) return;
+    ui.canvas.style.transformOrigin = 'center top';
+    ui.canvas.style.transform = 'scale(' + (s / (zoom || 1)) + ')';
+  }
+  function setZoom(s) {
+    if (!ui || !ui.canvas) return;
+    ui.canvas.style.transform = '';
+    zoom = s > 0 ? s : 1;
+    // A page wider than the pane is a page to move around: the zones let the
+    // finger drag it both ways then, rather than reading a sideways drag as
+    // the turn it is at fit-width.
+    ui.view.classList.toggle('rd-zoomed', zoom !== 1);
+    if (doc && page > 0) draw(page, false);
+  }
+
   function onResize() {
     if (resizeTimer) clearTimeout(resizeTimer);
     resizeTimer = setTimeout(() => { resizeTimer = null; if (isOpen() && doc && page > 0) draw(page, false); }, RESIZE_DELAY_MS);
@@ -140,6 +167,7 @@
     opts = o || {};
     build(opts.container);
     if (!ui.canvas) { ui.view.innerHTML = '<canvas class="rd-canvas"></canvas>'; ui.canvas = ui.view.firstChild; }
+    zonesOn();
     // The passage came resolved: from/to as locators, and the pages they
     // land on. A `to` before `from` was dropped by the server, not here.
     passage = root.isTextPassage(sess.passage) ? sess.passage : null;
@@ -148,8 +176,11 @@
     ended = false;
     refused = false;
     page = 0;
+    zoom = 1;                     // a book opens fit to the pane, not at the last pinch
+    ui.view.classList.remove('rd-zoomed');
     count = sess.page_count || 0; // the prober's count until the file says
     container.hidden = false;
+    container.classList.remove('rd-chrome-hidden');
     ui.end.hidden = true;
     ui.prev.disabled = ui.next.disabled = ui.pageIn.disabled = false;
     ui.title.textContent = sess.title || '';
@@ -253,7 +284,7 @@
       // drawn at the device's pixel ratio so text stays crisp on a phone.
       const base = pg.getViewport({ scale: 1 });
       const width = Math.max(1, ui.view.clientWidth - 12);
-      const scale = width / base.width;
+      const scale = (width / base.width) * zoom;
       const dpr = window.devicePixelRatio || 1;
       const vp = pg.getViewport({ scale });
       const canvas = ui.canvas, ctx = canvas.getContext('2d');
@@ -267,6 +298,9 @@
       if (renderTask === task) renderTask = null;
       if (seq !== drawSeq) return false;
       ui.view.scrollTop = 0;
+      // A page taller than the pane scrolls: the zones are stretched over all
+      // of it, so a tap turns the page wherever the reader has scrolled to.
+      ReaderTouch.fit(ui.view, Math.floor(vp.height));
       return true;
     } catch (e) {
       // A cancelled render is the next page arriving, not a failure.
@@ -357,6 +391,7 @@
       method: act.method || 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(place),
+      keepalive: true, // a locked phone still reports the page it was on
     }).then(r => { if (r.status === 409) refused = true; }).catch(() => {});
   }
 
