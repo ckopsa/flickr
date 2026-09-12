@@ -991,7 +991,14 @@ browser always asks rather than applying heuristic freshness from
 constant must be bumped whenever a SHELL file changes, since `sw.js` is the
 only file a browser re-checks on its own. `scripts/shell-bump-check.sh` reads
 the SHELL list out of `sw.js`, diffs it against the pull request's base, and
-fails the gate when a shell file moved and the version did not.
+fails the gate when a shell file moved and the version did not. The fourth
+was written after the first three held and nothing changed anyway
+(2026-09-11): the SHELL list names `/` and never `/index.html`, because the
+server answers the latter with a 301 and the worker refuses an answer that
+came through a redirect — a refusal that failed every install from v31 to
+v33 and left each browser on the shell it had. `web/kernel_test.mjs` pins
+it, the worker logs a failed install, and the browser smoke waits for the
+worker to install before it walks.
 
 **The two sides share one truth.** The renderers are tested against the
 server's own goldens, not against fixtures written by hand:

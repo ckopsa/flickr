@@ -253,6 +253,32 @@ async function walk(page, issuer, ctx) {
     if (!/smoke/.test(chip)) throw new Error('chip reads ' + chip);
   });
 
+  await step(page, 'shell: the worker installs and caches every file it lists', async () => {
+    // A worker that fails to install is silent from the page's side — the
+    // old one keeps serving — so the smoke waits for the registration to
+    // reach an active worker and for the cache to hold the whole list.
+    const want = await page.evaluate(async () => {
+      const src = await (await fetch('/sw.js', { cache: 'reload' })).text();
+      return JSON.parse(src.match(/const SHELL = (\[[\s\S]*?\]);/)[1].replace(/'/g, '"')).length;
+    });
+    // Polled with evaluate rather than waitForFunction: the predicate awaits
+    // the cache, and a returned promise must be awaited, not taken as true.
+    const until = Date.now() + 20000;
+    let ok = false;
+    while (!ok && Date.now() < until) {
+      ok = await page.evaluate(async (want) => {
+        const reg = await navigator.serviceWorker.getRegistration();
+        if (!reg || !reg.active || reg.installing) return false;
+        for (const k of await caches.keys()) {
+          if (/^flickr-shell-v\d+$/.test(k) && (await (await caches.open(k)).keys()).length >= want) return true;
+        }
+        return false;
+      }, want);
+      if (!ok) await page.waitForTimeout(500);
+    }
+    if (!ok) throw new Error('the service worker did not install its shell (an entry the server redirects or refuses?)');
+  });
+
   await step(page, 'home: a hero and headed band rows', async () => {
     await expectVisible(page, '#hero', 'the hero');
     await page.waitForFunction(() => document.querySelectorAll('section.band').length >= 3);

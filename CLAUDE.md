@@ -80,7 +80,7 @@ SMOKE_OIDC=1 node scripts/browser-smoke.mjs   # ...the same walk, behind a sign-
 The browser smoke is the one check that opens the page: it builds
 `cmd/server/smoke_test.go` (`-tags smoke`, skipped otherwise) to serve the
 fixture library on a port with generated media, an EPUB and a PDF, then
-walks the gate, home, settings, a show, a film, a record under the
+walks the gate, the worker installing its shell, home, settings, a show, a film, a record under the
 mini-player, both readers, search, a phone viewport, a tablet held both
 ways, a landscape phone's pocket theatre, a thumb (the double-tap skip
 and a reader's tap zone), the install row with nothing to offer, and a
