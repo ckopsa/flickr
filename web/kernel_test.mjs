@@ -72,6 +72,11 @@ test('the shell lists every file the page loads, and the cache is bumped with th
     assert.ok(shell.includes(f), `${f} is loaded by index.html but is not in sw.js's SHELL`);
   }
   assert.match(sw, /const CACHE = 'flickr-shell-v\d+';/);
+  // The server answers /index.html with a 301 to '/', and the worker refuses
+  // an answer that came through a redirect, so listing it fails every
+  // install (2026-09-11: three shell versions never reached a browser).
+  assert.ok(!shell.includes('/index.html'), "'/index.html' answers 301: the shell lists '/' and never the file behind it");
+  assert.ok(shell.includes('/'), "the shell lists '/'");
 });
 
 // How the subtitles look is the one setting no document has an opinion about,

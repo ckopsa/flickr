@@ -54,8 +54,15 @@
 // the CI check in .github/workflows/tests.yml now insists on.
 // v19: the readers' dark page; v20: the book's own choice about its
 // pictures (session.display), the 🖼 button in both panes.
-const CACHE = 'flickr-shell-v33';
-const SHELL = ['/', '/index.html', '/passage.js', '/focus.js', '/touch.js', '/cast.js', '/audio.css',
+// v34: /index.html LEFT the list. The server answers it with a 301 to '/',
+// and since v31 an answer that arrived through a redirect is refused (the
+// gate below, against a sign-in page being cached as the app) — so every
+// install from v31 to v33 failed on that one file, the new worker went
+// redundant, and the worker that had installed before kept serving its
+// shell until somebody force-refreshed (2026-09-11). '/' is the file; the
+// browser never navigates to /index.html of its own accord.
+const CACHE = 'flickr-shell-v34';
+const SHELL = ['/', '/passage.js', '/focus.js', '/touch.js', '/cast.js', '/audio.css',
                '/renderers.js', '/player.js', '/kernel.js',
                '/reader.js', '/pdfreader.js',
                '/vendor/jszip.min.js', '/vendor/epub.min.js',
@@ -81,11 +88,15 @@ self.addEventListener('install', (e) => {
       .then((c) => Promise.all(SHELL.map((u) => {
         const req = new Request(u, { cache: 'reload' });
         return fetch(req).then((resp) => {
-          if (!good(resp)) throw new TypeError('shell: ' + u + ' answered ' + resp.status);
+          if (!good(resp)) throw new TypeError('shell: ' + u + ' answered ' + resp.status + (resp.redirected ? ' through a redirect' : ''));
           return c.put(req, resp);
         });
       })))
       .then(() => self.skipWaiting())
+      // Said out loud: a failed install leaves the OLD worker serving its
+      // shell for as long as the failure lasts, and nothing else in the
+      // page would say so.
+      .catch((err) => { console.error('sw: ' + CACHE + ' did not install — the previous shell stays in service:', err.message); throw err; })
   );
 });
 
