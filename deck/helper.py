@@ -16,12 +16,10 @@ and read a gamepad. This process does those three and nothing else:
     instead: a short code on the screen, approved on a phone.
   * the PAD. evdev gamepads become the same few words a remote sends —
     up/down/left/right/ok/back and a handful more — long-polled by the client.
-  * the SCREEN, kept awake while something plays: nobody touches a pad
-    during a film, so Steam's dimmer would otherwise come down on it.
 
-Standard library only (evdev and dbus-python are on SteamOS already; without
-evdev the pad is simply absent and the keyboard still works, without dbus the
-screen dims as it always did).
+Standard library only, and evdev (on SteamOS already, and in the Flatpak);
+without it the pad is simply absent and the keyboard still works. Keeping
+the screen awake through a film is the player's own (deck/mpv/).
 """
 import argparse
 import http.client
@@ -235,44 +233,6 @@ class Auth:
         }
 
 
-class Awake:
-    """The screen held awake while the player plays. In Game Mode Steam itself
-    is org.freedesktop.ScreenSaver; an inhibit lasts until it is let go or
-    this process leaves the bus, so a helper that dies cannot leave the
-    screen on. A Steam that restarted under it is found again on the next
-    call."""
-
-    def __init__(self):
-        self.lock = threading.Lock()
-        self.cookie = None
-        self.saver = None
-
-    def _saver(self):
-        if self.saver is None:
-            import dbus
-            bus = dbus.SessionBus()
-            self.saver = dbus.Interface(
-                bus.get_object('org.freedesktop.ScreenSaver', '/org/freedesktop/ScreenSaver'),
-                'org.freedesktop.ScreenSaver')
-        return self.saver
-
-    def hold(self, on):
-        with self.lock:
-            for _ in range(2):
-                try:
-                    if on and self.cookie is None:
-                        self.cookie = int(self._saver().Inhibit('flickr', 'Playing'))
-                    elif not on and self.cookie is not None:
-                        cookie, self.cookie = self.cookie, None
-                        self._saver().UnInhibit(cookie)
-                    break
-                except Exception:
-                    # No dbus, no saver, or a Steam that is not the one the
-                    # cookie came from: that one has already let go of it.
-                    self.saver, self.cookie = None, None
-            return self.cookie is not None
-
-
 class Pad:
     """Gamepads as the words a remote sends. Held directions repeat."""
 
@@ -385,7 +345,6 @@ class Handler(BaseHTTPRequestHandler):
     protocol_version = 'HTTP/1.1'
     auth = None
     pad = None
-    awake = None
     upstream = ''
     profile = ''
     profile_path = ''
@@ -426,8 +385,6 @@ class Handler(BaseHTTPRequestHandler):
         elif name == 'signout':
             cls.auth.sign_out()
             cls.auth.check()
-        elif name == 'awake':
-            cls.awake.hold(bool(json.loads(body or b'{}').get('on')))
         elif name == 'profile':
             cls.profile = (json.loads(body or b'{}').get('name') or '').strip()
             with open(cls.profile_path, 'w') as f:
@@ -439,8 +396,7 @@ class Handler(BaseHTTPRequestHandler):
     def _state(self):
         cls = type(self)
         s = cls.auth.state()
-        s.update(profile=cls.profile, upstream=cls.upstream, pad_seq=cls.pad.seq,
-                 awake=cls.awake.cookie is not None)
+        s.update(profile=cls.profile, upstream=cls.upstream, pad_seq=cls.pad.seq)
         return s
 
     def _proxy(self, method):
@@ -502,7 +458,6 @@ def main():
     Handler.upstream = args.upstream.rstrip('/')
     Handler.auth = Auth(Handler.upstream, args.state_dir, args.client_id)
     Handler.pad = Pad()
-    Handler.awake = Awake()
     # Who is on the sofa outlives the app: the last profile picked is the one
     # the next launch opens as.
     Handler.profile_path = os.path.join(args.state_dir, 'profile')

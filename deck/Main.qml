@@ -50,7 +50,7 @@ Window {
     property string noteText: ""
     property string upscaler: "fsr" // the player's: FLICKR_UPSCALE=fsrcnnx, artcnn or 0 starts it so
 
-    // What this device plays: Qt's FFmpeg backend takes nearly anything, so
+    // What this device plays: mpv (its own FFmpeg) takes nearly anything, so
     // nearly everything is a direct play. No HDR is claimed — the server
     // tone-maps rather than this screen washing it out.
     readonly property var capabilities: ({
@@ -92,7 +92,6 @@ Window {
     }
     function href(link) { return link && link.href ? link.href : ""; }
     function picture(h) { return h ? base + h : ""; }
-    function awake(on) { api("/_deck/awake", { method: "POST", body: { on: on }, own: true }, null); }
     function note(text) { noteText = text || ""; if (noteText) noteTimer.restart(); }
     function refusal(err) { note([err.detail, err.remedy].filter(Boolean).join(" — ")); }
 

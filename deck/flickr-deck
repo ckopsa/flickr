@@ -1,11 +1,21 @@
 #!/bin/sh
 # flickr on a Steam Deck: the helper first (sign-in, proxy, pad), then the
-# QML client pointed at it. Both are what SteamOS already ships — python3 and
-# Qt 6's own `qml6` runtime — so there is nothing to build and nothing to
-# install. Arguments go to helper.py (--upstream, --client-id, --no-pad).
+# QML client pointed at it, on flickr-deck-ui (Qt Quick with mpv in it). That
+# one program is compiled, so the client runs in its Flatpak
+# (deck/flatpak/): this script is the Flatpak's command, and run from
+# SteamOS itself — where Steam's shortcut points — it hands over to it.
+# Arguments go to helper.py (--upstream, --client-id, --no-pad).
+APP=dev.kopsa.flickr.Deck
+if [ -z "$FLATPAK_ID" ]; then
+    exec flatpak run "$APP" "$@"
+fi
+
 here=$(dirname "$(readlink -f "$0")")
+share=/app/share/flickr-deck
 port_file=$(mktemp)
-python3 "$here/helper.py" "$@" >"$port_file" &
+# The sign-in and the last profile live where they always have, not under
+# ~/.var/app: the Flatpak is let at ~/.config/flickr-deck for that.
+python3 "$share/helper.py" --state-dir "$HOME/.config/flickr-deck" "$@" >"$port_file" &
 helper=$!
 trap 'kill $helper 2>/dev/null; rm -f "$port_file"' EXIT INT TERM
 
@@ -18,7 +28,7 @@ port=$(head -n 1 "$port_file")
 
 # Game Mode's compositor hands games an X server, not a Wayland shell.
 [ -n "$GAMESCOPE_WAYLAND_DISPLAY" ] && export QT_QPA_PLATFORM=xcb
-export QT_MEDIA_BACKEND=ffmpeg
+export FLICKR_DECK_SHADERS="$share/shaders/mpv"
 # FLICKR_UPSCALE=fsrcnnx or =artcnn starts the player on that network, =0 with
 # upscaling off; FSR 1 otherwise. Up cycles them in the player.
-${QML:-qml6} "$here/Main.qml" -- "http://127.0.0.1:$port" "upscale=${FLICKR_UPSCALE:-fsr}"
+"$here/flickr-deck-ui" "$share/Main.qml" -- "http://127.0.0.1:$port" "upscale=${FLICKR_UPSCALE:-fsr}"

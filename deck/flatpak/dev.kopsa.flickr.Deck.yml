@@ -1,0 +1,172 @@
+# flickr on a Steam Deck or Steam Machine, as a Flatpak: the QML client and
+# its helper, on the KDE runtime's Qt, with libmpv for the picture. Built
+# and installed for the user by deck/flatpak/build.sh; Steam's shortcut
+# keeps pointing at deck/flickr-deck, which hands over to it.
+#
+# libmpv and what it needs not in the runtime come first, after Flathub's
+# own io.mpv.Mpv where they overlap, cut to what playback here uses: no
+# player binary, no Lua, no discs. FFmpeg is built here rather than taken
+# from the runtime so its decoders and VA-API are known.
+app-id: dev.kopsa.flickr.Deck
+runtime: org.kde.Platform
+runtime-version: '6.10'
+sdk: org.kde.Sdk
+command: flickr-deck
+
+finish-args:
+  - --share=network
+  - --share=ipc
+  - --socket=x11
+  - --socket=wayland
+  - --socket=pulseaudio
+  # the GPU, and the gamepads the helper reads
+  - --device=all
+  # Steam is org.freedesktop.ScreenSaver in Game Mode: held off while playing
+  - --talk-name=org.freedesktop.ScreenSaver
+  # the sign-in and the last profile, where the client has always kept them
+  - --filesystem=~/.config/flickr-deck:create
+
+cleanup:
+  - /include
+  - /lib/pkgconfig
+  - /share/man
+  - '*.a'
+  - '*.la'
+
+modules:
+  - name: libass
+    config-opts:
+      - --disable-static
+    sources:
+      - type: git
+        url: https://github.com/libass/libass.git
+        tag: 0.17.3
+
+  - name: libXpresent
+    buildsystem: autotools
+    sources:
+      - type: git
+        url: https://gitlab.freedesktop.org/xorg/lib/libxpresent.git
+        tag: libXpresent-1.0.1
+
+  - name: ffmpeg
+    config-opts:
+      - --disable-debug
+      - --disable-doc
+      - --disable-programs
+      - --disable-static
+      - --enable-shared
+      - --enable-gpl
+      - --enable-version3
+      - --enable-gnutls
+      - --enable-libdav1d
+      - --enable-libdrm
+      - --enable-vaapi
+      - --disable-avdevice
+    sources:
+      - type: git
+        url: https://github.com/FFmpeg/FFmpeg.git
+        tag: n7.1.1
+
+  - name: libplacebo
+    buildsystem: meson
+    config-opts:
+      - -Dvulkan=disabled
+      - -Dopengl=enabled
+      - -Ddemos=false
+      - -Dtests=false
+    sources:
+      - type: git
+        url: https://github.com/haasn/libplacebo.git
+        tag: v7.351.0
+
+  # mpv hands VA-API frames to OpenGL only when built with libdrm, and its
+  # DRM side wants libdisplay-info (and that, hwdata's PNP ids).
+  - name: hwdata
+    buildsystem: autotools
+    sources:
+      - type: archive
+        url: https://github.com/vcrhonek/hwdata/archive/refs/tags/v0.394.tar.gz
+        sha256: b7c3fd7214a3b7c49d2661db127a712dc11cffd1799f793947aa1cb20aaf3298
+
+  - name: libdisplay-info
+    buildsystem: meson
+    sources:
+      - type: archive
+        url: https://gitlab.freedesktop.org/emersion/libdisplay-info/-/archive/0.2.0/libdisplay-info-0.2.0.tar.gz
+        sha256: f7331fcaf5527251b84c8fb84238d06cd2f458422ce950c80e86c72927aa8c2b
+
+  - name: mpv
+    buildsystem: meson
+    config-opts:
+      - -Dlibmpv=true
+      - -Dcplayer=false
+      - -Dbuild-date=false
+      - -Dmanpage-build=disabled
+      - -Dhtml-build=disabled
+      - -Dlua=disabled
+      - -Djavascript=disabled
+      - -Dcdda=disabled
+      - -Ddvdnav=disabled
+      - -Dlibbluray=disabled
+      - -Dlibarchive=disabled
+      - -Drubberband=disabled
+      - -Duchardet=disabled
+      - -Dzimg=disabled
+      - -Dvulkan=disabled
+      - -Dalsa=disabled
+      - -Dpulse=enabled
+      - -Dx11=enabled
+      - -Dgl=enabled
+      - -Dgl-x11=disabled
+      - -Degl=enabled
+      - -Degl-x11=enabled
+      - -Dvaapi=enabled
+      - -Dvaapi-x11=enabled
+      - -Dvaapi-drm=enabled
+      # libdrm: without it there is no dmabuf_interop_gl, and VA-API frames
+      # cannot reach OpenGL on the GPU
+      - -Ddrm=enabled
+      - -Dwerror=false
+    sources:
+      - type: git
+        url: https://github.com/mpv-player/mpv.git
+        tag: v0.41.0
+
+  - name: python3-evdev
+    buildsystem: simple
+    build-commands:
+      - pip3 install --no-index --no-build-isolation --find-links=file://${PWD} --prefix=${FLATPAK_DEST} evdev
+    sources:
+      - type: file
+        url: https://files.pythonhosted.org/packages/2e/07/eb30593524303d1367f0dc00c1c66582c994dba412a47751e34bad9fa29b/evdev-2.0.0.tar.gz
+        sha256: 442fb3f4c8dfc9e61e901133c356220c02d663eca8f34722e0cecdd637eba504
+
+  # The one compiled piece: Mpv as a QML item, and the program that runs Main.qml.
+  - name: flickr-deck-ui
+    buildsystem: cmake-ninja
+    subdir: mpv
+    config-opts:
+      - -DCMAKE_BUILD_TYPE=Release
+    sources:
+      - type: dir
+        path: ..
+
+  - name: flickr-deck
+    buildsystem: simple
+    build-commands:
+      - install -Dm755 flickr-deck /app/bin/flickr-deck
+      - install -Dm644 -t /app/share/flickr-deck helper.py *.qml
+      - install -Dm644 -t /app/share/flickr-deck/shaders/mpv shaders/mpv/fsr.glsl shaders/FSRCNNX_x2_8-0-4-1.glsl
+      # ArtCNN, made fit for libmpv's renderer (OpenGL, mpv's older gpu
+      # renderer): its #extension for half floats sits mid-file, which OpenGL
+      # refuses there, and without it the file's own #else is the float path;
+      # and its depth-to-space writes LUMA as four components, which that
+      # renderer asserts on (gpu-next lets it pass) — it only ever wrote .x.
+      # Scored at 4K the same network either way (0.9286 against 0.9299).
+      - grep -v '^#extension GL_EXT_shader_explicit_arithmetic_types_float16' shaders/ArtCNN_C4F16_DS.glsl
+        | sed '/Depth-To-Space/,/^\/\/!COMPONENTS/ s|^//!COMPONENTS 4|//!COMPONENTS 1|'
+        > /app/share/flickr-deck/shaders/mpv/ArtCNN_C4F16_DS.glsl
+    sources:
+      - type: dir
+        path: ..
