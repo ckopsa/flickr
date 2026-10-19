@@ -208,7 +208,10 @@ Item {
         layer.effect: ShaderEffect {
             property variant source
             property size outSize: Qt.size(easu.outW, easu.outH)
-            property real sharpness: 0.2   // AMD's own default, in stops
+            // In stops. AMD's default (0.2) sharpens a stream's compression
+            // blocks too; at 1.0 a compressed 720p photo scores as bilinear
+            // does (SSIM) and text and edges still score above it.
+            property real sharpness: 1.0
             fragmentShader: "shaders/rcas.frag.qsb"
         }
     }
