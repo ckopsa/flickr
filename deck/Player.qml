@@ -145,12 +145,15 @@ Item {
     function wake() { chrome.shown = true; hide.restart(); }
 
     Component.onCompleted: adopt(session, playAction, itemDoc, startAt)
-    Component.onDestruction: if (session) stop(true)
+    Component.onDestruction: { win.awake(false); if (session) stop(true) }
 
     Rectangle { anchors.fill: parent; color: "black" }
 
     MediaPlayer {
         id: player
+        // Nobody touches the pad during a film: the helper holds Steam's
+        // dimmer off while this plays, and lets go when it pauses or stops.
+        onPlaybackStateChanged: win.awake(playbackState === MediaPlayer.PlayingState)
         audioOutput: AudioOutput { }
         videoOutput: video
         onMediaStatusChanged: {

@@ -92,6 +92,7 @@ Window {
     }
     function href(link) { return link && link.href ? link.href : ""; }
     function picture(h) { return h ? base + h : ""; }
+    function awake(on) { api("/_deck/awake", { method: "POST", body: { on: on }, own: true }, null); }
     function note(text) { noteText = text || ""; if (noteText) noteTimer.restart(); }
     function refusal(err) { note([err.detail, err.remedy].filter(Boolean).join(" — ")); }
 
