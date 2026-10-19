@@ -130,15 +130,16 @@ Item {
                    : "Subtitles off");
     }
 
-    // Up goes FSR 1 → FSRCNNX → off → FSR 1.
+    // Up goes FSR 1 → FSRCNNX → ArtCNN → off → FSR 1.
+    readonly property var upscalers: ["fsr", "fsrcnnx", "artcnn", "off"]
+    readonly property var upscalerNames: ({ fsr: "FSR 1", fsrcnnx: "FSRCNNX", artcnn: "ArtCNN" })
     function toggleUpscale() {
-        upscaler = upscaler === "fsr" ? "fsrcnnx" : upscaler === "fsrcnnx" ? "off" : "fsr";
-        var size = frame.height + "p to " + easu.outH + "p";
+        upscaler = upscalers[(upscalers.indexOf(upscaler) + 1) % upscalers.length];
+        var name = upscalerNames[upscaler], size = frame.height + "p to " + easu.outH + "p";
         if (upscaler === "off") win.note("Upscaling off");
         else if (fit <= 1.05) win.note("Upscaling on — this one is already as big as the screen");
-        else if (upscaler === "fsr") win.note("Upscaling: FSR 1, " + size);
-        else if (cnn) win.note("Upscaling: FSRCNNX, " + size);
-        else win.note("Upscaling: FSRCNNX — this one is close enough to the screen's size that FSR 1 does it");
+        else if (upscaler === "fsr" || cnn) win.note("Upscaling: " + name + ", " + size);
+        else win.note("Upscaling: " + name + " — this one is close enough to the screen's size that FSR 1 does it");
     }
 
     function clock(s) {
@@ -176,20 +177,24 @@ Item {
     // set shows as soft; anything smaller than the screen is upscaled on the
     // GPU instead (shaders/), every frame, from the frame drawn at its own
     // size, unseen. FSR 1: EASU stretches it along its edges to the size it
-    // fills, and RCAS sharpens what that softened. FSRCNNX: a small trained
-    // network doubles it (Fsrcnnx.qml), and EASU takes it the rest of the way
-    // if the screen is bigger still; it reads text and line art far better,
-    // live action no worse, for about 3 ms a frame at 4K. Up cycles the two
-    // and off; a frame as big as the screen is shown as it always was.
-    property string upscaler: win.upscaler   // "fsr", "fsrcnnx" or "off"
+    // fills, and RCAS sharpens what that softened. FSRCNNX and ArtCNN: a
+    // small trained network doubles it (Fsrcnnx.qml, Artcnn.qml), and EASU
+    // takes it the rest of the way if the screen is bigger still. Both read
+    // text and line art far better than FSR; FSRCNNX keeps a clean source's
+    // detail best, ArtCNN (trained to denoise as it goes) does best through a
+    // stream's compression, for about twice FSRCNNX's GPU time. Up cycles the
+    // three and off; a frame as big as the screen is shown as it always was.
+    property string upscaler: win.upscaler   // "fsr", "fsrcnnx", "artcnn" or "off"
     readonly property real dpr: Screen.devicePixelRatio
     readonly property size frame: Qt.size(Math.round(video.sourceRect.width), Math.round(video.sourceRect.height))
     readonly property real fit: frame.width > 0 && frame.height > 0
                                 ? Math.min(width * dpr / frame.width, height * dpr / frame.height) : 0
     readonly property bool upscaling: upscaler !== "off" && player.hasVideo && fit > 1.05
     // FSRCNNX where mpv's own rule has it, past 1.3x; nearer, FSR 1 does it.
-    readonly property bool cnn: upscaling && upscaler === "fsrcnnx" && fit > 1.3
-    readonly property bool cnnStretch: cnn && easu.outW > net.outSize.width * 1.05
+    readonly property bool cnn: upscaling && (upscaler === "fsrcnnx" || upscaler === "artcnn") && fit > 1.3
+    readonly property var cnnResult: upscaler === "artcnn" ? art.result : net.result
+    readonly property size cnnSize: Qt.size(frame.width * 2, frame.height * 2)
+    readonly property bool cnnStretch: cnn && easu.outW > cnnSize.width * 1.05
 
     VideoOutput {
         id: video
@@ -206,7 +211,14 @@ Item {
     }
     Fsrcnnx {
         id: net
-        active: screen.cnn
+        active: screen.cnn && screen.upscaler === "fsrcnnx"
+        source: frameTexture
+        inSize: screen.frame
+        dpr: screen.dpr
+    }
+    Artcnn {
+        id: art
+        active: screen.cnn && screen.upscaler === "artcnn"
         source: frameTexture
         inSize: screen.frame
         dpr: screen.dpr
@@ -221,10 +233,10 @@ Item {
         y: Math.round((screen.height * screen.dpr - outH) / 2) / screen.dpr
         width: outW / screen.dpr
         height: outH / screen.dpr
-        property variant source: screen.cnn ? net.result : frameTexture
-        property size inSize: screen.cnn ? net.outSize : screen.frame
+        property variant source: screen.cnn ? screen.cnnResult : frameTexture
+        property size inSize: screen.cnn ? screen.cnnSize : screen.frame
         fragmentShader: "shaders/easu.frag.qsb"
-        layer.enabled: visible && !screen.cnn   // FSRCNNX wants no sharpening after
+        layer.enabled: visible && !screen.cnn   // the networks want no sharpening after
         layer.effect: ShaderEffect {
             property variant source
             property size outSize: Qt.size(easu.outW, easu.outH)
@@ -235,10 +247,10 @@ Item {
             fragmentShader: "shaders/rcas.frag.qsb"
         }
     }
-    ShaderEffect {   // FSRCNNX's 2x when that is the screen's size, or near it
+    ShaderEffect {   // a network's 2x when that is the screen's size, or near it
         visible: screen.cnn && !screen.cnnStretch
         x: easu.x; y: easu.y; width: easu.width; height: easu.height
-        property variant source: net.result
+        property variant source: screen.cnnResult
     }
 
     // Something with no picture still has a face.
@@ -327,7 +339,7 @@ Item {
             }
             Text {
                 anchors { left: parent.left; top: bar.bottom; topMargin: 12 * win.u }
-                text: "X  Play / pause      ◀ ▶  10s      L1 R1  30s      ▲  Upscale" + (screen.cnn ? " (FSRCNNX)" : screen.upscaling ? " (FSR)" : "") + "      Select  Subtitles      B  Back"
+                text: "X  Play / pause      ◀ ▶  10s      L1 R1  30s      ▲  Upscale" + (screen.cnn ? " (" + screen.upscalerNames[screen.upscaler] + ")" : screen.upscaling ? " (FSR)" : "") + "      Select  Subtitles      B  Back"
                 color: win.muted; font.pixelSize: 14 * win.u
             }
         }
