@@ -1,0 +1,22 @@
+#!/bin/sh
+# flickr on a Steam Deck: the helper first (sign-in, proxy, pad), then the
+# QML client pointed at it. Both are what SteamOS already ships — python3 and
+# Qt 6's own `qml6` runtime — so there is nothing to build and nothing to
+# install. Arguments go to helper.py (--upstream, --client-id, --no-pad).
+here=$(dirname "$(readlink -f "$0")")
+port_file=$(mktemp)
+python3 "$here/helper.py" "$@" >"$port_file" &
+helper=$!
+trap 'kill $helper 2>/dev/null; rm -f "$port_file"' EXIT INT TERM
+
+i=0
+while [ ! -s "$port_file" ] && [ $i -lt 100 ] && kill -0 $helper 2>/dev/null; do
+    sleep 0.1; i=$((i + 1))
+done
+port=$(head -n 1 "$port_file")
+[ -n "$port" ] || { echo "flickr-deck: the helper did not start" >&2; exit 1; }
+
+# Game Mode's compositor hands games an X server, not a Wayland shell.
+[ -n "$GAMESCOPE_WAYLAND_DISPLAY" ] && export QT_QPA_PLATFORM=xcb
+export QT_MEDIA_BACKEND=ffmpeg
+${QML:-qml6} "$here/Main.qml" -- "http://127.0.0.1:$port"
