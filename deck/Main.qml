@@ -48,7 +48,7 @@ Window {
     property int padSeq: 0
     property bool booted: false
     property string noteText: ""
-    property bool upscale: true     // FSR 1 under the player; FLICKR_UPSCALE=0 starts it off
+    property string upscaler: "fsr" // the player's: FLICKR_UPSCALE=fsrcnnx or 0 starts it so
 
     // What this device plays: Qt's FFmpeg backend takes nearly anything, so
     // nearly everything is a direct play. No HDR is claimed — the server
@@ -271,7 +271,8 @@ Window {
         var args = Qt.application.arguments;
         for (var i = 0; i < args.length; i++)
             if (args[i].indexOf("http://127.0.0.1:") === 0) base = args[i];
-            else if (args[i] === "upscale=0") upscale = false;
+            else if (args[i] === "upscale=0") upscaler = "off";
+            else if (args[i] === "upscale=fsrcnnx") upscaler = "fsrcnnx";
         boot();
     }
 }

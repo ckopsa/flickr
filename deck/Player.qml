@@ -130,11 +130,15 @@ Item {
                    : "Subtitles off");
     }
 
+    // Up goes FSR 1 → FSRCNNX → off → FSR 1.
     function toggleUpscale() {
-        upscale = !upscale;
-        if (!upscale) win.note("Upscaling off");
-        else if (fit > 1.05) win.note("Upscaling: FSR 1, " + frame.height + "p to " + easu.outH + "p");
-        else win.note("Upscaling on — this one is already as big as the screen");
+        upscaler = upscaler === "fsr" ? "fsrcnnx" : upscaler === "fsrcnnx" ? "off" : "fsr";
+        var size = frame.height + "p to " + easu.outH + "p";
+        if (upscaler === "off") win.note("Upscaling off");
+        else if (fit <= 1.05) win.note("Upscaling on — this one is already as big as the screen");
+        else if (upscaler === "fsr") win.note("Upscaling: FSR 1, " + size);
+        else if (cnn) win.note("Upscaling: FSRCNNX, " + size);
+        else win.note("Upscaling: FSRCNNX — this one is close enough to the screen's size that FSR 1 does it");
     }
 
     function clock(s) {
@@ -169,17 +173,23 @@ Item {
         }
     }
     // The picture. Qt's own scaling is bilinear, which a 1080p film on a 4K
-    // set shows as soft; anything smaller than the screen goes through FSR 1
-    // instead (shaders/): the frame is drawn at its own size, unseen, EASU
-    // stretches it along its edges to the size it fills, and RCAS sharpens
-    // what that softened. Both run on the GPU, every frame. Up turns it off
-    // and on; a frame as big as the screen is shown as it always was.
-    property bool upscale: win.upscale
+    // set shows as soft; anything smaller than the screen is upscaled on the
+    // GPU instead (shaders/), every frame, from the frame drawn at its own
+    // size, unseen. FSR 1: EASU stretches it along its edges to the size it
+    // fills, and RCAS sharpens what that softened. FSRCNNX: a small trained
+    // network doubles it (Fsrcnnx.qml), and EASU takes it the rest of the way
+    // if the screen is bigger still; it reads text and line art far better,
+    // live action no worse, for about 3 ms a frame at 4K. Up cycles the two
+    // and off; a frame as big as the screen is shown as it always was.
+    property string upscaler: win.upscaler   // "fsr", "fsrcnnx" or "off"
     readonly property real dpr: Screen.devicePixelRatio
     readonly property size frame: Qt.size(Math.round(video.sourceRect.width), Math.round(video.sourceRect.height))
     readonly property real fit: frame.width > 0 && frame.height > 0
                                 ? Math.min(width * dpr / frame.width, height * dpr / frame.height) : 0
-    readonly property bool upscaling: upscale && player.hasVideo && fit > 1.05
+    readonly property bool upscaling: upscaler !== "off" && player.hasVideo && fit > 1.05
+    // FSRCNNX where mpv's own rule has it, past 1.3x; nearer, FSR 1 does it.
+    readonly property bool cnn: upscaling && upscaler === "fsrcnnx" && fit > 1.3
+    readonly property bool cnnStretch: cnn && easu.outW > net.outSize.width * 1.05
 
     VideoOutput {
         id: video
@@ -194,9 +204,16 @@ Item {
         textureSize: screen.frame
         visible: false
     }
+    Fsrcnnx {
+        id: net
+        active: screen.cnn
+        source: frameTexture
+        inSize: screen.frame
+        dpr: screen.dpr
+    }
     ShaderEffect {
         id: easu
-        visible: screen.upscaling
+        visible: screen.upscaling && (!screen.cnn || screen.cnnStretch)
         // In whole device pixels, so RCAS's texels are the screen's own.
         readonly property int outW: Math.round(screen.frame.width * screen.fit)
         readonly property int outH: Math.round(screen.frame.height * screen.fit)
@@ -204,10 +221,10 @@ Item {
         y: Math.round((screen.height * screen.dpr - outH) / 2) / screen.dpr
         width: outW / screen.dpr
         height: outH / screen.dpr
-        property variant source: frameTexture
-        property size inSize: screen.frame
+        property variant source: screen.cnn ? net.result : frameTexture
+        property size inSize: screen.cnn ? net.outSize : screen.frame
         fragmentShader: "shaders/easu.frag.qsb"
-        layer.enabled: visible
+        layer.enabled: visible && !screen.cnn   // FSRCNNX wants no sharpening after
         layer.effect: ShaderEffect {
             property variant source
             property size outSize: Qt.size(easu.outW, easu.outH)
@@ -217,6 +234,11 @@ Item {
             property real sharpness: 1.0
             fragmentShader: "shaders/rcas.frag.qsb"
         }
+    }
+    ShaderEffect {   // FSRCNNX's 2x when that is the screen's size, or near it
+        visible: screen.cnn && !screen.cnnStretch
+        x: easu.x; y: easu.y; width: easu.width; height: easu.height
+        property variant source: net.result
     }
 
     // Something with no picture still has a face.
@@ -305,7 +327,7 @@ Item {
             }
             Text {
                 anchors { left: parent.left; top: bar.bottom; topMargin: 12 * win.u }
-                text: "X  Play / pause      ◀ ▶  10s      L1 R1  30s      ▲  Upscale" + (screen.upscaling ? " (FSR)" : "") + "      Select  Subtitles      B  Back"
+                text: "X  Play / pause      ◀ ▶  10s      L1 R1  30s      ▲  Upscale" + (screen.cnn ? " (FSRCNNX)" : screen.upscaling ? " (FSR)" : "") + "      Select  Subtitles      B  Back"
                 color: win.muted; font.pixelSize: 14 * win.u
             }
         }
