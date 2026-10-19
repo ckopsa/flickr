@@ -44,6 +44,7 @@ Item {
         else if (word === "prev") seekTo(position - 30);
         else if (word === "next") seekTo(position + 30);
         else if (word === "subs") cycleSubs();
+        else if (word === "up") toggleUpscale();
         return true; // the device owns every word while it is up
     }
 
@@ -129,6 +130,13 @@ Item {
                    : "Subtitles off");
     }
 
+    function toggleUpscale() {
+        upscale = !upscale;
+        if (!upscale) win.note("Upscaling off");
+        else if (fit > 1.05) win.note("Upscaling: FSR 1, " + frame.height + "p to " + easu.outH + "p");
+        else win.note("Upscaling on — this one is already as big as the screen");
+    }
+
     function clock(s) {
         s = Math.max(0, Math.floor(s || 0));
         var h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), x = s % 60;
@@ -157,7 +165,53 @@ Item {
             chrome.shown = true;
         }
     }
-    VideoOutput { id: video; anchors.fill: parent }
+    // The picture. Qt's own scaling is bilinear, which a 1080p film on a 4K
+    // set shows as soft; anything smaller than the screen goes through FSR 1
+    // instead (shaders/): the frame is drawn at its own size, unseen, EASU
+    // stretches it along its edges to the size it fills, and RCAS sharpens
+    // what that softened. Both run on the GPU, every frame. Up turns it off
+    // and on; a frame as big as the screen is shown as it always was.
+    property bool upscale: win.upscale
+    readonly property real dpr: Screen.devicePixelRatio
+    readonly property size frame: Qt.size(Math.round(video.sourceRect.width), Math.round(video.sourceRect.height))
+    readonly property real fit: frame.width > 0 && frame.height > 0
+                                ? Math.min(width * dpr / frame.width, height * dpr / frame.height) : 0
+    readonly property bool upscaling: upscale && player.hasVideo && fit > 1.05
+
+    VideoOutput {
+        id: video
+        width: screen.upscaling ? screen.frame.width / screen.dpr : screen.width
+        height: screen.upscaling ? screen.frame.height / screen.dpr : screen.height
+        fillMode: screen.upscaling ? VideoOutput.Stretch : VideoOutput.PreserveAspectFit
+    }
+    ShaderEffectSource {
+        id: frameTexture
+        sourceItem: screen.upscaling ? video : null
+        hideSource: true
+        textureSize: screen.frame
+        visible: false
+    }
+    ShaderEffect {
+        id: easu
+        visible: screen.upscaling
+        // In whole device pixels, so RCAS's texels are the screen's own.
+        readonly property int outW: Math.round(screen.frame.width * screen.fit)
+        readonly property int outH: Math.round(screen.frame.height * screen.fit)
+        x: Math.round((screen.width * screen.dpr - outW) / 2) / screen.dpr
+        y: Math.round((screen.height * screen.dpr - outH) / 2) / screen.dpr
+        width: outW / screen.dpr
+        height: outH / screen.dpr
+        property variant source: frameTexture
+        property size inSize: screen.frame
+        fragmentShader: "shaders/easu.frag.qsb"
+        layer.enabled: visible
+        layer.effect: ShaderEffect {
+            property variant source
+            property size outSize: Qt.size(easu.outW, easu.outH)
+            property real sharpness: 0.2   // AMD's own default, in stops
+            fragmentShader: "shaders/rcas.frag.qsb"
+        }
+    }
 
     // Something with no picture still has a face.
     Image {
@@ -245,7 +299,7 @@ Item {
             }
             Text {
                 anchors { left: parent.left; top: bar.bottom; topMargin: 12 * win.u }
-                text: "X  Play / pause      ◀ ▶  10s      L1 R1  30s      Select  Subtitles      B  Back"
+                text: "X  Play / pause      ◀ ▶  10s      L1 R1  30s      ▲  Upscale" + (screen.upscaling ? " (FSR)" : "") + "      Select  Subtitles      B  Back"
                 color: win.muted; font.pixelSize: 14 * win.u
             }
         }

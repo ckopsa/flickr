@@ -19,4 +19,5 @@ port=$(head -n 1 "$port_file")
 # Game Mode's compositor hands games an X server, not a Wayland shell.
 [ -n "$GAMESCOPE_WAYLAND_DISPLAY" ] && export QT_QPA_PLATFORM=xcb
 export QT_MEDIA_BACKEND=ffmpeg
-${QML:-qml6} "$here/Main.qml" -- "http://127.0.0.1:$port"
+# FLICKR_UPSCALE=0 starts the player's FSR upscaling off (Up toggles it).
+${QML:-qml6} "$here/Main.qml" -- "http://127.0.0.1:$port" "upscale=${FLICKR_UPSCALE:-1}"
